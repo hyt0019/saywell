@@ -163,6 +163,43 @@ CANARY = AsrModel(
     seconds_per_minute=3.59,
 )
 
+# llama.cpp runs GGUF speech models such as Qwen3-ASR in a local llama-server process.
+LLAMA_CPP = ModelFile(
+    "llama-b11696-bin-win-cpu-x64.zip",
+    "https://github.com/ggml-org/llama.cpp/releases/download/b11696/llama-b11696-bin-win-cpu-x64.zip",
+    19575690,
+    "1e7c47dff58467540d53e6cf302d83951bcb165afb252c2952ed3872190fc60d",
+)
+# The server and its libraries are unpacked here, inside the model folder, on first use.
+ENGINE_DIR = "llama.cpp"
+_qwen3 = _hf("ggml-org/Qwen3-ASR-0.6B-GGUF", "928ab958557df9aa2ef1c93e0e83c7ad0933fae2")
+
+QWEN3_ASR = AsrModel(
+    id="qwen3-asr",
+    name="Qwen3-ASR 0.6B",
+    kind="llama_server",
+    folder="qwen3-asr-0.6b-q8",
+    tagline="准确抗噪",
+    strengths=("中文准确，自带标点", "嘈杂环境、语速快时也较稳", "支持 52 种语言和方言"),
+    caveat="精选模型中体积最大；偶尔把“呃”听成“而”。",
+    languages="多语言 · 方言",
+    files=(
+        _qwen3("Qwen3-ASR-0.6B-Q8_0.gguf", 804749248, "bca259818b50ca7c4c05e9bdb35a5dc04fa039653a6d6f3f0f331f96f6aa1971"),
+        _qwen3(
+            "mmproj-Qwen3-ASR-0.6B-Q8_0.gguf", 214392480, "41a342b5e4c514e968cb756de6cd1b7be39eff43c44c57a2ef5fc6522e36603d"
+        ),
+        LLAMA_CPP,
+        VAD,
+    ),
+    inputs=(
+        ("model", "Qwen3-ASR-0.6B-Q8_0.gguf"),
+        ("mmproj", "mmproj-Qwen3-ASR-0.6B-Q8_0.gguf"),
+        ("engine", LLAMA_CPP.name),
+    ),
+    homepage="https://huggingface.co/Qwen/Qwen3-ASR-0.6B",
+    seconds_per_minute=4.16,
+)
+
 # ---------- 模型广场：精选模型之外的扩展选择 ----------
 
 PLAZA_CATEGORIES = ("中文", "方言", "英文与多语言")
@@ -173,7 +210,6 @@ _firered_aed = _hf(
 _firered_ctc = _hf(
     "csukuangfj2/sherpa-onnx-fire-red-asr2-ctc-zh_en-int8-2026-02-25", "423be1acfdc5d8aaa5a485fb6263fe4ea8570b06"
 )
-_qwen3 = _hf("csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25", "68818b2313fe77bd06f6a7c5068ff3ef59d02b8a")
 _funasr_nano = _hf("csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30", "6f16bd378457e13f36ccf3910df9017f96c346fb")
 _paraformer = _hf("csukuangfj/sherpa-onnx-paraformer-zh-2024-03-09", "906992d326ebf0c5171cde675aa0902be9e5bc6c")
 _dolphin = _hf(
@@ -231,37 +267,6 @@ FIRERED_CTC = AsrModel(
     category="中文",
     homepage="https://github.com/FireRedTeam/FireRedASR2S",
     seconds_per_minute=8.31,
-)
-
-QWEN3_ASR = AsrModel(
-    id="qwen3-asr",
-    name="Qwen3-ASR 0.6B",
-    kind="qwen3_asr",
-    folder="qwen3-asr-0.6b",
-    tagline="抗噪多语",
-    strengths=("52 种语言和方言，含 22 种中文方言", "嘈杂环境、语速快时也较稳", "自带标点，英文大小写规范"),
-    caveat="速度偏慢；偶尔把“呃”听成“而”。",
-    languages="多语言 · 方言",
-    files=(
-        _qwen3("conv_frontend.onnx", 44148281, "d22dc4423e0940e49884e903d2ea2f7e5567c14fc1aed97e4e26d6b8f208ef9e"),
-        _qwen3("encoder.int8.onnx", 182491662, "60748d3e6744a57c9c91e1b17424a6c2990567e8adceb0783940c03ed98fa9d9"),
-        _qwen3("decoder.int8.onnx", 755914231, "4f6885be5959ae26af3089d38ee7972c5fafbeeb1cf8d5e76eab6d8b61ca5771"),
-        _qwen3("tokenizer/merges.txt", 1671853, "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7", True),
-        _qwen3(
-            "tokenizer/tokenizer_config.json", 12487, "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c"
-        ),
-        _qwen3("tokenizer/vocab.json", 2776833, "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
-        VAD,
-    ),
-    inputs=(
-        ("conv_frontend", "conv_frontend.onnx"),
-        ("encoder", "encoder.int8.onnx"),
-        ("decoder", "decoder.int8.onnx"),
-        ("tokenizer", "tokenizer"),
-    ),
-    category="中文",
-    homepage="https://huggingface.co/Qwen/Qwen3-ASR-0.6B",
-    seconds_per_minute=8.35,
 )
 
 FUNASR_NANO = AsrModel(
@@ -448,7 +453,6 @@ WHISPER_TURBO = AsrModel(
 PLAZA = (
     FIRERED_AED,
     FIRERED_CTC,
-    QWEN3_ASR,
     FUNASR_NANO,
     PARAFORMER_ZH,
     DOLPHIN,
@@ -458,8 +462,8 @@ PLAZA = (
     WHISPER_TURBO,
 )
 
-CATALOG = (SENSE_VOICE, X_ASR, CANARY)
-# Every model the app can download and load: the curated three plus the plaza.
+CATALOG = (SENSE_VOICE, X_ASR, QWEN3_ASR, CANARY)
+# Every model the app can download and load: the curated models plus the plaza.
 ALL_MODELS = CATALOG + PLAZA
 DEFAULT_MODEL = SENSE_VOICE.id
 # Kept for callers that predate the model catalog.

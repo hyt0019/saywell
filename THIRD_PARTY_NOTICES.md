@@ -10,9 +10,10 @@
 | sherpa-onnx / ONNX Runtime | 本地语音推理 | https://github.com/k2-fsa/sherpa-onnx |
 | SenseVoice | 语音识别模型（默认） | https://github.com/FunAudioLLM/SenseVoice |
 | X-ASR zh-en | 可选语音识别模型，Apache-2.0 | https://huggingface.co/GilgameshWind/X-ASR-zh-en |
+| Qwen3-ASR-0.6B | 可选语音识别模型，Apache-2.0；GGUF 版由 ggml-org 转换 | https://huggingface.co/Qwen/Qwen3-ASR-0.6B |
+| llama.cpp | 运行 Qwen3-ASR 的本地引擎，MIT；随该模型下载，不随程序分发；包内 libomp 为 LLVM OpenMP（Apache-2.0 WITH LLVM-exception） | https://github.com/ggml-org/llama.cpp |
 | NVIDIA Canary-180M-Flash | 可选英文语音识别模型，CC-BY-4.0 | https://huggingface.co/nvidia/canary-180m-flash |
 | FireRedASR2（AED、CTC） | 模型广场可选模型，Apache-2.0 | https://huggingface.co/FireRedTeam/FireRedASR2-AED |
-| Qwen3-ASR-0.6B | 模型广场可选模型，Apache-2.0；ONNX 版由 Wasser1462 转换 | https://huggingface.co/Qwen/Qwen3-ASR-0.6B |
 | Fun-ASR-Nano-2512 | 模型广场可选模型，Apache-2.0；ONNX 版由 Wasser1462 转换 | https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512 |
 | Paraformer-large 中文 | 模型广场可选模型，Apache-2.0 | https://huggingface.co/funasr/paraformer-zh |
 | Dolphin Base | 模型广场可选模型，Apache-2.0 | https://huggingface.co/DataoceanAI/dolphin-base |

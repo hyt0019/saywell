@@ -49,6 +49,8 @@ class Settings:
     hotkey: str = DEFAULT_HOTKEY
     hold_to_talk: bool = True
     save_history: bool = False
+    # Daily counts and token totals for the overview page; never any text.
+    collect_stats: bool = True
     start_on_login: bool = False
     glossary: list[str] = field(default_factory=lambda: ["DeepSeek", "API", "Windows", "Ctrl", "Shift"])
     api_timeout: float = 25.0

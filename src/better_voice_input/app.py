@@ -5,13 +5,16 @@ import os
 import sys
 import time
 from dataclasses import replace
+from datetime import date
 
 from PySide6.QtCore import QLockFile, QTimer, Qt
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -19,15 +22,19 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QProgressBar,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
+from .api_config import is_deepseek_api
 from .audio import AudioError, Recorder
 from .core import single_line_text
+from .dashboard import Overview
 from .history import HistoryStore
 from .models import get_model, models_ready
 from .pipeline import Events, ModelDownloads, Pipeline
@@ -35,6 +42,7 @@ from .session import SessionGate
 from .settings import Settings, data_dir, read_key
 from .shortcuts import DEFAULT_HOTKEY, HOTKEYS, INSERT_HOTKEY
 from .startup import StartupError, save_settings_with_startup, startup_enabled
+from .stats import StatsStore
 from .ui import (
     STYLE,
     Glyph,
@@ -52,6 +60,7 @@ from .ui import (
     label,
     make_button,
     repolish,
+    run_task,
     text_column,
     tray_icon,
 )
@@ -83,10 +92,14 @@ class MainWindow(QMainWindow):
         self.native = native
         self.hotkeys = Hotkeys() if native else None
         self.overlay = RecordingOverlay()
+        self.usage = StatsStore() if self.settings.collect_stats else None
+        self.balance: str | None = None
+        self.balance_time = 0.0
         self.setWindowTitle("好好说 · Better Voice Input")
         self.setWindowIcon(app_icon())
-        self.resize(1100, 780)
-        self.setMinimumSize(800, 620)
+        available = self.screen().availableGeometry().height() if self.screen() else 900
+        self.resize(1100, max(680, min(860, available - 40)))
+        self.setMinimumSize(860, 620)
         self._build_ui()
         self.events.stage.connect(self.on_stage)
         self.events.transcript.connect(self.on_transcript)
@@ -121,7 +134,9 @@ class MainWindow(QMainWindow):
             self.hotkeys.events.triggered.connect(self.on_hotkey)
             self.configure_hotkeys()
         self.refresh_controls()
-        self.original.setFocus()
+        self.refresh_overview()
+        if native:
+            QTimer.singleShot(1500, self.update_balance)
 
     def _build_ui(self):
         central = QWidget()
@@ -141,6 +156,23 @@ class MainWindow(QMainWindow):
         brand.addWidget(label("保留你的意思，整理你的表达。", "muted"))
         header.addLayout(brand)
         header.addStretch()
+        bar = QFrame()
+        bar.setObjectName("segmentBar")
+        segments = QHBoxLayout(bar)
+        segments.setContentsMargins(3, 3, 3, 3)
+        segments.setSpacing(2)
+        self.page_group = QButtonGroup(self)
+        self.page_buttons = []
+        for index, text in enumerate(("概览", "文字")):
+            button = make_button(text, None, "segment")
+            button.setCheckable(True)
+            button.setMinimumWidth(76)
+            self.page_group.addButton(button, index)
+            self.page_buttons.append(button)
+            segments.addWidget(button)
+        self.page_group.idClicked.connect(self.show_page)
+        header.addWidget(bar)
+        header.addStretch()
         self.history_button = make_button("历史", Glyph.HISTORY, "toolbar")
         self.history_button.clicked.connect(self.open_history)
         self.import_button = make_button("导入录音", Glyph.IMPORT, "toolbar")
@@ -155,10 +187,10 @@ class MainWindow(QMainWindow):
 
         self.hero = hero = HeroCard()
         recording = QHBoxLayout(hero)
-        recording.setContentsMargins(30, 24, 22, 20)
+        recording.setContentsMargins(28, 18, 22, 16)
         recording.setSpacing(20)
         status_layout = QVBoxLayout()
-        status_layout.setSpacing(8)
+        status_layout.setSpacing(6)
         pill_row = QHBoxLayout()
         self.pill = label("● 就绪", "pill")
         pill_row.addWidget(self.pill)
@@ -208,6 +240,31 @@ class MainWindow(QMainWindow):
         self.notice.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.notice.hide()
         layout.addWidget(self.notice)
+        self.pages = QStackedWidget()
+        layout.addWidget(self.pages, 1)
+
+        self.overview = Overview()
+        self.overview.open_text.connect(lambda: self.show_page(1))
+        self.overview.copy_latest.connect(lambda: self.copy_text(True))
+        self.overview.insert_latest.connect(self.schedule_manual_insert)
+        self.overview.refresh_balance.connect(lambda: self.update_balance(force=True))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        holder = QWidget()
+        holder_layout = QVBoxLayout(holder)
+        holder_layout.setContentsMargins(0, 0, 6, 4)
+        holder_layout.addWidget(self.overview)
+        holder_layout.addStretch()
+        scroll.setWidget(holder)
+        self.pages.addWidget(scroll)
+
+        text_page = QWidget()
+        text_layout = QVBoxLayout(text_page)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(14)
+        self.pages.addWidget(text_page)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(16)
         splitter.setChildrenCollapsible(False)
@@ -220,7 +277,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(original_widget)
         splitter.addWidget(result_widget)
         splitter.setSizes([500, 500])
-        layout.addWidget(splitter, 1)
+        text_layout.addWidget(splitter, 1)
         self.original.textChanged.connect(self.refresh_controls)
         self.result.textChanged.connect(self.result_edited)
 
@@ -242,7 +299,8 @@ class MainWindow(QMainWindow):
         self.insert_button.clicked.connect(self.schedule_manual_insert)
         actions.addWidget(self.copy_button)
         actions.addWidget(self.insert_button)
-        layout.addLayout(actions)
+        text_layout.addLayout(actions)
+        self.show_page(0)
 
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
@@ -263,6 +321,66 @@ class MainWindow(QMainWindow):
         self.download_button.clicked.connect(self.open_models)
         bottom.addWidget(self.download_button)
         layout.addLayout(bottom)
+
+    def show_page(self, index: int):
+        self.pages.setCurrentIndex(index)
+        self.page_buttons[index].setChecked(True)
+        if index == 1:
+            self.original.setFocus()
+
+    def refresh_overview(self):
+        try:
+            deepseek = is_deepseek_api(self.settings.api_base_url)
+        except ValueError:
+            deepseek = False
+        self.overview.refresh(self.usage, date.today(), deepseek, self.usage is not None)
+        provider = "DeepSeek" if deepseek else self.provider_name()
+        updated = time.strftime("%H:%M 更新", time.localtime(self.balance_time)) if self.balance else ""
+        self.overview.set_balance(self.balance if deepseek else None, provider, updated)
+
+    def provider_name(self) -> str:
+        from urllib.parse import urlsplit
+
+        host = urlsplit(self.settings.api_base_url).hostname or ""
+        parts = host.removeprefix("api.").split(".")
+        return parts[0].capitalize() if parts and parts[0] else ""
+
+    def update_balance(self, force: bool = False):
+        """Fetch the DeepSeek balance in the background, at most once a minute unless asked."""
+        try:
+            if not is_deepseek_api(self.settings.api_base_url):
+                return
+        except ValueError:
+            return
+        if not force and time.time() - self.balance_time < 60:
+            return
+        from .checks import fetch_balance
+
+        base_url = self.settings.api_base_url
+        self.overview.refresh_button.setEnabled(False)
+
+        def work(_report):
+            return fetch_balance(base_url, read_key(api_base_url=base_url))
+
+        def done(value):
+            self.overview.refresh_button.setEnabled(True)
+            if isinstance(value, str):
+                self.balance, self.balance_time = value, time.time()
+            self.refresh_overview()
+
+        run_task(self, work, done)
+
+    def record_usage(self, data: dict):
+        if self.usage is None:
+            return
+        result = data["result"]
+        if data.get("duration"):
+            self.usage.record_dictation(result.original, data["duration"])
+        self.usage.record_request(result.usage, self.settings.api_base_url, self.settings.model)
+        try:
+            self.usage.save()
+        except OSError:
+            pass
 
     def refresh_controls(self):
         if not hasattr(self, "clean_button"):
@@ -448,6 +566,12 @@ class MainWindow(QMainWindow):
             f"{model} 识别 {data['asr_seconds']:.1f} 秒    文字整理 {result.elapsed:.1f} 秒    "
             f"本次 {result.usage.get('total_tokens', 0)} tokens"
         )
+        self.record_usage(data)
+        meta = f"{time.strftime('%H:%M')} · 识别 {data['asr_seconds']:.1f} 秒 · 整理 {result.elapsed:.1f} 秒"
+        self.overview.set_latest(result.text, meta)
+        self.refresh_overview()
+        if self.native:
+            self.update_balance()
         if self.settings.save_history:
             try:
                 HistoryStore().append(result.original, result.text)
@@ -629,7 +753,13 @@ class MainWindow(QMainWindow):
             self.set_notice(str(exc))
             return
         dialog = SettingsDialog(current, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        if getattr(dialog, "stats_cleared", False):
+            (self.usage or StatsStore()).clear()
+            if self.usage is not None:
+                self.usage = StatsStore()
+            self.refresh_overview()
+        if accepted:
             new = dialog.updated
             if self.hotkeys and new.hotkey != self.settings.hotkey:
                 modifiers, key = HOTKEYS[new.hotkey]
@@ -640,8 +770,13 @@ class MainWindow(QMainWindow):
             try:
                 save_settings_with_startup(new)
                 self.settings = new
+                if new.collect_stats != (self.usage is not None):
+                    self.usage = StatsStore() if new.collect_stats else None
                 self.configure_hotkeys()
                 self.refresh_controls()
+                self.refresh_overview()
+                if self.native:
+                    self.update_balance(force=True)
                 self.status.setText("设置已保存")
             except StartupError as exc:
                 self.configure_hotkeys()
@@ -738,6 +873,7 @@ class MainWindow(QMainWindow):
 
     def shutdown(self):
         self.downloads.cancel(wait=2)
+        self.pipeline.release_recognizer()  # Stops a model engine running in its own process.
         self.gate.cancel()
         self.recorder.cancel()
         self.timer.stop()

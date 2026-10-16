@@ -8,6 +8,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import httpx
+import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -29,7 +30,7 @@ def qt_app():
 
 
 def test_catalog_keeps_sensevoice_in_place_and_every_model_is_self_contained():
-    assert [model.id for model in CATALOG] == ["sensevoice", "xasr", "canary"]
+    assert [model.id for model in CATALOG] == ["sensevoice", "xasr", "qwen3-asr", "canary"]
     assert SENSE_VOICE.folder == "" and Settings().asr_model == "sensevoice"
     assert models.FILES == SENSE_VOICE.files
     folders = [model.folder for model in CATALOG]
@@ -273,22 +274,31 @@ def test_each_model_uses_its_sherpa_onnx_loader_with_catalog_files(tmp_path, mon
         monkeypatch.setattr(
             asr.sherpa_onnx.OfflineRecognizer, name, staticmethod(lambda name=name, **kw: calls.update({name: kw}))
         )
+    # GGUF models run in a local llama-server process instead of sherpa-onnx.
+    monkeypatch.setattr(
+        "better_voice_input.llama.LlamaServerRecognizer", lambda **kw: calls.update({"llama_server": kw})
+    )
     for model in CATALOG:
         asr.create_recognizer(tmp_path, model.id)
     names = {spec.name for model in CATALOG for spec in model.files}
     for kwargs in calls.values():
         for key, value in kwargs.items():
-            if isinstance(value, str) and value.startswith(str(tmp_path)):
-                assert value[len(str(tmp_path)) + 1:] in names, (key, value)
+            value = str(value)
+            if value.startswith(str(tmp_path)):
+                relative = value[len(str(tmp_path)) + 1:]
+                # Files, or a folder of downloaded files (Qwen3's tokenizer).
+                assert relative in names or any(n.startswith(f"{relative}/") for n in names), (key, value)
     assert calls["from_nemo_canary"]["src_lang"] == calls["from_nemo_canary"]["tgt_lang"] == "en"
     assert calls["from_sense_voice"]["use_itn"]
-    assert set(calls) == {"from_sense_voice", "from_transducer", "from_nemo_canary"}
+    assert calls["llama_server"]["mmproj"] == tmp_path / "mmproj-Qwen3-ASR-0.6B-Q8_0.gguf"
+    assert calls["llama_server"]["threads"] >= 1
+    assert set(calls) == {"from_sense_voice", "from_transducer", "llama_server", "from_nemo_canary"}
 
 
-def test_plaza_models_are_pinned_documented_and_separate_from_the_curated_three():
+def test_plaza_models_are_pinned_documented_and_separate_from_the_curated_models():
     from better_voice_input.models import ALL_MODELS, PLAZA, PLAZA_CATEGORIES
 
-    assert len(PLAZA) == 10 and not set(PLAZA) & set(CATALOG)
+    assert len(PLAZA) == 9 and not set(PLAZA) & set(CATALOG)
     assert ALL_MODELS == CATALOG + PLAZA
     ids, folders = [m.id for m in ALL_MODELS], [m.folder for m in ALL_MODELS]
     assert len(set(ids)) == len(ids) and len(set(folders)) == len(folders)
@@ -321,7 +331,6 @@ def test_plaza_models_use_their_sherpa_onnx_loaders(tmp_path, monkeypatch):
     parakeet = next(kw for kw in calls["from_transducer"] if kw["encoder"].endswith("encoder.int8.onnx"))
     assert parakeet["model_type"] == "nemo_transducer"
     assert calls["from_whisper"][0]["language"] == "" and calls["from_whisper"][0]["task"] == "transcribe"
-    assert calls["from_qwen3_asr"][0]["tokenizer"] == str(tmp_path / "tokenizer")
     assert all(kw["num_threads"] >= 1 for group in calls.values() for kw in group)
 
 
@@ -377,3 +386,34 @@ def test_every_card_states_speed_the_same_way():
         # Every card shows a measured speed and a link to the model's homepage.
         assert model.seconds_per_minute > 0, model.id
         assert model.homepage.startswith("https://"), model.id
+
+
+def test_try_button_listens_until_finished_then_shows_the_text(model_dialog, monkeypatch, qt_app):
+    import threading
+    import time
+
+    from better_voice_input import checks
+
+    listening = threading.Event()
+
+    def record(seconds, device, stop, tick):
+        tick(seconds)
+        listening.set()
+        assert stop.wait(5)  # Until the user clicks "说完了".
+        return np.ones(16000, dtype=np.float32)
+
+    monkeypatch.setattr(checks, "record_clip", record)
+    monkeypatch.setattr(checks, "try_model", lambda model, directory, samples: checks.CheckResult(True, "“你好” · 识别用时 0.2 秒"))
+    card = model_dialog.dialog.cards["sensevoice"]
+    card.try_button.click()
+    assert listening.wait(5)
+    deadline = time.monotonic() + 5
+    while "还剩 10 秒" not in card.check_status.text.text() and time.monotonic() < deadline:
+        qt_app.processEvents()
+    assert card.try_button.text().strip() == "说完了" and card.try_button.isEnabled()
+    assert not card.verify_button.isEnabled()
+    card.try_button.click()
+    while card.stop_recording is not None or not card.verify_button.isEnabled():
+        qt_app.processEvents()
+        assert time.monotonic() < deadline
+    assert card.try_button.text().strip() == "试一试" and "你好" in card.check_status.text.text()

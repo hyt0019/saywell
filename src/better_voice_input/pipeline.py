@@ -86,10 +86,15 @@ class Pipeline:
         if not self.lock.acquire(blocking=False):
             return False
         try:
-            self.recognizer = None
+            self._close_recognizer()
             return True
         finally:
             self.lock.release()
+
+    def _close_recognizer(self) -> None:
+        current, self.recognizer = self.recognizer, None
+        if current is not None and hasattr(current, "close"):
+            current.close()
 
     def start(self, job: int, cancel: threading.Event, settings: Settings, source, kind: str):
         snapshot = Settings(**vars(settings))
@@ -128,7 +133,7 @@ class Pipeline:
                         ):
                             from .asr import LocalRecognizer
 
-                            self.recognizer = None  # Release the previous model before loading.
+                            self._close_recognizer()  # Release the previous model before loading.
                             self.events.stage.emit(job, f"正在加载 {model.name}…")
                             self.recognizer = LocalRecognizer(settings.models, model.id)
                             self.events.stage.emit(job, "正在本地识别…")

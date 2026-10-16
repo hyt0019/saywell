@@ -3,11 +3,12 @@ from __future__ import annotations
 import math
 import os
 import shutil
+import threading
 from collections import deque
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl, QVariantAnimation, Signal
+from PySide6.QtCore import QObject, QRectF, QSize, Qt, QTimer, QUrl, QVariantAnimation, Signal
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -48,7 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 from .api_config import chat_completion_url
-from .models import ALL_MODELS, CATALOG, PLAZA, PLAZA_CATEGORIES, SENSE_VOICE, AsrModel, models_ready
+from .models import ALL_MODELS, CATALOG, ENGINE_DIR, PLAZA, PLAZA_CATEGORIES, SENSE_VOICE, AsrModel, models_ready
 from .settings import Settings, read_key, save_key
 from .shortcuts import RECORDING_CHOICES
 
@@ -151,6 +152,13 @@ QPushButton#chip:checked { background: #1D1D1F; border-color: #1D1D1F; color: #F
 QPushButton#link { background: transparent; border: 1px solid transparent; border-radius: 12px; color: #0066CC;
     padding: 3px 8px; font-size: 13px; }
 QPushButton#link:hover { background: #E8F1FD; }
+QLabel#checkText { color: #6E6E73; font-size: 13px; }
+QLabel#checkText[tone="ok"] { color: #1F7A35; }
+QLabel#checkText[tone="fail"] { color: #D70015; }
+QPushButton#check { background: #FFFFFF; border: 1px solid #D2D2D7; border-radius: 14px; padding: 4px 14px;
+    min-height: 18px; font-size: 13px; color: #1D1D1F; }
+QPushButton#check:hover { border-color: #0071E3; color: #0066CC; }
+QPushButton#check:disabled { color: #AEAEB2; border-color: #E5E5EA; }
 QLabel#plazaIntro { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 14px; padding: 12px 16px;
     color: #3A3A3C; font-size: 13px; }
 
@@ -194,6 +202,9 @@ class Glyph:
     SEND = ""
     KEYBOARD = ""
     GLOBE = ""
+    CANCEL = ""
+    CONNECT = ""
+    REPAIR = ""
 
 
 def icon_font(pixel_size: int) -> QFont:
@@ -295,6 +306,146 @@ def repolish(widget: QWidget):
     widget.style().unpolish(widget)
     widget.style().polish(widget)
     widget.update()
+
+
+OK_GREEN = "#34C759"
+FAIL_RED = "#FF3B30"
+
+
+def badge_pixmap(glyph: str, background: str, size: int = 16) -> QPixmap:
+    """A small filled circle with a white glyph, used for check results."""
+    pixmap = QPixmap(size * 2, size * 2)
+    pixmap.setDevicePixelRatio(2)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(background))
+    painter.drawEllipse(QRectF(0, 0, size, size))
+    painter.setFont(icon_font(int(size * 0.55)))
+    painter.setPen(QColor("#FFFFFF"))
+    painter.drawText(QRectF(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, glyph)
+    painter.end()
+    return pixmap
+
+
+class Spinner(QWidget):
+    """Thin rotating arc shown while a check runs."""
+
+    def __init__(self, size: int = 16, color: str = ACCENT):
+        super().__init__()
+        self.setFixedSize(size, size)
+        self.color = QColor(color)
+        self.angle = 0
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.tick)
+
+    def start(self):
+        self.timer.start(16)
+        self.show()
+
+    def stop(self):
+        self.timer.stop()
+        self.hide()
+
+    def tick(self):
+        self.angle = (self.angle + 9) % 360
+        self.update()
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(2, 2, -2, -2)
+        painter.setPen(QPen(QColor("#E5E5EA"), 2))
+        painter.drawEllipse(rect)
+        pen = QPen(self.color, 2)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawArc(rect, -self.angle * 16, 100 * 16)
+
+
+class CheckStatus(QWidget):
+    """Running / passed / failed line next to a check button."""
+
+    def __init__(self):
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
+        self.spinner = Spinner(16)
+        self.spinner.hide()
+        layout.addWidget(self.spinner, 0, Qt.AlignmentFlag.AlignTop)
+        self.icon = QLabel()
+        self.icon.setFixedSize(16, 18)
+        self.icon.hide()
+        layout.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignTop)
+        self.text = label("", "checkText", wrap=True)
+        layout.addWidget(self.text, 1)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def running(self, text: str):
+        self.icon.hide()
+        self.spinner.start()
+        self._set(text, "")
+
+    def finish(self, ok: bool, text: str):
+        self.spinner.stop()
+        self.icon.setPixmap(badge_pixmap(Glyph.CHECK if ok else Glyph.CANCEL, OK_GREEN if ok else FAIL_RED, 16))
+        self.icon.show()
+        self._set(text, "ok" if ok else "fail")
+
+    def clear(self):
+        self.spinner.stop()
+        self.icon.hide()
+        self._set("", "")
+
+    def _set(self, text: str, tone: str):
+        self.text.setText(text)
+        self.text.setProperty("tone", tone)
+        repolish(self.text)
+
+
+class Task(QObject):
+    progress = Signal(str)
+    done = Signal(object)
+
+
+def run_task(owner: QObject, work, on_done, on_progress=None) -> Task:
+    """Run work(report) on a thread; results come back on the GUI thread.
+
+    work raises ModelError (or returns a CheckResult); anything else becomes a generic failure."""
+    from .checks import CheckResult
+    from .models import ModelError
+
+    task = Task(owner)
+    task.done.connect(on_done)
+    task.done.connect(task.deleteLater)
+    if on_progress:
+        task.progress.connect(on_progress)
+
+    def emit(signal, value):
+        try:
+            signal.emit(value)
+        except RuntimeError:  # The window closed while the check was running.
+            pass
+
+    def target():
+        try:
+            result = work(lambda text: emit(task.progress, text))
+        except ModelError as exc:
+            result = CheckResult(False, str(exc))
+        except Exception:  # noqa: BLE001 - shown to the user as a failed check
+            result = CheckResult(False, "检查没有完成，请稍后重试")
+        emit(task.done, result)
+
+    threading.Thread(target=target, daemon=True).start()
+    return task
+
+
+def check_button(text: str, glyph: str) -> QPushButton:
+    button = make_button(text, glyph, "check", ACCENT)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    return button
 
 
 ASSETS = Path(__file__).resolve().parent / "assets"
@@ -924,6 +1075,14 @@ class SettingsDialog(QDialog):
         self.timeout.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.timeout.setMaximumWidth(140)
         form.addRow(field_label("请求超时"), self.timeout)
+        test = QHBoxLayout()
+        test.setSpacing(12)
+        self.test_api = check_button("测试连接", Glyph.CONNECT)
+        self.test_api.clicked.connect(self.check_connection)
+        test.addWidget(self.test_api, 0, Qt.AlignmentFlag.AlignTop)
+        self.api_status = CheckStatus()
+        test.addWidget(self.api_status, 1)
+        form.addRow(field_label("连接检查"), test)
         layout.addWidget(api)
 
         recording = Section("录音与输入", "全局快捷键随时可用，结果直接输入到原来的光标处。", Glyph.MIC)
@@ -960,6 +1119,15 @@ class SettingsDialog(QDialog):
         self.history = Switch("保留最近 5 条文字（本机加密，最长 7 天）")
         self.history.setChecked(settings.save_history)
         privacy.body.addWidget(self.history)
+        stats_row = QHBoxLayout()
+        self.collect_stats = Switch("记录使用统计（只记字数、次数和 tokens，不记内容）")
+        self.collect_stats.setChecked(settings.collect_stats)
+        stats_row.addWidget(self.collect_stats, 1)
+        self.clear_stats = make_button("清空统计", None, "link", ACCENT)
+        self.clear_stats.clicked.connect(self.confirm_clear_stats)
+        stats_row.addWidget(self.clear_stats)
+        privacy.body.addLayout(stats_row)
+        self.stats_cleared = False
         self.startup = Switch("开机自启动，登录 Windows 后在托盘运行")
         self.startup.setChecked(settings.start_on_login)
         privacy.body.addWidget(self.startup)
@@ -998,6 +1166,31 @@ class SettingsDialog(QDialog):
         self.key.clear()
         self.update_key_hint()
 
+    def confirm_clear_stats(self):
+        answer = QMessageBox.question(self, "清空统计", "清空所有使用统计？热力图、累计字数和成就会从零开始。")
+        if answer == QMessageBox.StandardButton.Yes:
+            self.stats_cleared = True
+            self.clear_stats.setText("已清空")
+            self.clear_stats.setEnabled(False)
+
+    def check_connection(self):
+        from .checks import check_api
+
+        base_url = self.base_url.text().strip().rstrip("/")
+        try:
+            key = self.key.text().strip() or read_key(api_base_url=base_url) or ""
+        except Exception:
+            key = self.key.text().strip()
+        model, timeout = self.model.text(), float(self.timeout.value())
+        self.test_api.setEnabled(False)
+        self.api_status.running("正在连接…")
+
+        def finished(result):
+            self.test_api.setEnabled(True)
+            self.api_status.finish(result.ok, result.message)
+
+        run_task(self, lambda _report: check_api(base_url, key, model, timeout), finished)
+
     def save(self):
         words = list(dict.fromkeys(x.strip() for x in self.glossary.toPlainText().splitlines() if x.strip()))
         if len(words) > 100 or any(len(word) > 80 for word in words):
@@ -1035,6 +1228,7 @@ class SettingsDialog(QDialog):
                 hotkey=self.hotkey.currentText(),
                 hold_to_talk=self.hold.isChecked(),
                 save_history=self.history.isChecked(),
+                collect_stats=self.collect_stats.isChecked(),
                 start_on_login=self.startup.isChecked(),
                 glossary=words,
             )
@@ -1060,6 +1254,8 @@ def format_bytes(size: int) -> str:
 def delete_model_files(model: AsrModel, directory: Path) -> None:
     for spec in model.files:
         (directory / spec.name).unlink(missing_ok=True)
+    if model.kind == "llama_server":
+        shutil.rmtree(directory / ENGINE_DIR, ignore_errors=True)  # Unpacked from the downloaded archive.
     folders = sorted({(directory / spec.name).parent for spec in model.files}, key=lambda p: len(p.parts))
     for folder in reversed(folders):
         if folder != directory or model.folder:
@@ -1111,6 +1307,24 @@ class ModelCard(QFrame):
         caveat.addWidget(glyph_label(Glyph.INFO, "#8E8E93", 13), 0, Qt.AlignmentFlag.AlignTop)
         caveat.addWidget(label(model.caveat, "caption", wrap=True), 1)
         layout.addLayout(caveat)
+        self.check_row = QWidget()
+        checks = QHBoxLayout(self.check_row)
+        checks.setContentsMargins(0, 4, 0, 0)
+        checks.setSpacing(8)
+        self.verify_button = check_button("检查文件", Glyph.CHECK)
+        self.verify_button.setToolTip("逐个校验模型文件是否完整")
+        self.try_button = check_button("试一试", Glyph.MIC)
+        self.try_button.setToolTip("最长录 10 秒，用这个模型当场识别")
+        self.stop_recording = None  # Set while "试一试" is listening; clicking again finishes early.
+        self.repair_button = check_button("修复", Glyph.REPAIR)
+        self.repair_button.setToolTip("只重新下载不完整的文件")
+        self.repair_button.hide()
+        for button in (self.verify_button, self.try_button, self.repair_button):
+            checks.addWidget(button, 0, Qt.AlignmentFlag.AlignTop)
+        self.check_status = CheckStatus()
+        checks.addSpacing(4)
+        checks.addWidget(self.check_status, 1)
+        layout.addWidget(self.check_row)
         divider = QFrame()
         divider.setObjectName("divider")
         layout.addWidget(divider)
@@ -1132,8 +1346,13 @@ class ModelCard(QFrame):
         bottom.addWidget(self.action)
         layout.addLayout(bottom)
 
+    def set_checking(self, checking: bool):
+        for button in (self.verify_button, self.try_button, self.repair_button):
+            button.setEnabled(not checking)
+
     def update_state(self, *, active: bool, ready: bool, directory: Path, downloading: str | None, percent: int):
         mine = downloading == self.model.id
+        self.check_row.setVisible(ready and not mine)
         self.setProperty("active", active and ready)
         repolish(self)
         self.active_tag.setVisible(active and ready)
@@ -1251,7 +1470,7 @@ class ModelDialog(QDialog):
         area, layout = scroll_body(12)
         self.pages.addWidget(area)
         intro = label(
-            "精选的三个模型已覆盖绝大多数场景。有特殊需要时，可以在这里挑选更多开源模型，"
+            "精选模型已覆盖绝大多数场景。有特殊需要时，可以在这里挑选更多开源模型，"
             "比如更高的中文准确率、方言或其他语言。",
             "plazaIntro",
             wrap=True,
@@ -1305,8 +1524,74 @@ class ModelDialog(QDialog):
         item.action.clicked.connect(lambda _=False, m=model: self.primary_action(m))
         item.cancel_button.clicked.connect(lambda _=False: self.downloads.cancel())
         item.delete_button.clicked.connect(lambda _=False, m=model: self.delete_model(m))
+        item.verify_button.clicked.connect(lambda _=False, m=model: self.verify_model(m))
+        item.try_button.clicked.connect(lambda _=False, m=model: self.try_model(m))
+        item.repair_button.clicked.connect(lambda _=False, m=model: self.repair_model(m))
         self.cards[model.id] = item
         return item
+
+    def verify_model(self, model: AsrModel):
+        from .checks import check_files
+
+        card, directory = self.cards[model.id], self.settings.model_path(model.id)
+        card.set_checking(True)
+        card.check_status.running(f"正在校验 {len(model.files)} 个文件…")
+
+        def finished(result):
+            card.set_checking(False)
+            card.check_status.finish(result.ok, result.message)
+            card.repair_button.setVisible(not result.ok)
+
+        run_task(self, lambda _report: check_files(model, directory), finished)
+
+    def try_model(self, model: AsrModel):
+        from .checks import TRY_SECONDS, CheckResult, record_clip, try_model
+
+        card, directory, microphone = self.cards[model.id], self.settings.model_path(model.id), self.settings.microphone
+        if card.stop_recording is not None:  # "说完了"
+            card.stop_recording.set()
+            return
+        stop = card.stop_recording = threading.Event()
+        card.set_checking(True)
+        card.try_button.setText(icon_text("说完了"))
+        card.try_button.setEnabled(True)
+        card.check_status.running(f"请对着麦克风说话，最长 {TRY_SECONDS} 秒…")
+        recognizing = f"正在用 {model.name} 识别…"
+
+        def work(report):
+            try:
+                samples = record_clip(
+                    TRY_SECONDS, microphone, stop, lambda left: report(f"正在听… 还剩 {left} 秒，说完点“说完了”")
+                )
+            except Exception:  # noqa: BLE001 - PortAudio errors vary by device
+                return CheckResult(False, "无法打开麦克风，请在“设置”里检查麦克风")
+            report(recognizing)
+            return try_model(model, directory, samples)
+
+        def listening_done():
+            card.stop_recording = None
+            card.try_button.setText(icon_text("试一试"))
+
+        def progress(text):
+            card.check_status.running(text)
+            if text == recognizing:
+                listening_done()
+                card.try_button.setEnabled(False)
+
+        def finished(result):
+            listening_done()
+            card.set_checking(False)
+            card.check_status.finish(result.ok, result.message)
+
+        run_task(self, work, finished, progress)
+
+    def repair_model(self, model: AsrModel):
+        card = self.cards[model.id]
+        if self.downloads.start(model.id, self.settings.model_path(model.id)):
+            card.repair_button.hide()
+            card.check_status.clear()
+            self.message.setText(f"正在重新下载 {model.name} 不完整的文件，完整的文件不会重复下载。")
+        self.refresh()
 
     def filter_plaza(self, category: str):
         self.chips[category].setChecked(True)

@@ -26,8 +26,14 @@ def tidy_spacing(text: str) -> str:
 
 
 def create_recognizer(directory: Path, model_id: str):
-    """Build the recognizer from the catalog entry: kind picks the sherpa-onnx loader."""
+    """Build the recognizer from the catalog entry: kind picks the sherpa-onnx loader,
+    or the local llama.cpp server for GGUF models."""
     model = get_model(model_id)
+    if model.kind == "llama_server":
+        from .llama import LlamaServerRecognizer, server_threads
+
+        files = {key: directory / name for key, name in model.inputs}
+        return LlamaServerRecognizer(**files, threads=server_threads())
     threads = min(4, max(1, (os.cpu_count() or 2) // 2))
     loader = getattr(sherpa_onnx.OfflineRecognizer, f"from_{model.kind}")
     files = {key: str(directory / name) for key, name in model.inputs}
@@ -42,6 +48,12 @@ class LocalRecognizer:
         self.directory = directory
         self.model = spec.id
         self.recognizer = create_recognizer(directory, spec.id)
+
+    def close(self) -> None:
+        """Stop a model that runs in its own process; in-process models are freed with this object."""
+        close = getattr(self.recognizer, "close", None)
+        if close:
+            close()
 
     def transcribe(
         self, samples: np.ndarray, cancel: Event | None = None, partial: Callable[[str], None] | None = None
