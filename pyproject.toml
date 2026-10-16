@@ -13,7 +13,7 @@ dependencies = [
   "pydantic>=2.10,<3",
   "keyring>=25,<27",
   "PySide6-Essentials>=6.8,<7",
-  "sherpa-onnx>=1.12,<2",
+  "sherpa-onnx>=1.13.8,<2",
   "sounddevice>=0.5,<1",
   "numpy>=2,<3",
   "av>=14,<18",
@@ -29,6 +29,9 @@ bvi = "better_voice_input.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+better_voice_input = ["assets/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

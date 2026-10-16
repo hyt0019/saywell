@@ -7,10 +7,10 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from .api_config import DEFAULT_API_BASE_URL, chat_completion_url, credential_account, is_deepseek_api
-from .models import CATALOG, DEFAULT_MODEL, get_model, models_ready
+from .models import ALL_MODELS, DEFAULT_MODEL, get_model, models_ready
 from .shortcuts import DEFAULT_HOTKEY, HOTKEYS
 
-MODEL_IDS = {model.id for model in CATALOG}
+MODEL_IDS = {model.id for model in ALL_MODELS}
 
 SERVICE = "better-voice-input"
 
@@ -78,7 +78,7 @@ class Settings:
     def with_download_root(self, directory: Path) -> Settings:
         """Change the download location while keeping downloaded models where they are."""
         pinned = dict(self.model_paths)
-        for model in CATALOG:
+        for model in ALL_MODELS:
             current = self.model_path(model.id)
             if model.id not in pinned and models_ready(current, model=model):
                 pinned[model.id] = str(current)

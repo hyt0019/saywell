@@ -16,7 +16,7 @@ a = Analysis(
     ['scripts/run_app.py'],
     pathex=['src'],
     binaries=sherpa_binaries,
-    datas=sherpa_data,
+    datas=sherpa_data + [('src/better_voice_input/assets', 'better_voice_input/assets')],
     hiddenimports=sherpa_hidden + ['better_voice_input.cli', 'keyring.backends.Windows', 'win32crypt'],
     excludes=['tkinter', 'pytest', 'ruff'],
 )

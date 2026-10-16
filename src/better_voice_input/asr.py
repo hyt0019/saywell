@@ -26,33 +26,12 @@ def tidy_spacing(text: str) -> str:
 
 
 def create_recognizer(directory: Path, model_id: str):
+    """Build the recognizer from the catalog entry: kind picks the sherpa-onnx loader."""
     model = get_model(model_id)
-    path = lambda name: str(directory / name)  # noqa: E731
     threads = min(4, max(1, (os.cpu_count() or 2) // 2))
-    if model.kind == "transducer":
-        return sherpa_onnx.OfflineRecognizer.from_transducer(
-            encoder=path("encoder-epoch-99-avg-1.int8.onnx"),
-            decoder=path("decoder-epoch-99-avg-1.onnx"),
-            joiner=path("joiner-epoch-99-avg-1.int8.onnx"),
-            tokens=path("tokens.txt"),
-            num_threads=threads,
-        )
-    if model.kind == "nemo_canary":
-        return sherpa_onnx.OfflineRecognizer.from_nemo_canary(
-            encoder=path("encoder.int8.onnx"),
-            decoder=path("decoder.int8.onnx"),
-            tokens=path("tokens.txt"),
-            src_lang="en",
-            tgt_lang="en",
-            num_threads=threads,
-        )
-    return sherpa_onnx.OfflineRecognizer.from_sense_voice(
-        model=path("model.int8.onnx"),
-        tokens=path("tokens.txt"),
-        num_threads=threads,
-        language="auto",
-        use_itn=True,
-    )
+    loader = getattr(sherpa_onnx.OfflineRecognizer, f"from_{model.kind}")
+    files = {key: str(directory / name) for key, name in model.inputs}
+    return loader(**files, **dict(model.options), num_threads=threads)
 
 
 class LocalRecognizer:

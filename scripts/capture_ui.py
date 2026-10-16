@@ -58,6 +58,9 @@ models = ModelDialog(Settings(), ModelDownloads(), lambda _settings: True, windo
 models.show()
 app.processEvents()
 models.grab().save(str(output / "models.png"))
+models.tab_buttons[1].click()
+app.processEvents()
+models.grab().save(str(output / "models-plaza.png"))
 models.close()
 overlay = window.overlay
 overlay.label.setText("正在听  00:07")

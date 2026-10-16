@@ -30,6 +30,14 @@ API 地址支持 Base URL（如 `https://api.example.com/v1`）或完整 `/chat/
 
 普通 pytest 不访问网络，也不读取测试 Key。
 
+## 图标
+
+源图在 `src/better_voice_input/assets/`：`icon.png` 是带底板的彩色图标（窗口、任务栏、浅色任务栏的托盘），`tray-white.png` 是深色任务栏托盘用的白色图形，均为 1024×1024 透明 PNG。替换源图后运行 `.venv\Scripts\python.exe scripts\make_icon.py` 重新生成 `assets/app.ico`（exe 和安装包图标，含 16～256 共 10 个尺寸）。
+
+## 模型广场
+
+精选的三个模型在 `models.py` 的 `CATALOG`，扩展模型在 `PLAZA`。每个模型固定 Hugging Face 提交版本并记录每个文件的大小和哈希（LFS 文件用 SHA-256，小文件用 git blob SHA-1），`kind` 对应 `sherpa_onnx.OfflineRecognizer.from_<kind>`，`inputs` 和 `options` 是传给它的文件与参数。`seconds_per_minute` 是本机实测识别 60 秒语音的耗时，卡片上统一显示为“60 秒语音约 X 秒”。新增模型时补上分类、实测速度和模型主页，并实测能下载、校验、加载和识别；许可协议记录在 THIRD_PARTY_NOTICES.md。
+
 ## 发布安装包
 
 一次性准备：`winget install JRSoftware.InnoSetup`（按用户安装即可）；如需命令行发布，再安装 GitHub CLI 并运行 `gh auth login`。

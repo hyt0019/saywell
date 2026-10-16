@@ -53,6 +53,7 @@ from .ui import (
     make_button,
     repolish,
     text_column,
+    tray_icon,
 )
 from .windows import Hotkeys, PasteError, current_target, modifiers_held, paste_text, shortcut_held
 
@@ -101,7 +102,7 @@ class MainWindow(QMainWindow):
         self.timer.start()
         self.escape = QShortcut(QKeySequence("Escape"), self)
         self.escape.activated.connect(self.cancel)
-        self.tray = QSystemTrayIcon(self.windowIcon(), self)
+        self.tray = QSystemTrayIcon(tray_icon(), self)
         self.tray.setToolTip("好好说 · 语音输入")
         menu = QMenu(self)
         show = QAction("打开好好说", self)
@@ -152,7 +153,7 @@ class MainWindow(QMainWindow):
             header.addWidget(button)
         layout.addLayout(header)
 
-        hero = HeroCard()
+        self.hero = hero = HeroCard()
         recording = QHBoxLayout(hero)
         recording.setContentsMargins(30, 24, 22, 20)
         recording.setSpacing(20)
@@ -174,7 +175,7 @@ class MainWindow(QMainWindow):
         chips.setSpacing(8)
         self.shortcut_label = label("", "heroChip")
         self.insert_label = label(f"{INSERT_HOTKEY}  补输结果", "heroChip")
-        self.model_chip = make_button("", Glyph.MODEL, "heroChip", "#9FD9D1")
+        self.model_chip = make_button("", Glyph.MODEL, "heroChip", "#6E6E73")
         self.model_chip.setToolTip("更换或下载本地语音模型")
         self.model_chip.clicked.connect(self.open_models)
         chips.addWidget(self.shortcut_label)
@@ -245,7 +246,7 @@ class MainWindow(QMainWindow):
 
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
-        bottom.addWidget(glyph_label(Glyph.LOCK, "#8A938F", 13))
+        bottom.addWidget(glyph_label(Glyph.LOCK, "#8E8E93", 13))
         self.stats = label(IDLE_STATS, "caption")
         self.stats.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         bottom.addWidget(self.stats, 1)
@@ -271,6 +272,7 @@ class MainWindow(QMainWindow):
         self.record_button.setText("结束并整理" if self.state == "recording" else "开始录音")
         self.record_button.setObjectName("recording" if self.state == "recording" else "primary")
         self.record_button.set_busy(self.state == "busy")
+        self.hero.set_mode(self.state)
         self.cancel_button.setVisible(not idle)
         self.import_button.setEnabled(idle)
         self.settings_button.setEnabled(idle)
@@ -682,7 +684,7 @@ class MainWindow(QMainWindow):
         body.addWidget(empty, 1)
         layout.addLayout(body, 1)
         footer, actions = footer_bar()
-        clear_button = make_button("清空全部历史", Glyph.DELETE, "danger", "#B4443C")
+        clear_button = make_button("清空全部历史", Glyph.DELETE, "danger", "#D70015")
         clear_button.setEnabled(bool(rows))
         load_button = make_button("载入选中记录", None, "primary")
         load_button.setEnabled(bool(rows))

@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from .cleanup import ApiCleaner, CleanupError
-from .models import CATALOG
+from .models import ALL_MODELS
 from .settings import Settings, read_key
 
 
@@ -23,7 +23,7 @@ def main() -> int:
     transcribe.add_argument("--directory", type=Path)
     for command in (download, transcribe):
         command.add_argument(
-            "--asr-model", choices=[model.id for model in CATALOG], help="本地语音模型，默认使用设置中的选择"
+            "--asr-model", choices=[model.id for model in ALL_MODELS], help="本地语音模型，默认使用设置中的选择"
         )
     for command in (clean, transcribe):
         command.add_argument("--key-file", type=Path)

@@ -283,3 +283,97 @@ def test_each_model_uses_its_sherpa_onnx_loader_with_catalog_files(tmp_path, mon
     assert calls["from_nemo_canary"]["src_lang"] == calls["from_nemo_canary"]["tgt_lang"] == "en"
     assert calls["from_sense_voice"]["use_itn"]
     assert set(calls) == {"from_sense_voice", "from_transducer", "from_nemo_canary"}
+
+
+def test_plaza_models_are_pinned_documented_and_separate_from_the_curated_three():
+    from better_voice_input.models import ALL_MODELS, PLAZA, PLAZA_CATEGORIES
+
+    assert len(PLAZA) == 10 and not set(PLAZA) & set(CATALOG)
+    assert ALL_MODELS == CATALOG + PLAZA
+    ids, folders = [m.id for m in ALL_MODELS], [m.folder for m in ALL_MODELS]
+    assert len(set(ids)) == len(ids) and len(set(folders)) == len(folders)
+    for model in PLAZA:
+        assert model.folder and VAD in model.files
+        assert model.tagline and model.caveat
+        assert model.category in PLAZA_CATEGORIES and model.homepage.startswith("https://")
+        assert len(model.strengths) == 3
+        assert all("/resolve/main/" not in spec.url for spec in model.files)
+        names = {spec.name for spec in model.files}
+        for _key, name in model.inputs:
+            # Every loader input is a downloaded file, or a folder of downloaded files (tokenizers).
+            assert name in names or any(n.startswith(f"{name}/") for n in names), (model.id, name)
+    assert {m.category for m in PLAZA} == set(PLAZA_CATEGORIES)
+
+
+def test_plaza_models_use_their_sherpa_onnx_loaders(tmp_path, monkeypatch):
+    from better_voice_input import asr
+    from better_voice_input.models import PLAZA
+
+    calls = {}
+    for model in PLAZA:
+        name = f"from_{model.kind}"
+        monkeypatch.setattr(
+            asr.sherpa_onnx.OfflineRecognizer, name, staticmethod(lambda name=name, **kw: calls.setdefault(name, []).append(kw))
+        )
+    for model in PLAZA:
+        asr.create_recognizer(tmp_path, model.id)
+    assert sum(len(v) for v in calls.values()) == len(PLAZA)
+    parakeet = next(kw for kw in calls["from_transducer"] if kw["encoder"].endswith("encoder.int8.onnx"))
+    assert parakeet["model_type"] == "nemo_transducer"
+    assert calls["from_whisper"][0]["language"] == "" and calls["from_whisper"][0]["task"] == "transcribe"
+    assert calls["from_qwen3_asr"][0]["tokenizer"] == str(tmp_path / "tokenizer")
+    assert all(kw["num_threads"] >= 1 for group in calls.values() for kw in group)
+
+
+def test_plaza_model_choice_survives_settings_roundtrip(tmp_path):
+    path = tmp_path / "settings.json"
+    value = Settings(asr_model="firered-aed", model_paths={"qwen3-asr": "E:/q"})
+    value.save(path)
+    assert Settings.load(path) == value
+    assert value.models == value.download_root / "firered-asr2-aed"
+
+
+def test_model_dialog_has_a_separate_plaza_tab_with_filters(model_dialog):
+    from better_voice_input.models import PLAZA
+
+    dialog = model_dialog.dialog
+    assert dialog.pages.count() == 2 and dialog.pages.currentIndex() == 0
+    assert set(dialog.cards) == {m.id for m in CATALOG} | {m.id for m in PLAZA}
+    dialog.tab_buttons[1].click()
+    assert dialog.pages.currentIndex() == 1
+    assert dialog.cards["parakeet-v3"].homepage.toolTip().startswith("https://huggingface.co/nvidia/")
+    dialog.chips["方言"].click()
+    visible = {m.id for m in PLAZA if dialog.cards[m.id].isVisibleTo(dialog)}
+    assert visible == {m.id for m in PLAZA if m.category == "方言"}
+    dialog.chips["全部"].click()
+    assert all(dialog.cards[m.id].isVisibleTo(dialog) for m in PLAZA)
+    card = dialog.cards["paraformer-zh"]
+    card.action.click()
+    assert model_dialog.starts == [("paraformer-zh", model_dialog.root / "paraformer-zh")]
+
+
+def test_model_dialog_opens_on_plaza_when_a_plaza_model_is_active(qt_app, tmp_path):
+    dialog = ModelDialog(Settings(download_dir=str(tmp_path), asr_model="whisper-turbo"), ModelDownloads(), lambda new: True)
+    try:
+        assert dialog.pages.currentIndex() == 1 and dialog.tab_buttons[1].isChecked()
+    finally:
+        dialog.close()
+
+
+def test_tray_uses_white_glyph_on_dark_taskbar(qt_app, monkeypatch):
+    used = []
+    monkeypatch.setattr(ui, "image_icon", lambda name: used.append(name) or name)
+    monkeypatch.setattr(ui, "taskbar_is_light", lambda: False)
+    assert ui.tray_icon() == "tray-white.png"
+    monkeypatch.setattr(ui, "taskbar_is_light", lambda: True)
+    assert ui.tray_icon() == "icon.png"
+    assert (ui.ASSETS / "icon.png").is_file() and (ui.ASSETS / "tray-white.png").is_file()
+
+
+def test_every_card_states_speed_the_same_way():
+    assert replace(SENSE_VOICE, seconds_per_minute=0.88).speed_label == "60 秒语音约 0.9 秒"
+    assert replace(SENSE_VOICE, seconds_per_minute=14.4).speed_label == "60 秒语音约 14 秒"
+    for model in models.ALL_MODELS:
+        # Every card shows a measured speed and a link to the model's homepage.
+        assert model.seconds_per_minute > 0, model.id
+        assert model.homepage.startswith("https://"), model.id
