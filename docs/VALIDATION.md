@@ -1,5 +1,11 @@
 # 验证记录
 
+## 2026-10-17：发布 v0.2.0
+
+- 已发布 [v0.2.0](https://github.com/hyt0019/saywell/releases/tag/v0.2.0)（好好说 Saywell 0.2.0）：标签指向 `05b5bab`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/38951997916) 通过。
+- `scripts\build_installer.ps1` 跑完 177 项测试后生成 `Saywell-Setup-0.2.0.exe`（67.5 MB），SHA-256 为 `f8307af3de6fa10e16a9368be3f2d15a6db0c7624efed554e6c41bf82c0411e1`；从发布页重新下载的安装包哈希一致。打包出的程序 `--smoke` 退出码 0。
+- 未在干净环境（Windows 沙盒或新用户）中完整走一遍安装、首次使用和卸载，也未实测从 v0.1.0 安装包原地升级。
+
 ## 2026-10-17：改名为好好说 Saywell
 
 - 英文名由 Better Voice Input 改为 Saywell，品牌处中英文并列为“好好说 Saywell”：窗口标题、主界面标题（中文后跟浅灰英文名）、托盘提示、安装程序和开始菜单、README、使用说明。Python 包 `better_voice_input` 改为 `saywell`，程序为 `Saywell.exe`，安装包为 `Saywell-Setup-版本号.exe`，开发用环境变量改为 `SAYWELL_API_KEY` / `SAYWELL_API_BASE_URL`，仓库链接改为 `github.com/hyt0019/saywell`。
