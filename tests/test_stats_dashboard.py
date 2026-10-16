@@ -86,7 +86,7 @@ def test_streaks_milestones_and_saved_time():
     assert store.saved_minutes() == pytest.approx(14_000 / 40 - 7)
 
 
-def test_overview_shows_totals_heatmap_and_achievements(qt_app):
+def test_overview_shows_totals_heatmap_and_milestones(qt_app):
     from better_voice_input.dashboard import Heatmap, Overview, number
 
     assert number(8_600) == "8,600" and number(86_000) == "8.6 万" and number(100_000) == "10 万"
@@ -100,8 +100,11 @@ def test_overview_shows_totals_heatmap_and_achievements(qt_app):
     view.refresh(store, today, deepseek=True)
     assert "1,200" in view.today.value.text() and view.streak.value.text().count("2")
     assert view.requests.text() == "4 次" and view.cost.text() == "约 ¥0.01"
-    earned = {badge.achievement.title for badge in view.badges if badge.earned}
-    assert earned == {"开口", "千字", "单日千字"}
+    chars, streak = view.milestones
+    assert chars.reached() == ["1 千字"] and streak.reached() == []
+    assert chars.position(1_000) == 0.25 and chars.position(5_500) == 0.25 + 0.25 / 2
+    assert streak.position(0) == 0 and streak.position(500) == 1
+    assert "1,200" in view.best.text()
     assert view.heatmap.day_at(*cell_center(view.heatmap, today)) == today
     view.refresh(store, today, deepseek=False)
     assert view.cost.text() == "—"

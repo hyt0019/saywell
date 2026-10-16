@@ -11,7 +11,6 @@ from PySide6.QtCore import QLockFile, QTimer, Qt
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
-    QButtonGroup,
     QDialog,
     QFileDialog,
     QFrame,
@@ -51,15 +50,16 @@ from .ui import (
     MicButton,
     ModelDialog,
     RecordingOverlay,
+    Segmented,
     SettingsDialog,
+    Toast,
     app_icon,
     dialog_header,
+    fade_in,
     footer_bar,
     glyph_label,
-    icon_text,
     label,
     make_button,
-    repolish,
     run_task,
     text_column,
     tray_icon,
@@ -71,10 +71,11 @@ IDLE_STATS = "音频只在本机识别，录音不落盘；整理时仅发送文
 
 class MainWindow(QMainWindow):
     PILLS = {
-        "recording": ("rec", "● 录音中"),
-        "busy": ("busy", "● 处理中"),
-        "waiting": ("busy", "● 等待选择输入框"),
+        "recording": ("rec", "录音中"),
+        "busy": ("busy", "处理中"),
+        "waiting": ("busy", "等待选择输入框"),
     }
+    TONES = {"idle": "#AEAEB2", "rec": "#FF3B30", "busy": "#FF9F0A", "done": "#34C759"}
 
     def __init__(self, settings: Settings | None = None, native: bool = True):
         super().__init__()
@@ -156,22 +157,10 @@ class MainWindow(QMainWindow):
         brand.addWidget(label("保留你的意思，整理你的表达。", "muted"))
         header.addLayout(brand)
         header.addStretch()
-        bar = QFrame()
-        bar.setObjectName("segmentBar")
-        segments = QHBoxLayout(bar)
-        segments.setContentsMargins(3, 3, 3, 3)
-        segments.setSpacing(2)
-        self.page_group = QButtonGroup(self)
-        self.page_buttons = []
-        for index, text in enumerate(("概览", "文字")):
-            button = make_button(text, None, "segment")
-            button.setCheckable(True)
-            button.setMinimumWidth(76)
-            self.page_group.addButton(button, index)
-            self.page_buttons.append(button)
-            segments.addWidget(button)
-        self.page_group.idClicked.connect(self.show_page)
-        header.addWidget(bar)
+        self.page_switch = Segmented(("概览", "文字"))
+        self.page_group, self.page_buttons = self.page_switch.group, self.page_switch.buttons
+        self.page_switch.changed.connect(self.show_page)
+        header.addWidget(self.page_switch)
         header.addStretch()
         self.history_button = make_button("历史", Glyph.HISTORY, "toolbar")
         self.history_button.clicked.connect(self.open_history)
@@ -191,30 +180,37 @@ class MainWindow(QMainWindow):
         recording.setSpacing(20)
         status_layout = QVBoxLayout()
         status_layout.setSpacing(6)
-        pill_row = QHBoxLayout()
-        self.pill = label("● 就绪", "pill")
-        pill_row.addWidget(self.pill)
-        pill_row.addStretch()
-        status_layout.addLayout(pill_row)
+        self.pill = QLabel()
+        self.pill.setObjectName("pill")
+        self.pill.setTextFormat(Qt.TextFormat.RichText)
+        status_layout.addWidget(self.pill)
         self.status = label("准备好，慢慢说", "status")
         self.hint = label("按住快捷键说话，松开后自动整理并输入。停顿和改口都没关系。", "heroHint", wrap=True)
-        self.meter = LevelBars(56)
         status_layout.addWidget(self.status)
         status_layout.addWidget(self.hint)
-        status_layout.addSpacing(2)
-        status_layout.addWidget(self.meter)
-        chips = QHBoxLayout()
+        status_layout.addSpacing(6)
+        # At rest the bottom line shows the shortcuts; while listening it becomes the voice level.
+        self.hero_bottom = QStackedWidget()
+        self.hero_bottom.setFixedHeight(34)
+        meta = QWidget()
+        chips = QHBoxLayout(meta)
+        chips.setContentsMargins(0, 0, 0, 0)
         chips.setSpacing(8)
-        self.shortcut_label = label("", "heroChip")
-        self.insert_label = label(f"{INSERT_HOTKEY}  补输结果", "heroChip")
-        self.model_chip = make_button("", Glyph.MODEL, "heroChip", "#6E6E73")
+        self.shortcut_label = label("", "heroMeta")
+        self.insert_label = label(f"{INSERT_HOTKEY} 补输结果", "heroMeta")
+        self.model_chip = make_button("", Glyph.MODEL, "heroChip")
         self.model_chip.setToolTip("更换或下载本地语音模型")
         self.model_chip.clicked.connect(self.open_models)
         chips.addWidget(self.shortcut_label)
+        chips.addWidget(label("·", "heroMeta"))
         chips.addWidget(self.insert_label)
+        chips.addWidget(label("·", "heroMeta"))
         chips.addWidget(self.model_chip)
         chips.addStretch()
-        status_layout.addLayout(chips)
+        self.hero_bottom.addWidget(meta)
+        self.meter = LevelBars(56)
+        self.hero_bottom.addWidget(self.meter)
+        status_layout.addWidget(self.hero_bottom)
         recording.addLayout(status_layout, 1)
         controls = QVBoxLayout()
         controls.setSpacing(4)
@@ -300,6 +296,7 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.copy_button)
         actions.addWidget(self.insert_button)
         text_layout.addLayout(actions)
+        self.toast = Toast(central)
         self.show_page(0)
 
         bottom = QHBoxLayout()
@@ -323,8 +320,11 @@ class MainWindow(QMainWindow):
         layout.addLayout(bottom)
 
     def show_page(self, index: int):
+        changed = self.pages.currentIndex() != index
         self.pages.setCurrentIndex(index)
-        self.page_buttons[index].setChecked(True)
+        self.page_switch.set_current(index)
+        if changed and self.isVisible():
+            fade_in(self.pages.currentWidget(), 200)
         if index == 1:
             self.original.setFocus()
 
@@ -410,17 +410,16 @@ class MainWindow(QMainWindow):
         ready = models_ready(self.settings.models, model=model.id)
         self.download_button.setVisible(not ready and self.downloads.active is None)
         self.download_button.setEnabled(idle)
-        self.model_chip.setText(icon_text(f"{model.name}  ·  {'本机识别' if ready else '未下载'}"))
+        self.model_chip.setText(f"{model.name} · {'本机识别' if ready else '未下载'}")
         if self.state in self.PILLS:
             tone, text = self.PILLS[self.state]
         else:
-            tone, text = ("done", "● 已整理") if self.result.toPlainText().strip() else ("idle", "● 就绪")
-        self.pill.setText(text)
-        if self.pill.property("tone") != tone:
-            self.pill.setProperty("tone", tone)
-            repolish(self.pill)
+            tone, text = ("done", "已整理") if self.result.toPlainText().strip() else ("idle", "就绪")
+        self.pill.setText(f"<span style='color:{self.TONES[tone]}'>●</span>&nbsp;&nbsp;{text}")
+        self.pill.setProperty("tone", tone)
+        self.hero_bottom.setCurrentIndex(1 if self.state == "recording" else 0)
         action = "按住说话" if self.settings.hold_to_talk else "按一下开始，再按结束"
-        self.shortcut_label.setText(f"{self.settings.hotkey}  {action}")
+        self.shortcut_label.setText(f"{self.settings.hotkey} {action}")
 
     def result_edited(self):
         if self.state == "idle":
@@ -744,7 +743,11 @@ class MainWindow(QMainWindow):
         text = single_line_text(self.result.toPlainText() if result else self.original.toPlainText())
         if text:
             QApplication.clipboard().setText(text)
-            self.status.setText("已复制结果" if result else "已复制原文")
+            self.toast.show_text("已复制结果" if result else "已复制原文")
+            buttons = (self.copy_button, self.overview.copy_button) if result else (self.copy_original_button,)
+            for button in buttons:
+                if button.isVisible():
+                    button.flash("已复制")
 
     def open_settings(self):
         try:
@@ -775,6 +778,7 @@ class MainWindow(QMainWindow):
                 self.configure_hotkeys()
                 self.refresh_controls()
                 self.refresh_overview()
+                self.toast.show_text("设置已保存")
                 if self.native:
                     self.update_balance(force=True)
                 self.status.setText("设置已保存")

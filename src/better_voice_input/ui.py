@@ -5,25 +5,34 @@ import os
 import shutil
 import threading
 from collections import deque
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRectF, QSize, Qt, QTimer, QUrl, QVariantAnimation, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QObject,
+    QPropertyAnimation,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    QUrl,
+    QVariantAnimation,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QFont,
-    QFontDatabase,
+    QFontMetrics,
     QIcon,
     QImage,
     QBrush,
     QConicalGradient,
     QLinearGradient,
     QPainter,
-    QPainterPath,
     QPen,
     QPixmap,
-    QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -33,6 +42,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -49,6 +59,7 @@ from PySide6.QtWidgets import (
 )
 
 from .api_config import chat_completion_url
+from .icons import draw_icon, icon_pixmap
 from .models import ALL_MODELS, CATALOG, ENGINE_DIR, PLAZA, PLAZA_CATEGORIES, SENSE_VOICE, AsrModel, models_ready
 from .settings import Settings, read_key, save_key
 from .shortcuts import RECORDING_CHOICES
@@ -75,28 +86,19 @@ QLabel#section { font-size: 15px; font-weight: 700; }
 QLabel#cardTitle { font-size: 15px; font-weight: 700; }
 QLabel#fieldLabel { color: #3A3A3C; font-size: 13px; }
 QLabel#count { background: #F2F2F7; color: #6E6E73; border-radius: 9px; padding: 2px 9px; font-size: 12px; }
-QLabel#tag { background: #E8F1FD; color: #0058B0; border-radius: 9px; padding: 2px 9px;
-             font-size: 12px; font-weight: 700; }
-QLabel#tagActive { background: #0071E3; color: #FFFFFF; border-radius: 9px; padding: 2px 9px;
-                   font-size: 12px; font-weight: 700; }
+QLabel#tag { color: #6E6E73; border: 1px solid #E0E0E5; border-radius: 9px; padding: 1px 8px; font-size: 12px; }
+QLabel#tagActive { background: #0071E3; color: #FFFFFF; border-radius: 9px; padding: 2px 9px; font-size: 12px; }
 QLabel#strength { color: #3A3A3C; font-size: 13px; }
+QLabel#caveat { color: #8E8E93; font-size: 12px; }
+QLabel#speed { color: #6E6E73; font-size: 12px; }
 QLabel#notice { background: #FFF8E5; color: #7A4F00; border: 1px solid #F9E2A7; border-radius: 12px;
                 padding: 10px 14px; font-size: 13px; }
 
 QFrame#hero QLabel { color: #1D1D1F; }
-QLabel#status { font-size: 26px; font-weight: 700; color: #1D1D1F; }
+QLabel#status { font-size: 24px; font-weight: 700; color: #1D1D1F; }
 QLabel#heroHint { color: #6E6E73; font-size: 14px; }
-QLabel#pill { border-radius: 10px; padding: 3px 11px; font-size: 12px; font-weight: 700;
-              background: #F2F2F7; color: #6E6E73; }
-QLabel#pill[tone="rec"] { background: #FFECEB; color: #D70015; }
-QLabel#pill[tone="busy"] { background: #FFF3DF; color: #9A5800; }
-QLabel#pill[tone="done"] { background: #E6F7EA; color: #1F7A35; }
-QLabel#heroChip, QPushButton#heroChip { background: #F2F2F7; border: 1px solid transparent;
-    border-radius: 14px; padding: 5px 12px; color: #3A3A3C; font-size: 12px; font-weight: 400; }
-QPushButton#heroChip:hover { background: #E8E8ED; }
-QPushButton#heroGhost { background: #F2F2F7; color: #1D1D1F; border: 1px solid transparent; border-radius: 14px;
-    padding: 5px 20px; font-size: 13px; min-height: 16px; }
-QPushButton#heroGhost:hover { background: #E8E8ED; }
+QLabel#pill { font-size: 13px; color: #6E6E73; }
+QLabel#heroMeta { color: #8E8E93; font-size: 13px; }
 
 QFrame#card { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 18px; }
 QFrame#card[accent="true"] { border: 1px solid #CFE0F6; }
@@ -128,37 +130,9 @@ QPushButton:hover { background: #E1E1E7; }
 QPushButton:pressed { background: #D6D6DD; }
 QPushButton:focus { border-color: #0071E3; }
 QPushButton:disabled { color: #AEAEB2; background: #F2F2F5; }
-QPushButton#primary { background: #0071E3; color: #FFFFFF; font-weight: 700; }
-QPushButton#primary:hover { background: #0077ED; }
-QPushButton#primary:pressed { background: #0064CC; }
-QPushButton#primary:disabled { background: #A9CBF2; color: #F2F7FD; }
-QPushButton#toolbar { background: transparent; border-radius: 16px; padding: 7px 14px; color: #3A3A3C; }
-QPushButton#toolbar:hover { background: #E8E8ED; }
-QPushButton#toolbar:pressed { background: #DEDEE4; }
-QPushButton#ghost { background: transparent; border: 1px solid transparent; color: #3A3A3C; }
-QPushButton#ghost:hover { background: #E8E8ED; }
-QPushButton#ghost:disabled { color: #C7C7CC; background: transparent; }
-QPushButton#danger { background: transparent; border: 1px solid transparent; color: #D70015; }
-QPushButton#danger:hover { background: #FFECEB; }
-QFrame#segmentBar { background: #E8E8ED; border-radius: 10px; }
-QPushButton#segment { background: transparent; border: 1px solid transparent; border-radius: 8px;
-    padding: 5px 18px; color: #6E6E73; }
-QPushButton#segment:hover { color: #1D1D1F; }
-QPushButton#segment:checked { background: #FFFFFF; border-color: #DADADF; color: #1D1D1F; }
-QPushButton#chip { background: #FFFFFF; border: 1px solid #E0E0E5; border-radius: 14px; padding: 4px 13px;
-    font-size: 13px; color: #3A3A3C; }
-QPushButton#chip:hover { border-color: #C7C7CC; }
-QPushButton#chip:checked { background: #1D1D1F; border-color: #1D1D1F; color: #FFFFFF; }
-QPushButton#link { background: transparent; border: 1px solid transparent; border-radius: 12px; color: #0066CC;
-    padding: 3px 8px; font-size: 13px; }
-QPushButton#link:hover { background: #E8F1FD; }
 QLabel#checkText { color: #6E6E73; font-size: 13px; }
 QLabel#checkText[tone="ok"] { color: #1F7A35; }
 QLabel#checkText[tone="fail"] { color: #D70015; }
-QPushButton#check { background: #FFFFFF; border: 1px solid #D2D2D7; border-radius: 14px; padding: 4px 14px;
-    min-height: 18px; font-size: 13px; color: #1D1D1F; }
-QPushButton#check:hover { border-color: #0071E3; color: #0066CC; }
-QPushButton#check:disabled { color: #AEAEB2; border-color: #E5E5EA; }
 QLabel#plazaIntro { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 14px; padding: 12px 16px;
     color: #3A3A3C; font-size: 13px; }
 
@@ -184,48 +158,36 @@ QToolTip { background: #1D1D1F; color: #FFFFFF; border: none; padding: 6px 9px; 
 
 
 class Glyph:
-    MIC = ""
-    SETTINGS = ""
-    HISTORY = ""
-    IMPORT = ""
-    MODEL = ""
-    DOWNLOAD = ""
-    COPY = ""
-    DELETE = ""
-    CLEAR = ""
-    CHECK = ""
-    CHEVRON_DOWN = ""
-    INFO = ""
-    FOLDER = ""
-    LOCK = ""
-    EDIT = ""
-    SEND = ""
-    KEYBOARD = ""
-    GLOBE = ""
-    CANCEL = ""
-    CONNECT = ""
-    REPAIR = ""
+    """Names of the app's own line icons (see icons.py)."""
 
-
-def icon_font(pixel_size: int) -> QFont:
-    families = set(QFontDatabase.families())
-    name = next((f for f in ("Segoe Fluent Icons", "Segoe MDL2 Assets") if f in families), "Segoe Fluent Icons")
-    font = QFont(name)
-    font.setPixelSize(pixel_size)
-    return font
+    MIC = "mic"
+    SETTINGS = "settings"
+    HISTORY = "history"
+    IMPORT = "import"
+    MODEL = "model"
+    DOWNLOAD = "download"
+    COPY = "copy"
+    DELETE = "delete"
+    CLEAR = "clear"
+    CHECK = "check"
+    CHEVRON_DOWN = "chevron_down"
+    CHEVRON_RIGHT = "chevron_right"
+    INFO = "info"
+    FOLDER = "folder"
+    LOCK = "lock"
+    EDIT = "tidy"
+    SEND = "insert"
+    KEYBOARD = "keyboard"
+    GLOBE = "external"
+    CANCEL = "cancel"
+    CONNECT = "pulse"
+    REPAIR = "refresh"
+    REFRESH = "refresh"
+    VERIFY = "verify"
 
 
 def glyph_pixmap(glyph: str, color: str, size: int = 16) -> QPixmap:
-    pixmap = QPixmap(size * 2, size * 2)
-    pixmap.setDevicePixelRatio(2)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-    painter.setFont(icon_font(size))
-    painter.setPen(QColor(color))
-    painter.drawText(QRectF(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, glyph)
-    painter.end()
-    return pixmap
+    return icon_pixmap(glyph, color, size)
 
 
 def glyph_icon(glyph: str, color: str = INK, size: int = 16, disabled: str = DISABLED) -> QIcon:
@@ -235,21 +197,197 @@ def glyph_icon(glyph: str, color: str = INK, size: int = 16, disabled: str = DIS
 
 
 def icon_text(text: str) -> str:
-    """Leading space so the label does not touch its icon."""
+    """Kept for callers that pad labels next to icons; Button lays text out itself."""
     return f" {text}"
 
 
+def mix(a: QColor, b: QColor, t: float) -> QColor:
+    """Blend two colors; a transparent end keeps the other end's hue so fades stay clean."""
+    if a.alpha() == 0:
+        a = QColor(b.red(), b.green(), b.blue(), 0)
+    if b.alpha() == 0:
+        b = QColor(a.red(), a.green(), a.blue(), 0)
+    return QColor(
+        round(a.red() + (b.red() - a.red()) * t),
+        round(a.green() + (b.green() - a.green()) * t),
+        round(a.blue() + (b.blue() - a.blue()) * t),
+        round(a.alpha() + (b.alpha() - a.alpha()) * t),
+    )
+
+
+CLEAR_COLOR = "#00000000"
+
+
+@dataclass(frozen=True)
+class ButtonLook:
+    background: str
+    hover: str
+    pressed: str
+    text: str
+    border: str = CLEAR_COLOR
+    height: int = 36
+    padding: int = 16
+    size: int = 14
+    bold: bool = False
+    checked_background: str = ""
+    checked_text: str = ""
+    hover_border: str = ""
+
+
+BUTTON_LOOKS = {
+    "": ButtonLook("#ECECF0", "#E2E2E7", "#D6D6DC", INK),
+    "primary": ButtonLook(ACCENT, "#1A80EC", "#0062C4", "#FFFFFF", padding=18, bold=True),
+    "toolbar": ButtonLook(CLEAR_COLOR, "#E8E8ED", "#DCDCE2", "#3A3A3C", height=34, padding=12),
+    "ghost": ButtonLook(CLEAR_COLOR, "#E8E8ED", "#DCDCE2", "#3A3A3C", height=34, padding=12),
+    "danger": ButtonLook(CLEAR_COLOR, "#FFEDEC", "#FFDCD9", "#D70015", height=34, padding=12),
+    "link": ButtonLook(CLEAR_COLOR, "#EAF2FD", "#D9E8FB", "#0066CC", height=28, padding=9, size=13),
+    "chip": ButtonLook("#FFFFFF", "#F6F6F8", "#EDEDF0", "#3A3A3C", "#E0E0E5", 30, 13, 13,
+                       checked_background=INK, checked_text="#FFFFFF"),
+    "check": ButtonLook("#FFFFFF", "#FFFFFF", "#F2F6FC", INK, "#D8D8DD", 30, 13, 13, hover_border=ACCENT),
+    "segment": ButtonLook(CLEAR_COLOR, CLEAR_COLOR, CLEAR_COLOR, MUTED, height=30, padding=18, size=13,
+                          checked_text=INK),
+    "heroChip": ButtonLook(CLEAR_COLOR, "#EFEFF3", "#E4E4E9", MUTED, height=28, padding=10, size=13),
+    "heroGhost": ButtonLook("#F2F2F5", "#E8E8ED", "#DCDCE2", INK, height=30, padding=16, size=13),
+}
+
+
+class Button(QPushButton):
+    """Pill button drawn by the app: soft hover and press transitions, an optional line icon,
+    and a short "done" flash (for example 已复制) after an action."""
+
+    def __init__(self, text: str = "", icon: str | None = None, kind: str | None = None, icon_color: str | None = None):
+        super().__init__(text)
+        self.kind = kind or ""
+        self.look = BUTTON_LOOKS.get(self.kind, BUTTON_LOOKS[""])
+        if kind:
+            self.setObjectName(kind)
+        self.icon_name = icon
+        self.icon_color = icon_color
+        self.hover = 0.0
+        self.keyboard_focus = False
+        self.restore: tuple[str, str | None] | None = None
+        self.animation = QVariantAnimation(self)
+        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.animation.valueChanged.connect(self._hovered)
+        self.flash_timer = QTimer(self)
+        self.flash_timer.setSingleShot(True)
+        self.flash_timer.timeout.connect(self._end_flash)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    # ---------- content ----------
+    def set_icon(self, name: str | None):
+        self.icon_name = name
+        self.updateGeometry()
+        self.update()
+
+    def setText(self, text: str):
+        super().setText(text)
+        self.updateGeometry()
+
+    def flash(self, text: str, icon: str = "check", milliseconds: int = 1400):
+        """Show a brief confirmation in place of the label, then restore it."""
+        if self.restore is None:
+            self.restore = (self.text(), self.icon_name)
+        self.setText(text)
+        self.set_icon(icon)
+        self.flash_timer.start(milliseconds)
+
+    def _end_flash(self):
+        if self.restore:
+            text, icon = self.restore
+            self.restore = None
+            self.setText(text)
+            self.set_icon(icon)
+
+    def label_font(self) -> QFont:
+        font = QFont(self.font())
+        font.setPixelSize(self.look.size)
+        font.setBold(self.look.bold)
+        return font
+
+    def sizeHint(self) -> QSize:
+        text = self.text().strip()
+        width = QFontMetrics(self.label_font()).horizontalAdvance(text) if text else 0
+        if self.icon_name:
+            width += 16 + (6 if text else 0)
+        padding = self.look.padding if text else (self.look.height - 16) // 2
+        return QSize(int(width + padding * 2), self.look.height)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    # ---------- interaction ----------
+    def _hovered(self, value):
+        self.hover = float(value)
+        self.update()
+
+    def _animate(self, target: float, duration: int):
+        self.animation.stop()
+        self.animation.setDuration(duration)
+        self.animation.setStartValue(self.hover)
+        self.animation.setEndValue(target)
+        self.animation.start()
+
+    def enterEvent(self, event):
+        self._animate(1.0, 140)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._animate(0.0, 220)
+        super().leaveEvent(event)
+
+    def focusInEvent(self, event):
+        self.keyboard_focus = event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason)
+        super().focusInEvent(event)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        look = self.look
+        if not self.isEnabled():
+            painter.setOpacity(0.4)
+        checked = self.isCheckable() and self.isChecked()
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = rect.height() / 2
+        background = QColor(look.checked_background) if checked and look.checked_background else mix(
+            QColor(look.background), QColor(look.hover), self.hover if self.isEnabled() else 0
+        )
+        if self.isDown():
+            background = QColor(look.pressed)
+        border = QColor(look.border)
+        if look.hover_border and self.isEnabled():
+            border = mix(border, QColor(look.hover_border), self.hover)
+        if checked and look.checked_background:
+            border = QColor(look.checked_background)
+        painter.setPen(QPen(border, 1) if border.alpha() else Qt.PenStyle.NoPen)
+        painter.setBrush(background)
+        painter.drawRoundedRect(rect, radius, radius)
+        if self.hasFocus() and self.keyboard_focus:
+            ring = QColor(ACCENT)
+            ring.setAlphaF(0.55)
+            painter.setPen(QPen(ring, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(1.5, 1.5, -1.5, -1.5), radius - 1.5, radius - 1.5)
+        color = QColor(look.checked_text if checked and look.checked_text else look.text)
+        text = self.text().strip()
+        font = self.label_font()
+        width = QFontMetrics(font).horizontalAdvance(text) if text else 0
+        content = width + (16 + (6 if text else 0) if self.icon_name else 0)
+        x = (self.width() - content) / 2
+        if self.icon_name:
+            tint = QColor(self.icon_color) if self.icon_color and not checked else color
+            draw_icon(painter, self.icon_name, QRectF(x, (self.height() - 16) / 2, 16, 16), tint)
+            x += 16 + 6
+        if text:
+            painter.setFont(font)
+            painter.setPen(color)
+            painter.drawText(QRectF(x, 0, width + 2, self.height()), Qt.AlignmentFlag.AlignVCenter, text)
+
+
 def make_button(text: str, glyph: str | None = None, kind: str | None = None, icon_color: str | None = None):
-    widget = QPushButton(icon_text(text) if glyph and text else text)
-    if kind:
-        widget.setObjectName(kind)
-    if glyph:
-        color = icon_color or ("#FFFFFF" if kind == "primary" else "#3A3A3C")
-        widget.setIcon(glyph_icon(glyph, color, 16, "#F2F7FD" if kind == "primary" else DISABLED))
-        widget.setIconSize(QSize(16, 16))
-    widget.setCursor(Qt.CursorShape.PointingHandCursor)
-    widget.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-    return widget
+    return Button(text, glyph, kind, icon_color)
 
 
 def label(text: str = "", name: str | None = None, wrap: bool = False) -> QLabel:
@@ -312,21 +450,18 @@ OK_GREEN = "#34C759"
 FAIL_RED = "#FF3B30"
 
 
-def badge_pixmap(glyph: str, background: str, size: int = 16) -> QPixmap:
-    """A small filled circle with a white glyph, used for check results."""
-    pixmap = QPixmap(size * 2, size * 2)
-    pixmap.setDevicePixelRatio(2)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor(background))
-    painter.drawEllipse(QRectF(0, 0, size, size))
-    painter.setFont(icon_font(int(size * 0.55)))
-    painter.setPen(QColor("#FFFFFF"))
-    painter.drawText(QRectF(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, glyph)
-    painter.end()
-    return pixmap
+def fade_in(widget: QWidget, duration: int = 200, start: float = 0.0):
+    """Fade a widget in; the effect is removed afterwards so it costs nothing at rest."""
+    effect = QGraphicsOpacityEffect(widget)
+    effect.setOpacity(start)
+    widget.setGraphicsEffect(effect)
+    animation = QPropertyAnimation(effect, b"opacity", widget)
+    animation.setDuration(duration)
+    animation.setStartValue(start)
+    animation.setEndValue(1.0)
+    animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+    animation.finished.connect(lambda: widget.setGraphicsEffect(None))
+    animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
 class Spinner(QWidget):
@@ -349,19 +484,54 @@ class Spinner(QWidget):
         self.hide()
 
     def tick(self):
-        self.angle = (self.angle + 9) % 360
+        self.angle = (self.angle + 8) % 360
         self.update()
 
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(2, 2, -2, -2)
-        painter.setPen(QPen(QColor("#E5E5EA"), 2))
+        painter.setPen(QPen(QColor("#E8E8ED"), 1.8))
         painter.drawEllipse(rect)
-        pen = QPen(self.color, 2)
+        pen = QPen(self.color, 1.8)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
-        painter.drawArc(rect, -self.angle * 16, 100 * 16)
+        painter.drawArc(rect, -self.angle * 16, 90 * 16)
+
+
+class ResultMark(QWidget):
+    """Green tick or red cross that pops in with a small overshoot."""
+
+    def __init__(self, size: int = 16):
+        super().__init__()
+        self.setFixedSize(size, size)
+        self.ok = True
+        self.scale = 1.0
+        self.animation = QVariantAnimation(self)
+        self.animation.setDuration(360)
+        self.animation.setStartValue(0.4)
+        self.animation.setEndValue(1.0)
+        self.animation.setEasingCurve(QEasingCurve.Type.OutBack)
+        self.animation.valueChanged.connect(self._scaled)
+
+    def _scaled(self, value):
+        self.scale = float(value)
+        self.update()
+
+    def play(self, ok: bool):
+        self.ok = ok
+        self.show()
+        self.animation.start()
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        size = self.width() * self.scale
+        rect = QRectF((self.width() - size) / 2, (self.height() - size) / 2, size, size)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(OK_GREEN if self.ok else FAIL_RED))
+        painter.drawEllipse(rect)
+        draw_icon(painter, "check" if self.ok else "cancel", rect.adjusted(3, 3, -3, -3), "#FFFFFF", 3.2)
 
 
 class CheckStatus(QWidget):
@@ -371,12 +541,11 @@ class CheckStatus(QWidget):
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(7)
+        layout.setSpacing(8)
         self.spinner = Spinner(16)
         self.spinner.hide()
         layout.addWidget(self.spinner, 0, Qt.AlignmentFlag.AlignTop)
-        self.icon = QLabel()
-        self.icon.setFixedSize(16, 18)
+        self.icon = ResultMark(16)
         self.icon.hide()
         layout.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignTop)
         self.text = label("", "checkText", wrap=True)
@@ -390,9 +559,9 @@ class CheckStatus(QWidget):
 
     def finish(self, ok: bool, text: str):
         self.spinner.stop()
-        self.icon.setPixmap(badge_pixmap(Glyph.CHECK if ok else Glyph.CANCEL, OK_GREEN if ok else FAIL_RED, 16))
-        self.icon.show()
+        self.icon.play(ok)
         self._set(text, "ok" if ok else "fail")
+        fade_in(self.text, 260)
 
     def clear(self):
         self.spinner.stop()
@@ -403,6 +572,139 @@ class CheckStatus(QWidget):
         self.text.setText(text)
         self.text.setProperty("tone", tone)
         repolish(self.text)
+
+
+class Toast(QWidget):
+    """A short dark capsule near the bottom of a window: 已复制, 设置已保存 and so on."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.text = ""
+        self.icon = "check"
+        self.effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.effect)
+        self.fade = QPropertyAnimation(self.effect, b"opacity", self)
+        self.fade.finished.connect(self._faded)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(lambda: self._fade_to(0.0, 240))
+        self.hide()
+
+    def show_text(self, text: str, icon: str = "check", milliseconds: int = 1600):
+        self.text, self.icon = text, icon
+        font = QFont(self.font())
+        font.setPixelSize(13)
+        width = QFontMetrics(font).horizontalAdvance(text) + 16 + 8 + 36
+        self.resize(width, 38)
+        parent = self.parentWidget()
+        self.move((parent.width() - width) // 2, parent.height() - 38 - 10)
+        self.raise_()
+        self.show()
+        self._fade_to(1.0, 180)
+        self.timer.start(milliseconds)
+        self.update()
+
+    def _fade_to(self, value: float, duration: int):
+        self.fade.stop()
+        self.fade.setDuration(duration)
+        self.fade.setStartValue(self.effect.opacity())
+        self.fade.setEndValue(value)
+        self.fade.start()
+
+    def _faded(self):
+        if self.effect.opacity() < 0.01:
+            self.hide()
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(29, 29, 31, 236))
+        painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
+        draw_icon(painter, self.icon, QRectF(18, (self.height() - 16) / 2, 16, 16), "#FFFFFF")
+        font = QFont(self.font())
+        font.setPixelSize(13)
+        painter.setFont(font)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(QRectF(18 + 16 + 8, 0, self.width(), self.height()), Qt.AlignmentFlag.AlignVCenter, self.text)
+
+
+class Segmented(QFrame):
+    """Segmented control whose white thumb slides to the chosen segment."""
+
+    changed = Signal(int)
+
+    def __init__(self, labels: tuple[str, ...] | list[str], parent=None):
+        super().__init__(parent)
+        self.setObjectName("segmented")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(3, 3, 3, 3)
+        layout.setSpacing(2)
+        self.group = QButtonGroup(self)
+        self.buttons: list[Button] = []
+        for index, text in enumerate(labels):
+            button = Button(text, None, "segment")
+            button.setCheckable(True)
+            button.setMinimumWidth(72)
+            self.group.addButton(button, index)
+            self.buttons.append(button)
+            layout.addWidget(button)
+        self.thumb = QRectF()
+        self.animation = QVariantAnimation(self)
+        self.animation.setDuration(240)
+        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.animation.valueChanged.connect(self._moved)
+        self.group.idClicked.connect(self._clicked)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def current(self) -> int:
+        return self.group.checkedId()
+
+    def set_current(self, index: int, animate: bool = True):
+        self.buttons[index].setChecked(True)
+        target = QRectF(self.buttons[index].geometry())
+        if animate and self.isVisible() and not self.thumb.isNull():
+            self.animation.stop()
+            self.animation.setStartValue(self.thumb)
+            self.animation.setEndValue(target)
+            self.animation.start()
+        else:
+            self.thumb = target
+            self.update()
+
+    def _clicked(self, index: int):
+        self.set_current(index)
+        self.changed.emit(index)
+
+    def _moved(self, value):
+        self.thumb = QRectF(value)
+        self.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.current() >= 0 and self.animation.state() != QVariantAnimation.State.Running:
+            self.thumb = QRectF(self.buttons[self.current()].geometry())
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.current() >= 0:
+            self.thumb = QRectF(self.buttons[self.current()].geometry())
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#E8E8ED"))
+        rect = QRectF(self.rect())
+        painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
+        if not self.thumb.isNull():
+            thumb = self.thumb.adjusted(0, 0, 0, 0)
+            painter.setBrush(QColor(0, 0, 0, 16))
+            painter.drawRoundedRect(thumb.adjusted(0, 1, 0, 1.5), thumb.height() / 2, thumb.height() / 2)
+            painter.setBrush(QColor("#FFFFFF"))
+            painter.drawRoundedRect(thumb, thumb.height() / 2, thumb.height() / 2)
 
 
 class Task(QObject):
@@ -579,23 +881,30 @@ def aurora_gradient(center, angle: float) -> QConicalGradient:
 
 
 class MicButton(QPushButton):
-    """Round record button. objectName "recording" switches it to the stop state."""
+    """Round record button: a calm solid circle at rest, a breathing red ring while
+    recording and a thin rotating arc while processing. objectName "recording"
+    switches it to the stop state."""
+
+    DIAMETER = 76.0
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(text, parent)
         self.busy = False
         self.phase = 0.0
-        self.hover = False
+        self.hover = 0.0
         self.animation = QVariantAnimation(self)
         self.animation.setStartValue(0.0)
         self.animation.setEndValue(1.0)
-        self.animation.setDuration(1500)
+        self.animation.setDuration(1400)
         self.animation.setLoopCount(-1)
         self.animation.valueChanged.connect(self._tick)
+        self.hover_animation = QVariantAnimation(self)
+        self.hover_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.hover_animation.valueChanged.connect(self._hovered)
         self.keyboard_focus = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        self.setFixedSize(150, 146)
+        self.setFixedSize(132, 126)
 
     def focusInEvent(self, event):
         self.keyboard_focus = event.reason() in (
@@ -606,6 +915,10 @@ class MicButton(QPushButton):
 
     def _tick(self, value):
         self.phase = float(value)
+        self.update()
+
+    def _hovered(self, value):
+        self.hover = float(value)
         self.update()
 
     def set_busy(self, busy: bool):
@@ -625,83 +938,71 @@ class MicButton(QPushButton):
         super().setObjectName(name)
         self._sync_animation()
 
+    def _hover_to(self, target: float):
+        self.hover_animation.stop()
+        self.hover_animation.setDuration(160)
+        self.hover_animation.setStartValue(self.hover)
+        self.hover_animation.setEndValue(target)
+        self.hover_animation.start()
+
     def enterEvent(self, event):
-        self.hover = True
-        self.update()
+        self._hover_to(1.0)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self.hover = False
-        self.update()
+        self._hover_to(0.0)
         super().leaveEvent(event)
 
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         recording = self.objectName() == "recording"
-        diameter = 84.0
-        center_x, center_y = self.width() / 2, 4 + 12 + diameter / 2
+        diameter = self.DIAMETER
+        center_x, center_y = self.width() / 2, 12 + diameter / 2
         circle = QRectF(center_x - diameter / 2, center_y - diameter / 2, diameter, diameter)
         if not self.isEnabled() and not self.busy:
-            painter.setOpacity(0.45)
+            painter.setOpacity(0.4)
         painter.setPen(Qt.PenStyle.NoPen)
         if recording:
-            # Two soft rings breathing outward in the aurora colors.
-            for offset in (0.0, 0.5):
-                progress = (self.phase + offset) % 1.0
-                radius = diameter / 2 + 3 + progress * 13
-                ring = QColor(blend(AURORA, progress))
-                ring.setAlphaF(0.38 * (1 - progress))
-                painter.setBrush(ring)
-                painter.drawEllipse(QRectF(center_x - radius, center_y - radius, radius * 2, radius * 2))
-        else:
-            for step, alpha in ((7, 10), (4, 16), (2, 22)):
-                painter.setBrush(QColor(0, 64, 160, alpha if self.isEnabled() else alpha // 2))
-                painter.drawEllipse(circle.adjusted(-step + 1, -step + 5, step - 1, step + 5))
-        if recording:
-            fill = QColor("#FF453A") if self.hover else QColor(RECORD)
-            painter.setBrush(fill.darker(108) if self.isDown() else fill)
-            painter.drawEllipse(circle)
+            # One soft ring breathing outward.
+            radius = diameter / 2 + 2 + self.phase * 11
+            ring = QColor(RECORD)
+            ring.setAlphaF(0.28 * (1 - self.phase))
+            painter.setBrush(ring)
+            painter.drawEllipse(QRectF(center_x - radius, center_y - radius, radius * 2, radius * 2))
+            fill = mix(QColor(RECORD), QColor("#FF5A50"), self.hover)
         elif self.busy:
-            painter.setBrush(QColor("#F2F2F7"))
-            painter.drawEllipse(circle)
+            fill = QColor("#F2F2F5")
         else:
-            gradient = QLinearGradient(circle.topLeft(), circle.bottomRight())
-            top, bottom = ("#3D9BFF", "#0A6CF0") if self.hover else ("#2A8BFF", "#0060DF")
-            gradient.setColorAt(0, QColor(top).darker(108) if self.isDown() else QColor(top))
-            gradient.setColorAt(1, QColor(bottom).darker(108) if self.isDown() else QColor(bottom))
-            painter.setBrush(gradient)
-            painter.drawEllipse(circle)
-            highlight = QLinearGradient(circle.topLeft(), circle.center())
-            highlight.setColorAt(0, QColor(255, 255, 255, 60))
-            highlight.setColorAt(1, QColor(255, 255, 255, 0))
-            painter.setBrush(highlight)
-            painter.drawEllipse(circle.adjusted(3, 3, -3, -3))
+            fill = mix(QColor(ACCENT), QColor("#1A80EC"), self.hover)
+        if self.isDown() and not self.busy:
+            fill = fill.darker(112)
+        painter.setBrush(fill)
+        painter.drawEllipse(circle)
         if self.hasFocus() and self.keyboard_focus:
-            painter.setPen(QPen(QColor(ACCENT), 2))
+            ring = QColor(ACCENT)
+            ring.setAlphaF(0.5)
+            painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(circle.adjusted(-6, -6, 6, 6))
+            painter.drawEllipse(circle.adjusted(-5, -5, 5, 5))
         if recording:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor("#FFFFFF"))
-            painter.drawRoundedRect(QRectF(center_x - 12, center_y - 12, 24, 24), 6, 6)
+            painter.drawRoundedRect(QRectF(center_x - 11, center_y - 11, 22, 22), 5, 5)
         elif self.busy:
-            pen = QPen(QBrush(aurora_gradient(circle.center(), -self.phase * 360)), 4)
+            pen = QPen(QColor(ACCENT), 2.4)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawArc(circle.adjusted(22, 22, -22, -22), int(-self.phase * 360 * 16), 260 * 16)
+            painter.drawArc(circle.adjusted(20, 20, -20, -20), int(-self.phase * 360 * 16), 100 * 16)
         else:
-            painter.setFont(icon_font(32))
-            painter.setPen(QColor("#FFFFFF"))
-            painter.drawText(circle, Qt.AlignmentFlag.AlignCenter, Glyph.MIC)
-        painter.setOpacity(1.0 if self.isEnabled() or self.busy else 0.45)
+            draw_icon(painter, "mic", QRectF(center_x - 15, center_y - 15, 30, 30), "#FFFFFF", 2.0)
+        painter.setOpacity(1.0 if self.isEnabled() or self.busy else 0.4)
         font = QFont(self.font())
-        font.setPixelSize(14)
-        font.setBold(True)
+        font.setPixelSize(13)
         painter.setFont(font)
         painter.setPen(QColor(INK))
-        text_rect = QRectF(0, circle.bottom() + 14, self.width(), 24)
+        text_rect = QRectF(0, circle.bottom() + 10, self.width(), 22)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, self.text())
 
 
@@ -711,16 +1012,15 @@ class ComboBox(QComboBox):
     def paintEvent(self, event):
         super().paintEvent(event)
         painter = QPainter(self)
-        painter.setFont(icon_font(12))
-        painter.setPen(QColor(MUTED if self.isEnabled() else DISABLED))
-        painter.drawText(
-            QRectF(self.width() - 32, 0, 22, self.height()), Qt.AlignmentFlag.AlignCenter, Glyph.CHEVRON_DOWN
+        draw_icon(
+            painter, "chevron_down", QRectF(self.width() - 30, (self.height() - 14) / 2, 14, 14),
+            MUTED if self.isEnabled() else DISABLED,
         )
 
 
 class HeroCard(QFrame):
-    """White card with a faint aurora wash. While listening or processing, a slow
-    flowing aurora glow runs along its edge, like Siri's edge light."""
+    """The recording card: plain white at rest. While listening a slow aurora light runs
+    along its edge; while processing a single blue light does."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -730,7 +1030,7 @@ class HeroCard(QFrame):
         self.animation = QVariantAnimation(self)
         self.animation.setStartValue(0.0)
         self.animation.setEndValue(1.0)
-        self.animation.setDuration(5200)
+        self.animation.setDuration(4200)
         self.animation.setLoopCount(-1)
         self.animation.valueChanged.connect(self._tick)
 
@@ -750,40 +1050,27 @@ class HeroCard(QFrame):
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(self.rect())
-        radius = 24
-        path = QPainterPath()
-        path.addRoundedRect(rect, radius, radius)
-        painter.setClipPath(path)
-        painter.fillPath(path, QColor("#FFFFFF"))
-        active = self.mode != "idle"
-        for (x, y, size), color, alpha in zip(
-            ((rect.right() - 120, rect.top() - 30, 300), (rect.right() - 300, rect.bottom() + 60, 280),
-             (rect.right() + 20, rect.bottom() - 40, 220)),
-            AURORA[:3],
-            (34, 26, 20),
-            strict=True,
-        ):
-            glow = QRadialGradient(x, y, size)
-            tint = QColor(color)
-            tint.setAlpha(int(alpha * (1.6 if active else 1)))
-            glow.setColorAt(0, tint)
-            tint.setAlpha(0)
-            glow.setColorAt(1, tint)
-            painter.fillRect(rect, glow)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        if active:
-            # Edge light: a crisp line plus two fading inner strokes, slowly rotating.
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = 20
+        painter.setPen(QPen(QColor("#E5E5EA"), 1))
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.drawRoundedRect(rect, radius, radius)
+        if self.mode == "idle":
+            return
+        if self.mode == "recording":
             gradient = aurora_gradient(rect.center(), -self.phase * 360)
-            for inset, width, alpha in ((1.25, 2.5, 1.0), (4, 5, 0.2), (7.5, 8, 0.07)):
-                pen = QPen(QBrush(gradient), width)
-                painter.setOpacity(alpha)
-                painter.setPen(pen)
-                painter.drawRoundedRect(rect.adjusted(inset, inset, -inset, -inset), radius - inset, radius - inset)
-            painter.setOpacity(1.0)
         else:
-            painter.setPen(QPen(QColor("#E5E5EA"), 1))
-            painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+            gradient = QConicalGradient(rect.center(), -self.phase * 360)
+            gradient.setColorAt(0.0, QColor(0, 113, 227, 220))
+            gradient.setColorAt(0.25, QColor(0, 113, 227, 0))
+            gradient.setColorAt(0.75, QColor(0, 113, 227, 0))
+            gradient.setColorAt(1.0, QColor(0, 113, 227, 220))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for inset, width, alpha in ((1.0, 2.0, 1.0), (3.5, 4, 0.16)):
+            painter.setOpacity(alpha)
+            painter.setPen(QPen(QBrush(gradient), width))
+            painter.drawRoundedRect(rect.adjusted(inset, inset, -inset, -inset), radius - inset, radius - inset)
+        painter.setOpacity(1.0)
 
 
 class Switch(QCheckBox):
@@ -975,12 +1262,6 @@ class Section(QFrame):
         layout.setSpacing(16)
         head = QHBoxLayout()
         head.setSpacing(12)
-        badge = QLabel()
-        badge.setFixedSize(34, 34)
-        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge.setPixmap(glyph_pixmap(glyph, ACCENT, 16))
-        badge.setStyleSheet(f"background: {ACCENT_SOFT}; border-radius: 10px;")
-        head.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
         text = QVBoxLayout()
         text.setSpacing(2)
         text.addWidget(label(title, "section"))
@@ -1281,37 +1562,30 @@ class ModelCard(QFrame):
         self.active_tag = label("使用中", "tagActive")
         head.addWidget(self.active_tag)
         head.addStretch()
-        head.addWidget(label(f"{model.languages}    {model.size_label}", "muted"))
+        head.addWidget(label(f"{model.languages}  ·  {model.size_label}", "muted"))
         layout.addLayout(head)
         if model.homepage:
             meta = QHBoxLayout()
             meta.setSpacing(8)
-            meta.addWidget(label(model.speed_label, "count"))
+            meta.addWidget(label(model.speed_label, "speed"))
             meta.addStretch()
-            self.homepage = make_button("模型主页", Glyph.GLOBE, "link", ACCENT)
+            self.homepage = make_button("模型主页", Glyph.GLOBE, "link")
             self.homepage.setToolTip(model.homepage)
             self.homepage.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(model.homepage)))
             meta.addWidget(self.homepage)
             layout.addLayout(meta)
         strengths = QVBoxLayout()
-        strengths.setSpacing(5)
+        strengths.setSpacing(4)
         for text in model.strengths:
-            row = QHBoxLayout()
-            row.setSpacing(8)
-            row.addWidget(glyph_label(Glyph.CHECK, ACCENT, 13))
-            row.addWidget(label(text, "strength"), 1)
-            strengths.addLayout(row)
+            strengths.addWidget(label(f"·  {text}", "strength"))
         layout.addLayout(strengths)
-        caveat = QHBoxLayout()
-        caveat.setSpacing(8)
-        caveat.addWidget(glyph_label(Glyph.INFO, "#8E8E93", 13), 0, Qt.AlignmentFlag.AlignTop)
-        caveat.addWidget(label(model.caveat, "caption", wrap=True), 1)
-        layout.addLayout(caveat)
+        caveat = label(model.caveat, "caveat", wrap=True)
+        layout.addWidget(caveat)
         self.check_row = QWidget()
         checks = QHBoxLayout(self.check_row)
         checks.setContentsMargins(0, 4, 0, 0)
         checks.setSpacing(8)
-        self.verify_button = check_button("检查文件", Glyph.CHECK)
+        self.verify_button = check_button("检查文件", Glyph.VERIFY)
         self.verify_button.setToolTip("逐个校验模型文件是否完整")
         self.try_button = check_button("试一试", Glyph.MIC)
         self.try_button.setToolTip("最长录 10 秒，用这个模型当场识别")
@@ -1337,7 +1611,7 @@ class ModelCard(QFrame):
         self.progress.setRange(0, 100)
         self.progress.setFixedWidth(160)
         bottom.addWidget(self.progress)
-        self.delete_button = make_button("删除", Glyph.DELETE, "danger", "#D70015")
+        self.delete_button = make_button("删除", Glyph.DELETE, "danger")
         bottom.addWidget(self.delete_button)
         self.cancel_button = make_button("取消下载")
         bottom.addWidget(self.cancel_button)
@@ -1361,7 +1635,7 @@ class ModelCard(QFrame):
         self.cancel_button.setVisible(mine)
         self.delete_button.setVisible(ready and not active and not mine and self.model.id != SENSE_VOICE.id)
         self.action.setVisible(not mine)
-        self.action.setIcon(QIcon())
+        self.action.set_icon(None)
         if mine:
             self.state.setText(f"正在下载 {percent}%  ·  下载后自动校验完整性")
         elif ready:
@@ -1376,7 +1650,7 @@ class ModelCard(QFrame):
             self.action.setEnabled(True)
         else:
             self.action.setText(icon_text(f"下载 · {self.model.size_label.removeprefix('约 ')}"))
-            self.action.setIcon(glyph_icon(Glyph.DOWNLOAD, "#FFFFFF", 16, "#F2F7FD"))
+            self.action.set_icon(Glyph.DOWNLOAD)
             self.action.setEnabled(downloading is None)
             self.action.setToolTip("请等待当前下载完成" if downloading else "")
 
@@ -1403,20 +1677,9 @@ class ModelDialog(QDialog):
         )
         tabs = QHBoxLayout()
         tabs.setContentsMargins(30, 6, 30, 10)
-        bar = QFrame()
-        bar.setObjectName("segmentBar")
-        segments = QHBoxLayout(bar)
-        segments.setContentsMargins(3, 3, 3, 3)
-        segments.setSpacing(2)
-        self.tab_group = QButtonGroup(self)
-        self.tab_buttons = []
-        for index, text in enumerate(("精选模型", f"模型广场 · {len(PLAZA)}")):
-            button = make_button(text, None, "segment")
-            button.setCheckable(True)
-            self.tab_group.addButton(button, index)
-            self.tab_buttons.append(button)
-            segments.addWidget(button)
-        tabs.addWidget(bar)
+        self.tabs = Segmented(("精选模型", f"模型广场 · {len(PLAZA)}"))
+        self.tab_group, self.tab_buttons = self.tabs.group, self.tabs.buttons
+        tabs.addWidget(self.tabs)
         tabs.addStretch()
         outer.addLayout(tabs)
 
@@ -1425,12 +1688,6 @@ class ModelDialog(QDialog):
         row = QHBoxLayout(location)
         row.setContentsMargins(16, 12, 12, 12)
         row.setSpacing(12)
-        badge = QLabel()
-        badge.setFixedSize(34, 34)
-        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge.setPixmap(glyph_pixmap(Glyph.FOLDER, ACCENT, 16))
-        badge.setStyleSheet(f"background: {ACCENT_SOFT}; border-radius: 10px;")
-        row.addWidget(badge)
         text = QVBoxLayout()
         text.setSpacing(1)
         text.addWidget(label("下载位置", "fieldLabel"))
@@ -1500,9 +1757,9 @@ class ModelDialog(QDialog):
             )
         )
         layout.addStretch()
-        self.tab_group.idClicked.connect(self.pages.setCurrentIndex)
+        self.tabs.changed.connect(self.show_page)
         start = 1 if settings.asr_model in {m.id for m in PLAZA} else 0
-        self.tab_buttons[start].setChecked(True)
+        self.tabs.set_current(start, animate=False)
         self.pages.setCurrentIndex(start)
         self.chips["全部"].setChecked(True)
 
@@ -1592,6 +1849,10 @@ class ModelDialog(QDialog):
             card.check_status.clear()
             self.message.setText(f"正在重新下载 {model.name} 不完整的文件，完整的文件不会重复下载。")
         self.refresh()
+
+    def show_page(self, index: int):
+        self.pages.setCurrentIndex(index)
+        fade_in(self.pages.currentWidget(), 180)
 
     def filter_plaza(self, category: str):
         self.chips[category].setChecked(True)
