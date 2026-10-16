@@ -6,9 +6,9 @@ import httpx
 import numpy as np
 import pytest
 
-from better_voice_input import checks
-from better_voice_input.llama import SERVER, asr_text, unpack_engine, wav_bytes
-from better_voice_input.models import QWEN3_ASR, ModelFile, AsrModel, VAD
+from saywell import checks
+from saywell.llama import SERVER, asr_text, unpack_engine, wav_bytes
+from saywell.models import QWEN3_ASR, ModelFile, AsrModel, VAD
 
 
 def test_qwen3_answer_keeps_only_the_transcript():

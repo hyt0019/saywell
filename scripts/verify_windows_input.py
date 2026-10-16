@@ -7,11 +7,11 @@ import os
 from PySide6.QtCore import QMimeData, QTimer
 from PySide6.QtWidgets import QApplication, QLabel, QPlainTextEdit, QVBoxLayout, QWidget
 
-from better_voice_input.windows import Hotkeys, INPUT, KEYBDINPUT, current_target, paste_text, user32
+from saywell.windows import Hotkeys, INPUT, KEYBDINPUT, current_target, paste_text, user32
 
 app = QApplication([])
 window = QWidget()
-window.setWindowTitle("Better Voice Input — isolated input test")
+window.setWindowTitle("Saywell — isolated input test")
 layout = QVBoxLayout(window)
 layout.addWidget(QLabel("仅用于验证当前测试窗口的快捷键和粘贴，稍后自动关闭。"))
 editor = QPlainTextEdit()
@@ -60,7 +60,7 @@ def paste():
         result["error"] = "Focus changed; no paste was sent."
         finish()
         return
-    app.clipboard().setText("BVI clipboard restore sentinel")
+    app.clipboard().setText("Saywell clipboard restore sentinel")
     try:
         paste_text("语音输入测试 123", current_target(), app.clipboard())
     except Exception as exc:
@@ -70,7 +70,7 @@ def paste():
 
 def finish():
     result["paste_matches"] = editor.toPlainText() == "语音输入测试 123"
-    result["clipboard_restored"] = app.clipboard().text() == "BVI clipboard restore sentinel"
+    result["clipboard_restored"] = app.clipboard().text() == "Saywell clipboard restore sentinel"
     if result["clipboard_restored"]:
         app.clipboard().setMimeData(saved)
     hotkeys.close()

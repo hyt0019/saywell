@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from better_voice_input.api_config import chat_completion_url, credential_account
-from better_voice_input.cleanup import ApiCleaner, CleanupError
-from better_voice_input.settings import Settings, read_key, save_key
+from saywell.api_config import chat_completion_url, credential_account
+from saywell.cleanup import ApiCleaner, CleanupError
+from saywell.settings import Settings, read_key, save_key
 
 
 @pytest.mark.parametrize(
@@ -107,6 +107,7 @@ def test_wrong_model_is_not_retried_as_a_format_error():
 
 
 def test_credentials_are_isolated_and_old_deepseek_credentials_still_work(monkeypatch, tmp_path):
+    # Saved under the app's former name ("better-voice-input") and the original "deepseek" account.
     store = {("better-voice-input", "deepseek"): "old-deepseek-key"}
     monkeypatch.setitem(
         sys.modules,
@@ -114,12 +115,14 @@ def test_credentials_are_isolated_and_old_deepseek_credentials_still_work(monkey
         SimpleNamespace(
             get_password=lambda service, account: store.get((service, account)),
             set_password=lambda service, account, key: store.update({(service, account): key}),
+            delete_password=lambda service, account: store.pop((service, account)),
         ),
     )
-    for name in ("DEEPSEEK_API_KEY", "BVI_API_KEY", "BVI_API_BASE_URL"):
+    for name in ("DEEPSEEK_API_KEY", "SAYWELL_API_KEY", "SAYWELL_API_BASE_URL"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr("better_voice_input.settings.project_root", lambda: tmp_path)
+    monkeypatch.setattr("saywell.settings.project_root", lambda: tmp_path)
     assert read_key() == "old-deepseek-key"
+    assert store == {("saywell", "deepseek"): "old-deepseek-key"}  # Moved to the new name.
     assert read_key(api_base_url="https://api.deepseek.com/v1") == "old-deepseek-key"
     custom = "https://provider.example/v1"
     assert read_key(api_base_url=custom) == ""
@@ -133,8 +136,8 @@ def test_credentials_are_isolated_and_old_deepseek_credentials_still_work(monkey
 
 
 def test_generic_environment_key_is_bound_to_its_endpoint(monkeypatch):
-    monkeypatch.setenv("BVI_API_KEY", "paired-key")
-    monkeypatch.setenv("BVI_API_BASE_URL", "https://provider.example/v1")
+    monkeypatch.setenv("SAYWELL_API_KEY", "paired-key")
+    monkeypatch.setenv("SAYWELL_API_BASE_URL", "https://provider.example/v1")
     monkeypatch.setitem(sys.modules, "keyring", SimpleNamespace(get_password=lambda *args: None))
     assert read_key(api_base_url="https://provider.example/v1/chat/completions") == "paired-key"
     assert read_key(api_base_url="https://other.example/v1") == ""

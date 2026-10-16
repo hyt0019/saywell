@@ -7,16 +7,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from better_voice_input.core import CleanupResult
-from better_voice_input.settings import Settings
-from better_voice_input.stats import Day, StatsStore, count_chars, deepseek_cost
+from saywell.core import CleanupResult
+from saywell.settings import Settings
+from saywell.stats import Day, StatsStore, count_chars, deepseek_cost
 
 BEIJING = timezone(timedelta(hours=8))
 
 
 @pytest.fixture(scope="module")
 def qt_app():
-    from better_voice_input.ui import STYLE
+    from saywell.ui import STYLE
 
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(STYLE)
@@ -87,7 +87,7 @@ def test_streaks_milestones_and_saved_time():
 
 
 def test_overview_shows_totals_heatmap_and_milestones(qt_app):
-    from better_voice_input.dashboard import Heatmap, Overview, number
+    from saywell.dashboard import Heatmap, Overview, number
 
     assert number(8_600) == "8,600" and number(86_000) == "8.6 万" and number(100_000) == "10 万"
     assert [Heatmap.level(n) for n in (0, 1, 299, 300, 1000, 3000)] == [0, 1, 1, 2, 3, 4]
@@ -119,9 +119,9 @@ def cell_center(heatmap, day):
 
 
 def test_completed_dictation_updates_statistics_and_latest_card(qt_app, monkeypatch):
-    from better_voice_input.app import MainWindow
+    from saywell.app import MainWindow
 
-    monkeypatch.setattr("better_voice_input.ui.read_key", lambda *args, **kwargs: "")
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
     window = MainWindow(Settings(), native=False)
     try:
         assert window.pages.currentIndex() == 0
@@ -140,9 +140,9 @@ def test_completed_dictation_updates_statistics_and_latest_card(qt_app, monkeypa
 
 
 def test_statistics_can_be_turned_off(qt_app, monkeypatch):
-    from better_voice_input.app import MainWindow
+    from saywell.app import MainWindow
 
-    monkeypatch.setattr("better_voice_input.ui.read_key", lambda *args, **kwargs: "")
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
     window = MainWindow(Settings(collect_stats=False), native=False)
     try:
         job, _ = window.begin("busy")

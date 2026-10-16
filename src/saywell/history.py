@@ -46,7 +46,7 @@ class HistoryStore:
         import win32crypt
 
         payload = json.dumps({"original": original, "text": text}, ensure_ascii=False).encode("utf-8")
-        encrypted = win32crypt.CryptProtectData(payload, "Better Voice Input history", None, None, None, 1)
+        encrypted = win32crypt.CryptProtectData(payload, "Saywell history", None, None, None, 1)
         rows = self._entries()
         rows.append({"created": time.time(), "data": base64.b64encode(encrypted).decode("ascii")})
         self._write(rows)

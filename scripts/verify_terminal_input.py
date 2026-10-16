@@ -27,10 +27,10 @@ def receiver(directory: Path, shell: str):
     kernel.GetConsoleWindow.restype = wintypes.HWND
     expected = json.loads((directory / "expected.json").read_text(encoding="utf-8"))
     command = (
-        [os.environ["COMSPEC"], "/d", "/q", "/k", "prompt BVI-CMD$G"]
+        [os.environ["COMSPEC"], "/d", "/q", "/k", "prompt Saywell-CMD$G"]
         if shell == "cmd" else
         [str(Path(os.environ["WINDIR"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"),
-         "-NoLogo", "-NoProfile", "-NoExit", "-Command", "function prompt { 'BVI-PowerShell> ' }"]
+         "-NoLogo", "-NoProfile", "-NoExit", "-Command", "function prompt { 'Saywell-PowerShell> ' }"]
     )
     child = subprocess.Popen(command)
     try:
@@ -50,7 +50,7 @@ def receiver(directory: Path, shell: str):
             report = {
                 "window": int(kernel.GetConsoleWindow()), "pid": os.getpid(),
                 "parent_pid": os.getppid(), "shell_pid": child.pid,
-                "ready": "BVI-" in screen,
+                "ready": "Saywell-" in screen,
                 "legacy_present": expected["legacy"] in screen,
                 "fixed_present": expected["fixed"] in screen,
                 "shell_exited": child.poll() is not None,
@@ -66,7 +66,7 @@ def receiver(directory: Path, shell: str):
 
 def verify(shell: str) -> dict:
     from PySide6.QtWidgets import QApplication
-    from better_voice_input import windows
+    from saywell import windows
 
     app = QApplication.instance() or QApplication([])
     clipboard = app.clipboard()

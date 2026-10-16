@@ -10,7 +10,9 @@ from pathlib import Path
 from .settings import Settings, project_root
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-VALUE_NAME = "BetterVoiceInput"
+VALUE_NAME = "Saywell"
+# The entry name used before the app was called Saywell.
+LEGACY_VALUE_NAME = "BetterVoiceInput"
 
 
 class StartupError(OSError):
@@ -31,10 +33,10 @@ def startup_command() -> str:
     return subprocess.list2cmdline(arguments)
 
 
-def read_entry() -> tuple[object, int] | None:
+def read_entry(name: str = VALUE_NAME) -> tuple[object, int] | None:
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_QUERY_VALUE) as key:
-            return winreg.QueryValueEx(key, VALUE_NAME)
+            return winreg.QueryValueEx(key, name)
     except FileNotFoundError:
         return None
     except OSError:
@@ -46,19 +48,31 @@ def startup_enabled() -> bool:
     return bool(entry and entry[1] in (winreg.REG_SZ, winreg.REG_EXPAND_SZ) and entry[0])
 
 
-def write_entry(entry: tuple[object, int] | None) -> None:
+def write_entry(entry: tuple[object, int] | None, name: str = VALUE_NAME) -> None:
     try:
         if entry is None:
             try:
                 with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-                    winreg.DeleteValue(key, VALUE_NAME)
+                    winreg.DeleteValue(key, name)
             except FileNotFoundError:
                 pass
         else:
             with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-                winreg.SetValueEx(key, VALUE_NAME, 0, entry[1], entry[0])
+                winreg.SetValueEx(key, name, 0, entry[1], entry[0])
     except OSError:
         raise StartupError("无法修改开机自启动设置，请检查当前用户权限后重试。") from None
+
+
+def migrate_legacy_entry() -> None:
+    """Replace a login entry saved under the old app name with one for this copy."""
+    try:
+        if read_entry(LEGACY_VALUE_NAME) is None:
+            return
+        if read_entry() is None:
+            write_entry((startup_command(), winreg.REG_SZ))
+        write_entry(None, LEGACY_VALUE_NAME)
+    except StartupError:
+        pass  # Settings still show the real state; the user can toggle it again.
 
 
 def save_settings_with_startup(settings: Settings, path: Path | None = None) -> None:

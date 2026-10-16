@@ -6,8 +6,8 @@ import weakref
 import numpy as np
 import pytest
 
-from better_voice_input.audio import AudioError, Recorder, decode_audio, resample_audio
-from better_voice_input.models import ModelFile, verify_file
+from saywell.audio import AudioError, Recorder, decode_audio, resample_audio
+from saywell.models import ModelFile, verify_file
 
 
 def make_wav(path: Path, seconds: float, rate: int = 48000):

@@ -11,7 +11,7 @@ from .settings import Settings, read_key
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Better Voice Input diagnostics")
+    parser = argparse.ArgumentParser(description="Saywell diagnostics")
     sub = parser.add_subparsers(dest="command", required=True)
     download = sub.add_parser("download-models", help="下载并校验本地语音模型")
     download.add_argument("--directory", type=Path)

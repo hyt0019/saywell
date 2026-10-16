@@ -4,8 +4,8 @@ import threading
 import httpx
 import pytest
 
-from better_voice_input.cleanup import Cancelled, CleanupError, DeepSeekCleaner
-from better_voice_input.core import CleanupPayload, Edit, validate_cleanup
+from saywell.cleanup import Cancelled, CleanupError, DeepSeekCleaner
+from saywell.core import CleanupPayload, Edit, validate_cleanup
 
 
 def client_response(payload=None, status=200, finish="stop"):
@@ -87,7 +87,7 @@ def test_cancel_after_response():
 
 
 def test_transient_failure_retries_once(monkeypatch):
-    monkeypatch.setattr("better_voice_input.cleanup.time.sleep", lambda _: None)
+    monkeypatch.setattr("saywell.cleanup.time.sleep", lambda _: None)
     calls = []
 
     def handler(request):

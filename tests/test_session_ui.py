@@ -8,12 +8,12 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from better_voice_input.app import MainWindow
-from better_voice_input.core import CleanupResult, single_line_text
-from better_voice_input.session import SessionGate
-from better_voice_input.settings import Settings
-from better_voice_input.ui import STYLE, SettingsDialog
-from better_voice_input.windows import InputTarget, PasteError
+from saywell.app import MainWindow
+from saywell.core import CleanupResult, single_line_text
+from saywell.session import SessionGate
+from saywell.settings import Settings
+from saywell.ui import STYLE, SettingsDialog
+from saywell.windows import InputTarget, PasteError
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +27,7 @@ def qt_app():
 
 @pytest.fixture
 def window(qt_app, monkeypatch):
-    monkeypatch.setattr("better_voice_input.ui.read_key", lambda *args, **kwargs: "")
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
     widget = MainWindow(Settings(), native=False)
     yield widget
     widget.shutdown()
@@ -85,12 +85,12 @@ def test_hold_release_cleanup_and_automatic_input_stay_in_background(window, mon
     pastes = []
     held = [True]
     samples = object()
-    monkeypatch.setattr("better_voice_input.app.models_ready", lambda *args, **kwargs: True)
-    monkeypatch.setattr("better_voice_input.app.current_target", lambda: target)
-    monkeypatch.setattr("better_voice_input.app.shortcut_held", lambda _: held[0])
-    monkeypatch.setattr("better_voice_input.app.modifiers_held", lambda: False)
+    monkeypatch.setattr("saywell.app.models_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr("saywell.app.current_target", lambda: target)
+    monkeypatch.setattr("saywell.app.shortcut_held", lambda _: held[0])
+    monkeypatch.setattr("saywell.app.modifiers_held", lambda: False)
     monkeypatch.setattr(
-        "better_voice_input.app.paste_text", lambda text, dest, _: pastes.append((text, dest))
+        "saywell.app.paste_text", lambda text, dest, _: pastes.append((text, dest))
     )
     monkeypatch.setattr(window.recorder, "start", lambda _: recording.append("start"))
     monkeypatch.setattr(window.recorder, "stop", lambda: samples)
@@ -110,9 +110,9 @@ def test_hold_release_cleanup_and_automatic_input_stay_in_background(window, mon
     # A temporarily unavailable foreground snapshot during a long recording
     # must not permanently prevent insertion when the original field returns.
     window.recorder.started = time.monotonic() - 75
-    monkeypatch.setattr("better_voice_input.app.current_target", lambda: None)
+    monkeypatch.setattr("saywell.app.current_target", lambda: None)
     window.tick()
-    monkeypatch.setattr("better_voice_input.app.current_target", lambda: target)
+    monkeypatch.setattr("saywell.app.current_target", lambda: target)
     held[0] = False
     window.tick()
     window.tick()
@@ -142,7 +142,7 @@ def test_default_keeps_warnings_available_without_interrupting_dictation(window,
 
 @pytest.mark.parametrize("failure", ["models", "microphone", "pipeline", "paste"])
 def test_global_errors_keep_main_window_hidden(window, monkeypatch, failure):
-    from better_voice_input.audio import AudioError
+    from saywell.audio import AudioError
 
     def mic_failure(_):
         raise AudioError("麦克风不可用")
@@ -151,9 +151,9 @@ def test_global_errors_keep_main_window_hidden(window, monkeypatch, failure):
         raise PasteError("无法输入")
 
     monkeypatch.setattr(window, "reveal", lambda: pytest.fail("Errors must not steal focus"))
-    monkeypatch.setattr("better_voice_input.app.current_target", lambda: None)
-    monkeypatch.setattr("better_voice_input.app.models_ready", lambda *args, **kwargs: failure != "models")
-    monkeypatch.setattr("better_voice_input.app.modifiers_held", lambda: False)
+    monkeypatch.setattr("saywell.app.current_target", lambda: None)
+    monkeypatch.setattr("saywell.app.models_ready", lambda *args, **kwargs: failure != "models")
+    monkeypatch.setattr("saywell.app.modifiers_held", lambda: False)
     window.from_hotkey = True
     if failure in ("models", "microphone"):
         monkeypatch.setattr(window.recorder, "start", mic_failure)
@@ -162,7 +162,7 @@ def test_global_errors_keep_main_window_hidden(window, monkeypatch, failure):
         job, _ = window.begin("busy")
         window.on_error(job, "网络异常")
     else:
-        monkeypatch.setattr("better_voice_input.app.paste_text", paste_failure)
+        monkeypatch.setattr("saywell.app.paste_text", paste_failure)
         job, _ = window.gate.begin()
         window.result.setPlainText("保留结果")
         window.attempt_insert(job, object())
@@ -230,7 +230,7 @@ def test_settings_dialog_startup_choice_is_optional_and_saved(window):
 
 
 def test_failed_startup_change_keeps_existing_window_settings(window, monkeypatch):
-    from better_voice_input.startup import StartupError
+    from saywell.startup import StartupError
 
     class Dialog:
         def __init__(self, settings, parent):
@@ -242,9 +242,9 @@ def test_failed_startup_change_keeps_existing_window_settings(window, monkeypatc
     def deny_save(_):
         raise StartupError("无法修改开机自启动设置")
 
-    monkeypatch.setattr("better_voice_input.app.SettingsDialog", Dialog)
-    monkeypatch.setattr("better_voice_input.app.startup_enabled", lambda: False)
-    monkeypatch.setattr("better_voice_input.app.save_settings_with_startup", deny_save)
+    monkeypatch.setattr("saywell.app.SettingsDialog", Dialog)
+    monkeypatch.setattr("saywell.app.startup_enabled", lambda: False)
+    monkeypatch.setattr("saywell.app.save_settings_with_startup", deny_save)
     window.open_settings()
     assert not window.settings.start_on_login
     assert "无法修改开机自启动" in window.notice.text()
@@ -252,7 +252,7 @@ def test_failed_startup_change_keeps_existing_window_settings(window, monkeypatc
 
 def test_cancelled_pipeline_never_calls_api(window, monkeypatch):
     calls = []
-    monkeypatch.setattr("better_voice_input.pipeline.ApiCleaner", lambda *args: calls.append(args))
+    monkeypatch.setattr("saywell.pipeline.ApiCleaner", lambda *args: calls.append(args))
     event = threading.Event()
     event.set()
     window.pipeline._run(1, event, Settings(), "一段文字", "text")
@@ -262,7 +262,7 @@ def test_cancelled_pipeline_never_calls_api(window, monkeypatch):
 @pytest.mark.parametrize("cancelled", [False, True])
 def test_audio_api_failure_inserts_original_unless_cancelled(window, monkeypatch, cancelled):
     from types import SimpleNamespace
-    from better_voice_input.cleanup import Cancelled, CleanupError
+    from saywell.cleanup import Cancelled, CleanupError
 
     calls = []
     source = "周三或者周四，还没确定。\n" * 60
@@ -279,9 +279,9 @@ def test_audio_api_failure_inserts_original_unless_cancelled(window, monkeypatch
             raise Cancelled("取消")
         raise CleanupError("返回内容不完整")
 
-    monkeypatch.setattr("better_voice_input.pipeline.read_key", lambda *args, **kwargs: "test")
+    monkeypatch.setattr("saywell.pipeline.read_key", lambda *args, **kwargs: "test")
     monkeypatch.setattr(
-        "better_voice_input.pipeline.ApiCleaner", lambda *args, **kwargs: SimpleNamespace(clean=clean)
+        "saywell.pipeline.ApiCleaner", lambda *args, **kwargs: SimpleNamespace(clean=clean)
     )
     monkeypatch.setattr(window, "attempt_insert", lambda *args: calls.append(args))
     monkeypatch.setattr(window, "reveal", lambda: pytest.fail("No review window during dictation"))
@@ -294,7 +294,7 @@ def test_audio_api_failure_inserts_original_unless_cancelled(window, monkeypatch
 
 def test_settings_accept_custom_api_and_clear_old_typed_key_on_address_change(window, monkeypatch):
     saved = []
-    monkeypatch.setattr("better_voice_input.ui.save_key", lambda key, **kwargs: saved.append((key, kwargs)))
+    monkeypatch.setattr("saywell.ui.save_key", lambda key, **kwargs: saved.append((key, kwargs)))
     dialog = SettingsDialog(Settings(), window)
     dialog.key.setText("old-typed-key")
     dialog.base_url.setText("https://provider.example/v1")
@@ -313,7 +313,7 @@ def test_settings_accept_custom_api_and_clear_old_typed_key_on_address_change(wi
 @pytest.mark.parametrize("change", ["caret", "window", "focus", "process", "unavailable"])
 def test_paste_ignores_caret_geometry_but_checks_destination(window, monkeypatch, change):
     from dataclasses import replace
-    from better_voice_input import windows
+    from saywell import windows
 
     target = InputTarget(100, 101, (1, 2, 3, 4), 200)
     changes = {"caret": (0, 0, 0, 0), "window": 102, "focus": 103, "process": 201}
@@ -352,7 +352,7 @@ def test_copy_edited_text_is_always_single_line(window, result):
 @pytest.mark.parametrize("partial_send", [False, True])
 def test_terminal_and_regular_paste_are_single_line_without_enter(window, monkeypatch, class_name, partial_send):
     import ctypes
-    from better_voice_input import windows
+    from saywell import windows
 
     target = InputTarget(100, 101, (0, 0, 0, 0), 200)
     clipboard = QApplication.clipboard()

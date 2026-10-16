@@ -79,6 +79,7 @@ QWidget { font-family: 'Microsoft YaHei UI'; font-size: 14px; color: #1D1D1F; }
 QMainWindow, QDialog { background: #F5F5F7; }
 QLabel { background: transparent; }
 QLabel#brand { font-size: 20px; font-weight: 700; }
+QLabel#brandLatin { font-size: 15px; font-weight: 600; color: #8E8E93; padding-bottom: 2px; }
 QLabel#title { font-size: 24px; font-weight: 700; }
 QLabel#muted { color: #6E6E73; font-size: 13px; }
 QLabel#caption { color: #8E8E93; font-size: 12px; }

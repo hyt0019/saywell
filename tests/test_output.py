@@ -1,6 +1,6 @@
 import pytest
 
-from better_voice_input.core import CleanupResult, single_line_text
+from saywell.core import CleanupResult, single_line_text
 
 
 @pytest.mark.parametrize(

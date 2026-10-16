@@ -1,8 +1,10 @@
-# 好好说 · 使用说明
+# 好好说 Saywell · 使用说明
 
 ## 安装和启动
 
-从 [Releases 页面](https://github.com/hyt0019/better-voice-input/releases) 下载最新的 `BetterVoiceInput-Setup-版本号.exe` 并运行。安装程序装在当前用户目录（`%LOCALAPPDATA%\Programs\BetterVoiceInput`），不需要管理员权限，会在开始菜单创建“好好说”，桌面快捷方式可选。安装新版本时直接运行新的安装包即可覆盖升级，设置、密钥和已下载的模型都会保留。
+从 [Releases 页面](https://github.com/hyt0019/saywell/releases) 下载最新的 `Saywell-Setup-版本号.exe` 并运行。安装程序装在当前用户目录（`%LOCALAPPDATA%\Programs\Saywell`），不需要管理员权限，会在开始菜单创建“好好说 Saywell”，桌面快捷方式可选。安装新版本时直接运行新的安装包即可覆盖升级，设置、密钥和已下载的模型都会保留。
+
+好好说的英文名早期叫 Better Voice Input。从旧版本升级时，安装程序沿用原来的安装文件夹，并替换旧的程序文件和快捷方式；首次启动新版本时，设置、历史、统计和模型所在的 `%LOCALAPPDATA%\BetterVoiceInput` 会自动改名为 `%LOCALAPPDATA%\Saywell`，保存的 Key 和开机自启项也会自动迁移，不需要重新配置。
 
 如果 Windows 提示“Windows 已保护你的电脑”，这是因为程序尚未购买代码签名证书。点击“更多信息”→“仍要运行”即可；不要通过关闭系统防护解决。
 
@@ -101,11 +103,11 @@
 
 ## 数据位置
 
-- 设置：`%LOCALAPPDATA%/BetterVoiceInput/settings.json`，不包含密钥。
+- 设置：`%LOCALAPPDATA%/Saywell/settings.json`，不包含密钥。
 - 可选加密历史：同目录 `history.json`。
 - 使用统计：同目录 `stats.json`，只有按天汇总的数字。Qwen3-ASR 引擎的运行日志在同目录 `llama-server.log`，每次启动时覆盖。
-- 模型：默认下载到 `%LOCALAPPDATA%/BetterVoiceInput/models`，可在“语音模型”中更改。SenseVoice 位于该文件夹根目录，其他模型各占一个子文件夹（例如 `x-asr-zh-en`、`canary-180m-flash`）。更改下载位置后，已下载模型的位置会记录在设置中，不需要重新下载。从源码或便携文件夹运行时，程序旁或项目根目录已有的 `models` 文件夹优先。
-- Key：Windows 凭据管理器，服务名 `better-voice-input`，不同 API 地址使用独立凭据。开发测试可同时设置 `BVI_API_KEY` 和匹配的 `BVI_API_BASE_URL`；旧 `DEEPSEEK_API_KEY` 和根目录 `deepseek api key.txt` 只会用于 DeepSeek 官方接口。
+- 模型：默认下载到 `%LOCALAPPDATA%/Saywell/models`，可在“语音模型”中更改。SenseVoice 位于该文件夹根目录，其他模型各占一个子文件夹（例如 `x-asr-zh-en`、`canary-180m-flash`）。更改下载位置后，已下载模型的位置会记录在设置中，不需要重新下载。从源码或便携文件夹运行时，程序旁或项目根目录已有的 `models` 文件夹优先。
+- Key：Windows 凭据管理器，服务名 `saywell`（旧版本保存在 `better-voice-input` 下的 Key 会在首次读取时移过来），不同 API 地址使用独立凭据。开发测试可同时设置 `SAYWELL_API_KEY` 和匹配的 `SAYWELL_API_BASE_URL`；旧 `DEEPSEEK_API_KEY` 和根目录 `deepseek api key.txt` 只会用于 DeepSeek 官方接口。
 - 音频在本机识别。转写和相关词库发送至所选 API，服务可用性和计费由所选服务商决定。
 
 ## 常见问题
@@ -126,7 +128,7 @@
 
 **出现 SmartScreen 提示**：程序尚未购买代码签名证书，点击“更多信息”→“仍要运行”；也可以从源码自行构建。不要通过关闭系统防护解决。
 
-**卸载**：在 Windows“设置 → 应用”中卸载“好好说”。卸载会关闭正在运行的程序，并移除它的开机自启项。设置、加密历史和模型留在 `%LOCALAPPDATA%/BetterVoiceInput`，重装后可继续使用；不再需要时可手动删除该文件夹，密钥可在 Windows 凭据管理器中删除 `better-voice-input` 条目。
+**卸载**：在 Windows“设置 → 应用”中卸载“好好说 Saywell”。卸载会关闭正在运行的程序，并移除它的开机自启项。设置、加密历史和模型留在 `%LOCALAPPDATA%/Saywell`，重装后可继续使用；不再需要时可手动删除该文件夹，密钥可在 Windows 凭据管理器中删除 `saywell` 条目。
 
 ## 验证范围
 

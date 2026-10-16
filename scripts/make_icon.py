@@ -1,4 +1,4 @@
-"""Build assets/app.ico (exe and installer icon) from src/better_voice_input/assets/icon.png.
+"""Build assets/app.ico (exe and installer icon) from src/saywell/assets/icon.png.
 
 Run: .venv\\Scripts\\python.exe scripts\\make_icon.py
 """
@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from better_voice_input.ui import ASSETS, ICON_SIZES, scaled_image  # noqa: E402
+from saywell.ui import ASSETS, ICON_SIZES, scaled_image  # noqa: E402
 
 
 def png_bytes(image: QImage) -> bytes:

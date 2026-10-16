@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 import re
 
-from better_voice_input.cleanup import ApiCleaner
-from better_voice_input.settings import Settings, read_key
+from saywell.cleanup import ApiCleaner
+from saywell.settings import Settings, read_key
 
 root = Path(__file__).resolve().parents[1]
 cases = json.loads((root / "tests/fixtures/cleanup-cases.json").read_text(encoding="utf-8"))

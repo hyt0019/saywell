@@ -12,7 +12,11 @@ from .shortcuts import DEFAULT_HOTKEY, HOTKEYS
 
 MODEL_IDS = {model.id for model in ALL_MODELS}
 
-SERVICE = "better-voice-input"
+SERVICE = "saywell"
+# Names used before the app was called Saywell; existing data moves over on first use.
+LEGACY_SERVICE = "better-voice-input"
+DATA_FOLDER = "Saywell"
+LEGACY_DATA_FOLDER = "BetterVoiceInput"
 
 
 def project_root() -> Path:
@@ -21,16 +25,41 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _app_data() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+
+
 def data_dir() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "BetterVoiceInput"
+    root = _app_data() / DATA_FOLDER
+    legacy = _app_data() / LEGACY_DATA_FOLDER
+    if not root.exists() and legacy.is_dir():
+        try:
+            legacy.rename(root)
+        except OSError:
+            # An older copy may still be running and holding files open; keep using
+            # the old folder this time and move it on a later start.
+            return legacy
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def relocated(value: str) -> str:
+    """Point a saved path inside the old data folder at the moved folder."""
+    legacy = _app_data() / LEGACY_DATA_FOLDER
+    path = Path(value)
+    try:
+        inside = path.relative_to(legacy)
+    except ValueError:
+        return value
+    if path.exists() or not (_app_data() / DATA_FOLDER).is_dir():
+        return value
+    return str(_app_data() / DATA_FOLDER / inside)
 
 
 def default_model_dir() -> Path:
     root = project_root()
     candidates = [root / "models"]
-    # The local build lives in <project>/dist/BetterVoiceInput; reuse the
+    # The local build lives in <project>/dist/Saywell; reuse the
     # project's models without bundling or downloading a second copy.
     if getattr(sys, "frozen", False) and root.parent.name.lower() == "dist":
         candidates.append(root.parent.parent / "models")
@@ -110,10 +139,13 @@ class Settings:
                 elif key == "model_paths":
                     if isinstance(value, dict):
                         values[key] = {
-                            name: path
+                            name: relocated(path)
                             for name, path in value.items()
                             if name in MODEL_IDS and isinstance(path, str) and path
                         }
+                elif key in ("model_dir", "download_dir"):
+                    if isinstance(value, str):
+                        values[key] = relocated(value) if value else value
                 elif type(value) is type(getattr(defaults, key)):
                     values[key] = value
             if "hotkey" in values and values["hotkey"] not in HOTKEYS:
@@ -140,10 +172,10 @@ def read_key(key_file: Path | None = None, *, api_base_url: str = DEFAULT_API_BA
     except ValueError:
         return ""
     # A generic environment key must be paired with its intended endpoint.
-    env_url = os.environ.get("BVI_API_BASE_URL", "")
+    env_url = os.environ.get("SAYWELL_API_BASE_URL", "")
     try:
         if env_url and chat_completion_url(env_url) == chat_completion_url(api_base_url):
-            value = os.environ.get("BVI_API_KEY", "").strip()
+            value = os.environ.get("SAYWELL_API_KEY", "").strip()
             if value:
                 return value
     except ValueError:
@@ -159,12 +191,28 @@ def read_key(key_file: Path | None = None, *, api_base_url: str = DEFAULT_API_BA
         value = keyring.get_password(SERVICE, account)
         if value:
             return value
+        value = keyring.get_password(LEGACY_SERVICE, account)
+        if value:
+            _move_legacy_key(keyring, account, value)
+            return value
     except Exception:
         pass
     local = project_root() / "deepseek api key.txt"
     if legacy and local.is_file():
         return local.read_text(encoding="utf-8-sig").strip()
     return ""
+
+
+def _move_legacy_key(keyring, account: str, value: str) -> None:
+    """Copy a key saved under the old app name to the new one, then drop the old entry."""
+    try:
+        keyring.set_password(SERVICE, account, value)
+    except Exception:
+        return  # Still readable from the old entry next time.
+    try:
+        keyring.delete_password(LEGACY_SERVICE, account)
+    except Exception:
+        pass
 
 
 def save_key(value: str, *, api_base_url: str = DEFAULT_API_BASE_URL) -> None:

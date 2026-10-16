@@ -1,5 +1,11 @@
 # 验证记录
 
+## 2026-10-17：改名为好好说 Saywell
+
+- 英文名由 Better Voice Input 改为 Saywell，品牌处中英文并列为“好好说 Saywell”：窗口标题、主界面标题（中文后跟浅灰英文名）、托盘提示、安装程序和开始菜单、README、使用说明。Python 包 `better_voice_input` 改为 `saywell`，程序为 `Saywell.exe`，安装包为 `Saywell-Setup-版本号.exe`，开发用环境变量改为 `SAYWELL_API_KEY` / `SAYWELL_API_BASE_URL`，仓库链接改为 `github.com/hyt0019/saywell`。
+- 旧名字的数据自动迁移：首次启动把 `%LOCALAPPDATA%\BetterVoiceInput` 改名为 `Saywell` 并修正设置里指向旧文件夹的模型路径（文件夹被占用时暂时沿用旧文件夹）；凭据管理器中 `better-voice-input` 下的 Key 首次读取时移到 `saywell`；旧名字的开机自启项换成指向当前程序的 `Saywell` 项。安装脚本保留原 AppId 以原地升级 v0.1.0，并删除旧的 `BetterVoiceInput.exe` 和“好好说”快捷方式、改写指向安装目录的旧开机自启项。
+- 本机实测：新构建 `--smoke` 退出码 0；正常启动后 `%LOCALAPPDATA%\BetterVoiceInput` 已改名为 `Saywell`（设置、统计都在），DeepSeek Key 已从 `better-voice-input` 移到 `saywell`，开机自启项 `BetterVoiceInput` 已换成指向 `dist\Saywell\Saywell.exe` 的 `Saywell`。177 项离线测试通过（新增数据目录迁移、目录被占用时沿用旧目录、开机自启项迁移 3 项）。安装脚本用 Inno Setup 编译通过；从 v0.1.0 安装包原地升级的完整流程尚未在干净环境中实测。
+
 ## 2026-10-17：界面视觉与交互改版
 
 - 去掉卡片标题、统计数字和成就旁的彩色方块图标与系统图标字体，改用程序自绘的一套线性图标（24 单位网格、统一线宽和圆角线头，`icons.py`），只用在工具栏、录音按钮和操作按钮上。颜色收敛为灰阶加一个强调蓝，多色渐变只在录音时出现。

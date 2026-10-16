@@ -11,11 +11,11 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFontDatabase
 
-from better_voice_input.app import MainWindow
-from better_voice_input.pipeline import ModelDownloads
-from better_voice_input.settings import Settings
-from better_voice_input.stats import Day, StatsStore
-from better_voice_input.ui import STYLE, ModelDialog, SettingsDialog
+from saywell.app import MainWindow
+from saywell.pipeline import ModelDownloads
+from saywell.settings import Settings
+from saywell.stats import Day, StatsStore
+from saywell.ui import STYLE, ModelDialog, SettingsDialog
 
 app = QApplication([])
 fonts = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"

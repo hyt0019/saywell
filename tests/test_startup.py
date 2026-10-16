@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from better_voice_input import startup
-from better_voice_input.settings import Settings
+from saywell import startup
+from saywell.settings import Settings
 
 
 @pytest.fixture
@@ -99,10 +99,19 @@ def test_failed_first_save_removes_new_startup_entry(tmp_path, registry, monkeyp
     assert not startup.startup_enabled()
 
 
+def test_entry_from_the_former_app_name_is_replaced_by_one_for_this_copy(registry):
+    registry[startup.LEGACY_VALUE_NAME] = (r"C:\Programs\BetterVoiceInput\BetterVoiceInput.exe --background", startup.winreg.REG_SZ)
+    startup.migrate_legacy_entry()
+    assert startup.LEGACY_VALUE_NAME not in registry
+    assert registry[startup.VALUE_NAME] == (startup.startup_command(), startup.winreg.REG_SZ)
+    startup.migrate_legacy_entry()  # Nothing left to move.
+    assert set(registry) == {"UnrelatedApp", startup.VALUE_NAME}
+
+
 def test_packaged_command_quotes_path_and_starts_in_background(monkeypatch):
     monkeypatch.setattr(startup.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(startup.sys, "executable", r"D:\我的程序\Voice Input\BetterVoiceInput.exe")
-    assert startup.startup_command() == '"D:\\我的程序\\Voice Input\\BetterVoiceInput.exe" --background'
+    monkeypatch.setattr(startup.sys, "executable", r"D:\我的程序\Voice Input\Saywell.exe")
+    assert startup.startup_command() == '"D:\\我的程序\\Voice Input\\Saywell.exe" --background'
 
 
 def test_source_command_uses_pythonw_and_absolute_launcher(tmp_path, monkeypatch):

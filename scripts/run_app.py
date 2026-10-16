@@ -14,9 +14,9 @@ def launch():
             sys.stdout = open(os.devnull, "w", encoding="utf-8")
         if sys.stderr is None:
             sys.stderr = open(os.devnull, "w", encoding="utf-8")
-        from better_voice_input.cli import main
+        from saywell.cli import main
     else:
-        from better_voice_input.app import main
+        from saywell.app import main
     return main()
 
 
@@ -27,8 +27,8 @@ if __name__ == "__main__":
         diagnostic = traceback.format_exc()
         log = None
         for candidate in (
-            Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "BetterVoiceInput" / "startup-error.log",
-            Path(tempfile.gettempdir()) / "BetterVoiceInput-startup-error.log",
+            Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Saywell" / "startup-error.log",
+            Path(tempfile.gettempdir()) / "Saywell-startup-error.log",
         ):
             try:
                 candidate.parent.mkdir(parents=True, exist_ok=True)

@@ -40,7 +40,7 @@ from .pipeline import Events, ModelDownloads, Pipeline
 from .session import SessionGate
 from .settings import Settings, data_dir, read_key
 from .shortcuts import DEFAULT_HOTKEY, HOTKEYS, INSERT_HOTKEY
-from .startup import StartupError, save_settings_with_startup, startup_enabled
+from .startup import StartupError, migrate_legacy_entry, save_settings_with_startup, startup_enabled
 from .stats import StatsStore
 from .ui import (
     STYLE,
@@ -96,7 +96,7 @@ class MainWindow(QMainWindow):
         self.usage = StatsStore() if self.settings.collect_stats else None
         self.balance: str | None = None
         self.balance_time = 0.0
-        self.setWindowTitle("好好说 · Better Voice Input")
+        self.setWindowTitle("好好说 Saywell")
         self.setWindowIcon(app_icon())
         available = self.screen().availableGeometry().height() if self.screen() else 900
         self.resize(1100, max(680, min(860, available - 40)))
@@ -117,7 +117,7 @@ class MainWindow(QMainWindow):
         self.escape = QShortcut(QKeySequence("Escape"), self)
         self.escape.activated.connect(self.cancel)
         self.tray = QSystemTrayIcon(tray_icon(), self)
-        self.tray.setToolTip("好好说 · 语音输入")
+        self.tray.setToolTip("好好说 Saywell · 语音输入")
         menu = QMenu(self)
         show = QAction("打开好好说", self)
         show.triggered.connect(self.reveal)
@@ -153,7 +153,12 @@ class MainWindow(QMainWindow):
         header.addSpacing(4)
         brand = QVBoxLayout()
         brand.setSpacing(0)
-        brand.addWidget(label("好好说", "brand"))
+        name = QHBoxLayout()
+        name.setSpacing(8)
+        name.addWidget(label("好好说", "brand"))
+        name.addWidget(label("Saywell", "brandLatin"), 0, Qt.AlignmentFlag.AlignBottom)
+        name.addStretch()
+        brand.addLayout(name)
         brand.addWidget(label("保留你的意思，整理你的表达。", "muted"))
         header.addLayout(brand)
         header.addStretch()
@@ -900,8 +905,8 @@ def main() -> int:
     parser.add_argument("--background", action="store_true", help="配置就绪时仅在托盘运行")
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])
-    app.setApplicationName("BetterVoiceInput")
-    app.setOrganizationName("BetterVoiceInput")
+    app.setApplicationName("Saywell")
+    app.setOrganizationName("Saywell")
     app.setStyleSheet(STYLE)
     app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(False)
@@ -910,6 +915,8 @@ def main() -> int:
     if not args.smoke and not lock.tryLock(100):
         QMessageBox.information(None, "好好说", "程序已在运行，请点击系统托盘中的麦克风图标。")
         return 0
+    if not args.smoke:
+        migrate_legacy_entry()
     window = MainWindow(native=not args.smoke)
     try:
         HistoryStore().prune()

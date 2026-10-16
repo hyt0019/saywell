@@ -5,11 +5,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from better_voice_input.audio import AudioError
-from better_voice_input.cleanup import Cancelled
-from better_voice_input.core import CleanupResult
-from better_voice_input.pipeline import Pipeline
-from better_voice_input.settings import Settings
+from saywell.audio import AudioError
+from saywell.cleanup import Cancelled
+from saywell.core import CleanupResult
+from saywell.pipeline import Pipeline
+from saywell.settings import Settings
 
 
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
@@ -44,9 +44,9 @@ def test_recording_is_released_after_asr_and_on_failure_or_cancel(monkeypatch, o
         return CleanupResult(text, text)
 
     pipeline.recognizer = SimpleNamespace(directory=settings.models, transcribe=transcribe)
-    monkeypatch.setattr("better_voice_input.pipeline.read_key", lambda **kwargs: "test-key")
+    monkeypatch.setattr("saywell.pipeline.read_key", lambda **kwargs: "test-key")
     monkeypatch.setattr(
-        "better_voice_input.pipeline.ApiCleaner", lambda *args, **kwargs: SimpleNamespace(clean=clean)
+        "saywell.pipeline.ApiCleaner", lambda *args, **kwargs: SimpleNamespace(clean=clean)
     )
     worker = pipeline.start(1, cancel, settings, samples, "audio")
     try:

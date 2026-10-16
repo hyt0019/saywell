@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 
 root = Path(__file__).resolve().parents[1]
-destination = root / "dist" / "BetterVoiceInput" / "licenses"
+destination = root / "dist" / "Saywell" / "licenses"
 count = 0
 for dist in importlib.metadata.distributions():
     for filename in dist.files or []:

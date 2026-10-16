@@ -3,7 +3,7 @@ from ctypes import wintypes
 
 import pytest
 
-from better_voice_input import windows
+from saywell import windows
 
 
 @pytest.mark.parametrize("gui_available", [False, True])

@@ -12,13 +12,13 @@ import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from better_voice_input import models, settings as settings_module, ui
-from better_voice_input.asr import join_segments, tidy_spacing
-from better_voice_input.cleanup import Cancelled
-from better_voice_input.models import CATALOG, SENSE_VOICE, VAD, AsrModel, ModelFile, download_model, get_model
-from better_voice_input.pipeline import ModelDownloads, Pipeline
-from better_voice_input.settings import Settings
-from better_voice_input.ui import STYLE, ModelDialog
+from saywell import models, settings as settings_module, ui
+from saywell.asr import join_segments, tidy_spacing
+from saywell.cleanup import Cancelled
+from saywell.models import CATALOG, SENSE_VOICE, VAD, AsrModel, ModelFile, download_model, get_model
+from saywell.pipeline import ModelDownloads, Pipeline
+from saywell.settings import Settings
+from saywell.ui import STYLE, ModelDialog
 
 
 @pytest.fixture(scope="module")
@@ -141,7 +141,7 @@ def test_background_download_reports_success_and_allows_one_at_a_time(qt_app, tm
         progress(50, "file")
         release.wait(5)
 
-    monkeypatch.setattr("better_voice_input.pipeline.download_model", fake_download)
+    monkeypatch.setattr("saywell.pipeline.download_model", fake_download)
     downloads = ModelDownloads()
     downloads.progress.connect(lambda *args: events.append(("progress", args)))
     downloads.finished.connect(lambda *args: events.append(("finished", args)))
@@ -228,8 +228,8 @@ def test_pipeline_loads_selected_model_and_reloads_after_switch(monkeypatch):
         name: SimpleNamespace(emit=lambda *args, name=name: emitted.append((name, args)))
         for name in ("stage", "transcript", "completed", "failed")
     })
-    monkeypatch.setattr("better_voice_input.asr.LocalRecognizer", Recognizer)
-    monkeypatch.setattr("better_voice_input.pipeline.read_key", lambda **kwargs: "")
+    monkeypatch.setattr("saywell.asr.LocalRecognizer", Recognizer)
+    monkeypatch.setattr("saywell.pipeline.read_key", lambda **kwargs: "")
     pipeline = Pipeline(events)
     pipeline.recognizer = Recognizer(Settings().models, "sensevoice")
     created.clear()
@@ -243,9 +243,9 @@ def test_pipeline_loads_selected_model_and_reloads_after_switch(monkeypatch):
 
 
 def test_main_window_applies_model_choice_and_shows_download_progress(qt_app, monkeypatch):
-    from better_voice_input.app import MainWindow
+    from saywell.app import MainWindow
 
-    monkeypatch.setattr("better_voice_input.ui.read_key", lambda *args, **kwargs: "")
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
     saved = []
     monkeypatch.setattr(Settings, "save", lambda self, path=None: saved.append(self))
     window = MainWindow(Settings(), native=False)
@@ -267,7 +267,7 @@ def test_main_window_applies_model_choice_and_shows_download_progress(qt_app, mo
 
 
 def test_each_model_uses_its_sherpa_onnx_loader_with_catalog_files(tmp_path, monkeypatch):
-    from better_voice_input import asr
+    from saywell import asr
 
     calls = {}
     for name in ("from_sense_voice", "from_transducer", "from_nemo_canary"):
@@ -276,7 +276,7 @@ def test_each_model_uses_its_sherpa_onnx_loader_with_catalog_files(tmp_path, mon
         )
     # GGUF models run in a local llama-server process instead of sherpa-onnx.
     monkeypatch.setattr(
-        "better_voice_input.llama.LlamaServerRecognizer", lambda **kw: calls.update({"llama_server": kw})
+        "saywell.llama.LlamaServerRecognizer", lambda **kw: calls.update({"llama_server": kw})
     )
     for model in CATALOG:
         asr.create_recognizer(tmp_path, model.id)
@@ -296,7 +296,7 @@ def test_each_model_uses_its_sherpa_onnx_loader_with_catalog_files(tmp_path, mon
 
 
 def test_plaza_models_are_pinned_documented_and_separate_from_the_curated_models():
-    from better_voice_input.models import ALL_MODELS, PLAZA, PLAZA_CATEGORIES
+    from saywell.models import ALL_MODELS, PLAZA, PLAZA_CATEGORIES
 
     assert len(PLAZA) == 9 and not set(PLAZA) & set(CATALOG)
     assert ALL_MODELS == CATALOG + PLAZA
@@ -316,8 +316,8 @@ def test_plaza_models_are_pinned_documented_and_separate_from_the_curated_models
 
 
 def test_plaza_models_use_their_sherpa_onnx_loaders(tmp_path, monkeypatch):
-    from better_voice_input import asr
-    from better_voice_input.models import PLAZA
+    from saywell import asr
+    from saywell.models import PLAZA
 
     calls = {}
     for model in PLAZA:
@@ -343,7 +343,7 @@ def test_plaza_model_choice_survives_settings_roundtrip(tmp_path):
 
 
 def test_model_dialog_has_a_separate_plaza_tab_with_filters(model_dialog):
-    from better_voice_input.models import PLAZA
+    from saywell.models import PLAZA
 
     dialog = model_dialog.dialog
     assert dialog.pages.count() == 2 and dialog.pages.currentIndex() == 0
@@ -392,7 +392,7 @@ def test_try_button_listens_until_finished_then_shows_the_text(model_dialog, mon
     import threading
     import time
 
-    from better_voice_input import checks
+    from saywell import checks
 
     listening = threading.Event()
 

@@ -1,8 +1,8 @@
 import json
 import time
 
-from better_voice_input.history import HistoryStore
-from better_voice_input.settings import Settings
+from saywell.history import HistoryStore
+from saywell.settings import Settings
 
 
 def test_history_encrypts_roundtrips_and_clears(tmp_path):

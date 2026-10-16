@@ -1,4 +1,4 @@
-# Build with: .venv\Scripts\python.exe -m PyInstaller --noconfirm BetterVoiceInput.spec
+# Build with: .venv\Scripts\python.exe -m PyInstaller --noconfirm Saywell.spec
 from PyInstaller.utils.hooks import collect_all
 import os
 from pathlib import Path
@@ -16,8 +16,8 @@ a = Analysis(
     ['scripts/run_app.py'],
     pathex=['src'],
     binaries=sherpa_binaries,
-    datas=sherpa_data + [('src/better_voice_input/assets', 'better_voice_input/assets')],
-    hiddenimports=sherpa_hidden + ['better_voice_input.cli', 'keyring.backends.Windows', 'win32crypt'],
+    datas=sherpa_data + [('src/saywell/assets', 'saywell/assets')],
+    hiddenimports=sherpa_hidden + ['saywell.cli', 'keyring.backends.Windows', 'win32crypt'],
     excludes=['tkinter', 'pytest', 'ruff'],
 )
 # These libraries are supplied by Windows 10/11 and must not be shadowed.
@@ -25,7 +25,7 @@ a.binaries = [entry for entry in a.binaries if
               Path(entry[0]).name.lower() not in {'icuuc.dll', 'icuin.dll', 'ucrtbase.dll'}
               and not Path(entry[0]).name.lower().startswith('api-ms-win-')]
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='BetterVoiceInput',
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='Saywell',
           debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
           console=False, icon='assets/app.ico')
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='BetterVoiceInput')
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='Saywell')
