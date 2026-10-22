@@ -994,6 +994,12 @@ def main() -> int:
     parser.add_argument("--smoke", action="store_true", help="启动后自动退出，用于打包检查")
     parser.add_argument("--background", action="store_true", help="配置就绪时仅在托盘运行")
     args = parser.parse_args()
+    if args.smoke:
+        # Downloads, the text API and Qwen3-ASR all open httpx clients; a build whose Python
+        # cannot create an HTTPS context must fail here, not on users' machines.
+        import httpx
+
+        httpx.Client().close()
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Saywell")
     app.setOrganizationName("Saywell")

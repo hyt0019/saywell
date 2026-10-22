@@ -2,16 +2,18 @@
 
 ## 环境
 
-需要 Windows 和 Python 3.12。模型、密钥、用户录音和本地打包产物不进入 Git 仓库。
+需要 Windows 和 python.org 的 Python 3.12。模型、密钥、用户录音和本地打包产物不进入 Git 仓库。
 
 ```powershell
-python -m venv .venv
+py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m saywell.app
 ```
 
 精确依赖版本保存在 `requirements-lock.txt`。运行 `scripts/build.ps1` 会先跑测试，再用 PyInstaller 构建目录式便携程序 `dist/Saywell/`。本地构建可双击 `启动好好说.cmd` 在托盘启动。
+
+虚拟环境必须基于 python.org 的 Python。被其他工具改过标准库的 Python 在开发时一切正常，打包后却可能无法联网：0.3.0 就是用 Codex 自带的运行时打包的，它的 `ssl.py` 会读取一个不会被打包的证书文件，结果程序建立不了任何 HTTPS 连接。`scripts/build.ps1` 打包后会运行 `Saywell.exe --smoke`，其中会创建一次 HTTPS 客户端，失败即中止构建。
 
 ## API 与密钥
 

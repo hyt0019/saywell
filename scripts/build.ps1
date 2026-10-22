@@ -12,6 +12,12 @@ try {
     Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.md' -Destination 'dist\Saywell\THIRD_PARTY_NOTICES.md'
     Copy-Item -LiteralPath 'LICENSE' -Destination 'dist\Saywell\LICENSE.txt'
     & .\.venv\Scripts\python.exe -X utf8 scripts/collect_licenses.py
+    # The packaged app must start and open HTTPS connections. Build from a python.org
+    # interpreter: a patched standard library can break only the frozen app.
+    $smoke = Start-Process -FilePath 'dist\Saywell\Saywell.exe' -ArgumentList '--smoke' -Wait -PassThru
+    if ($smoke.ExitCode -ne 0) {
+        throw "Smoke test failed; see $(Join-Path $env:LOCALAPPDATA 'Saywell\startup-error.log')."
+    }
     Write-Output 'Built dist\Saywell\Saywell.exe'
 } finally {
     Pop-Location
