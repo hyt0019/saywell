@@ -88,6 +88,12 @@ class Settings:
     # are pinned in model_paths so they never need to be downloaded again.
     download_dir: str = ""
     model_paths: dict[str, str] = field(default_factory=dict)
+    # Run models that support it (Qwen3-ASR) on the graphics card.
+    gpu_acceleration: bool = False
+    # Saying "翻译成英文" at the end inserts the translation instead.
+    voice_translation: bool = True
+    # Last language chosen for the 翻译 button on the text page.
+    translate_language: str = "英语"
 
     @property
     def download_root(self) -> Path:

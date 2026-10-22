@@ -8,7 +8,7 @@ from dataclasses import replace
 from datetime import date
 
 from PySide6.QtCore import QLockFile, QTimer, Qt
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -32,7 +32,8 @@ from PySide6.QtWidgets import (
 
 from .api_config import is_deepseek_api
 from .audio import AudioError, Recorder
-from .core import single_line_text
+from .cleanup import TRANSLATE_LANGUAGES, ApiCleaner, CleanupError
+from .core import CleanupResult, single_line_text
 from .dashboard import Overview
 from .history import HistoryStore
 from .models import get_model, models_ready
@@ -96,6 +97,8 @@ class MainWindow(QMainWindow):
         self.usage = StatsStore() if self.settings.collect_stats else None
         self.balance: str | None = None
         self.balance_time = 0.0
+        # Graphics card the speech model last ran on; "CPU" after GPU acceleration fell back, "" if unknown.
+        self.device = ""
         self.setWindowTitle("好好说 Saywell")
         self.setWindowIcon(app_icon())
         available = self.screen().availableGeometry().height() if self.screen() else 900
@@ -294,6 +297,13 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.copy_original_button)
         actions.addWidget(self.clear_button)
         actions.addStretch()
+        # 翻译：把（改好的）整理结果交给 API 译成所选语言，替换右侧内容，Ctrl+Z 可撤销。
+        self.translating = False
+        self.translate_button = make_button("翻译", Glyph.TRANSLATE)
+        self.translate_menu = QMenu(self.translate_button)
+        self.translate_menu.aboutToShow.connect(self.fill_translate_menu)
+        self.translate_button.setMenu(self.translate_menu)
+        actions.addWidget(self.translate_button)
         self.copy_button = make_button("复制结果", Glyph.COPY)
         self.copy_button.clicked.connect(lambda: self.copy_text(True))
         self.insert_button = make_button("输入到其他窗口", Glyph.SEND, "primary")
@@ -388,7 +398,7 @@ class MainWindow(QMainWindow):
             pass
 
     def refresh_controls(self):
-        if not hasattr(self, "clean_button"):
+        if not hasattr(self, "insert_button"):  # Still building the window.
             return
         idle = self.state == "idle"
         self.record_button.setEnabled(self.state in ("idle", "recording"))
@@ -406,16 +416,23 @@ class MainWindow(QMainWindow):
         self.copy_original_button.setEnabled(bool(self.original.toPlainText().strip()))
         self.copy_button.setEnabled(bool(self.result.toPlainText().strip()))
         self.insert_button.setEnabled(
-            idle and bool(self.result.toPlainText().strip()) and not self.gate.inserted
+            idle and bool(self.result.toPlainText().strip()) and not self.gate.inserted and not self.translating
         )
-        self.clear_button.setEnabled(idle)
+        self.translate_button.setEnabled(idle and bool(self.result.toPlainText().strip()) and not self.translating)
+        self.clear_button.setEnabled(idle and not self.translating)
         self.original.setReadOnly(not idle)
-        self.result.setReadOnly(not idle)
+        self.result.setReadOnly(not idle or self.translating)
         model = get_model(self.settings.asr_model)
         ready = models_ready(self.settings.models, model=model.id)
         self.download_button.setVisible(not ready and self.downloads.active is None)
         self.download_button.setEnabled(idle)
-        self.model_chip.setText(f"{model.name} · {'本机识别' if ready else '未下载'}")
+        if not ready:
+            where = "未下载"
+        elif model.gpu and self.settings.gpu_acceleration and self.device != "CPU":
+            where = "GPU 加速"
+        else:
+            where = "本机识别"
+        self.model_chip.setText(f"{model.name} · {where}")
         if self.state in self.PILLS:
             tone, text = self.PILLS[self.state]
         else:
@@ -563,8 +580,12 @@ class MainWindow(QMainWindow):
         result = data["result"]
         self.original.setPlainText(result.original)
         self.result.setPlainText(result.text)
+        if data.get("device") is not None and get_model(self.settings.asr_model).gpu:
+            self.device = data.get("device") or "CPU"
         self.finish_ui()
         warnings = list(result.warnings) + self.extra_warnings
+        if data.get("gpu_problem"):
+            warnings.append(f"GPU 加速未能启用（{data['gpu_problem']}），已改用 CPU 识别。")
         model = get_model(self.settings.asr_model).name
         self.stats.setText(
             f"{model} 识别 {data['asr_seconds']:.1f} 秒    文字整理 {result.elapsed:.1f} 秒    "
@@ -581,7 +602,12 @@ class MainWindow(QMainWindow):
                 HistoryStore().append(result.original, result.text)
             except Exception:
                 warnings.append("本次历史记录保存失败，当前结果仍可使用。")
-        self.status.setText("识别原文已就绪" if data.get("used_original") else "整理好了")
+        if data.get("used_original"):
+            self.status.setText("识别原文已就绪")
+        elif result.translated_to:
+            self.status.setText(f"整理好了，已翻译为{result.translated_to}")
+        else:
+            self.status.setText("整理好了")
         self.hint.setText(f"可以直接编辑结果，或回到输入框按 {INSERT_HOTKEY}。")
         self.set_notice("\n".join(warnings))
         if self.from_hotkey and self.target:
@@ -640,6 +666,66 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(3000, insert)
 
+    def fill_translate_menu(self):
+        self.translate_menu.clear()
+        title = self.translate_menu.addAction("把整理结果翻译成")
+        title.setEnabled(False)
+        for language in TRANSLATE_LANGUAGES:
+            action = self.translate_menu.addAction(language)
+            action.setCheckable(True)
+            action.setChecked(language == self.settings.translate_language)
+            action.triggered.connect(lambda _checked=False, language=language: self.translate_result(language))
+
+    def translate_result(self, language: str):
+        text = self.result.toPlainText().strip()
+        if self.state != "idle" or not text or self.translating:
+            return
+        if language != self.settings.translate_language:
+            self.settings = replace(self.settings, translate_language=language)
+            try:
+                self.settings.save()
+            except OSError:
+                pass  # Only the remembered choice is lost.
+        settings, generation = self.settings, self.gate.generation
+        self.translating = True
+        self.translate_button.setText("正在翻译…")
+        self.set_notice()
+        self.refresh_controls()
+
+        def work(_report):
+            from .checks import CheckResult
+
+            try:
+                cleaner = ApiCleaner(
+                    read_key(api_base_url=settings.api_base_url),
+                    settings.model,
+                    settings.api_timeout,
+                    base_url=settings.api_base_url,
+                )
+                return cleaner.translate(text, language)
+            except CleanupError as exc:
+                return CheckResult(False, str(exc))
+
+        def done(value):
+            self.translating = False
+            self.translate_button.setText("翻译")
+            if not isinstance(value, CleanupResult):
+                self.set_notice(f"翻译未完成：{value.message}")
+            elif self.gate.generation == generation and self.result.toPlainText().strip() == text:
+                # Replace through the cursor so Ctrl+Z brings the untranslated text back.
+                cursor = self.result.textCursor()
+                cursor.beginEditBlock()
+                cursor.select(QTextCursor.SelectionType.Document)
+                cursor.insertText(value.text)
+                cursor.endEditBlock()
+                self.status.setText(f"已翻译为{language}")
+                self.toast.show_text(f"已翻译为{language}，Ctrl+Z 可撤销")
+                self.record_usage({"result": value})
+                self.refresh_overview()
+            self.refresh_controls()
+
+        run_task(self, work, done)
+
     def clean_text(self):
         text = self.original.toPlainText().strip()
         if self.state != "idle" or not text:
@@ -687,6 +773,7 @@ class MainWindow(QMainWindow):
         self.settings = new
         if (new.asr_model, new.models) != (previous.asr_model, previous.models):
             self.pipeline.release_recognizer()  # Loaded again on the next recognition.
+            self.device = ""
         self.refresh_controls()
         return True
 
@@ -777,6 +864,9 @@ class MainWindow(QMainWindow):
                     return
             try:
                 save_settings_with_startup(new)
+                if new.gpu_acceleration != self.settings.gpu_acceleration:
+                    self.pipeline.release_recognizer()  # Free the card or the CPU copy; reloaded on next use.
+                    self.device = ""
                 self.settings = new
                 if new.collect_stats != (self.usage is not None):
                     self.usage = StatsStore() if new.collect_stats else None

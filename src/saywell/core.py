@@ -24,6 +24,13 @@ class CleanupPayload(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
     edits: list[Edit] = Field(default_factory=list, max_length=100)
     warnings: list[str] = Field(default_factory=list, max_length=30)
+    # Target language when the speaker ended with "翻译成英文" and the like; empty otherwise.
+    translated_to: str = Field(default="", max_length=40)
+
+
+class TranslationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=20000)
 
 
 @dataclass(frozen=True)
@@ -34,6 +41,7 @@ class CleanupResult:
     edits: tuple[Edit, ...] = ()
     elapsed: float = 0.0
     usage: dict = field(default_factory=dict)
+    translated_to: str = ""
 
     def __post_init__(self):
         object.__setattr__(self, "text", single_line_text(self.text))
@@ -88,6 +96,10 @@ def validate_cleanup(original: str, payload: CleanupPayload) -> tuple[str, ...]:
             warnings.append("有修改缺少可核对的原文依据，请检查。")
         else:
             valid_edits.append(edit)
+    if payload.translated_to:
+        # The checks below compare Chinese wording (negations, hedges, length, rewrites);
+        # a translation differs from the original by design, so they would only raise false alarms.
+        return tuple(dict.fromkeys(warnings))
     source_numbers = {_number(x) for x in _NUMBERS.findall(original)}
     target_numbers = {_number(x) for x in _NUMBERS.findall(payload.text)}
     if target_numbers - source_numbers:

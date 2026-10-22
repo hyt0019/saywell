@@ -60,7 +60,17 @@ from PySide6.QtWidgets import (
 
 from .api_config import chat_completion_url
 from .icons import draw_icon, icon_pixmap
-from .models import ALL_MODELS, CATALOG, ENGINE_DIR, PLAZA, PLAZA_CATEGORIES, SENSE_VOICE, AsrModel, models_ready
+from .models import (
+    ALL_MODELS,
+    CATALOG,
+    ENGINE_DIR,
+    GPU_ENGINE_DIR,
+    PLAZA,
+    PLAZA_CATEGORIES,
+    SENSE_VOICE,
+    AsrModel,
+    models_ready,
+)
 from .settings import Settings, read_key, save_key
 from .shortcuts import RECORDING_CHOICES
 
@@ -89,6 +99,7 @@ QLabel#fieldLabel { color: #3A3A3C; font-size: 13px; }
 QLabel#count { background: #F2F2F7; color: #6E6E73; border-radius: 9px; padding: 2px 9px; font-size: 12px; }
 QLabel#tag { color: #6E6E73; border: 1px solid #E0E0E5; border-radius: 9px; padding: 1px 8px; font-size: 12px; }
 QLabel#tagActive { background: #0071E3; color: #FFFFFF; border-radius: 9px; padding: 2px 9px; font-size: 12px; }
+QLabel#tagGpu { color: #0A5BD3; border: 1px solid #BCD4F5; border-radius: 9px; padding: 1px 8px; font-size: 12px; }
 QLabel#strength { color: #3A3A3C; font-size: 13px; }
 QLabel#caveat { color: #8E8E93; font-size: 12px; }
 QLabel#speed { color: #6E6E73; font-size: 12px; }
@@ -185,6 +196,7 @@ class Glyph:
     REPAIR = "refresh"
     REFRESH = "refresh"
     VERIFY = "verify"
+    TRANSLATE = "translate"
 
 
 def glyph_pixmap(glyph: str, color: str, size: int = 16) -> QPixmap:
@@ -1395,6 +1407,16 @@ class SettingsDialog(QDialog):
         self.hold.setChecked(settings.hold_to_talk)
         form.addRow(field_label("录音方式"), self.hold)
         form.addRow(field_label("输入方式"), label("直接输入单行文字，支持终端，不自动回车", "muted", wrap=True))
+        self.voice_translation = Switch("说完加一句“翻译成英文”，直接输入译文")
+        self.voice_translation.setChecked(settings.voice_translation)
+        form.addRow(field_label("语音翻译"), self.voice_translation)
+        gpu = QVBoxLayout()
+        gpu.setSpacing(4)
+        self.gpu = Switch("用显卡运行 Qwen3-ASR，识别更快")
+        self.gpu.setChecked(settings.gpu_acceleration)
+        gpu.addWidget(self.gpu)
+        gpu.addWidget(label("支持 NVIDIA、AMD、Intel 显卡；显卡不支持时自动改用 CPU。", "muted", wrap=True))
+        form.addRow(field_label("GPU 加速"), gpu)
         layout.addWidget(recording)
 
         privacy = Section("隐私与启动", "录音只在内存中处理，识别后立即释放，不保存录音文件。", Glyph.LOCK)
@@ -1513,6 +1535,8 @@ class SettingsDialog(QDialog):
                 collect_stats=self.collect_stats.isChecked(),
                 start_on_login=self.startup.isChecked(),
                 glossary=words,
+                voice_translation=self.voice_translation.isChecked(),
+                gpu_acceleration=self.gpu.isChecked(),
             )
             self.accept()
         except Exception:
@@ -1537,7 +1561,9 @@ def delete_model_files(model: AsrModel, directory: Path) -> None:
     for spec in model.files:
         (directory / spec.name).unlink(missing_ok=True)
     if model.kind == "llama_server":
-        shutil.rmtree(directory / ENGINE_DIR, ignore_errors=True)  # Unpacked from the downloaded archive.
+        # Unpacked from the downloaded archives.
+        shutil.rmtree(directory / ENGINE_DIR, ignore_errors=True)
+        shutil.rmtree(directory / GPU_ENGINE_DIR, ignore_errors=True)
     folders = sorted({(directory / spec.name).parent for spec in model.files}, key=lambda p: len(p.parts))
     for folder in reversed(folders):
         if folder != directory or model.folder:
@@ -1560,6 +1586,10 @@ class ModelCard(QFrame):
         head.addWidget(label(model.name, "cardTitle"))
         self.tag = label(model.tagline, "tag")
         head.addWidget(self.tag)
+        if model.gpu:
+            gpu = label("支持 GPU 加速", "tagGpu")
+            gpu.setToolTip("在“设置 → GPU 加速”中开启后用显卡识别，速度更快")
+            head.addWidget(gpu)
         self.active_tag = label("使用中", "tagActive")
         head.addWidget(self.active_tag)
         head.addStretch()
@@ -1824,7 +1854,7 @@ class ModelDialog(QDialog):
             except Exception:  # noqa: BLE001 - PortAudio errors vary by device
                 return CheckResult(False, "无法打开麦克风，请在“设置”里检查麦克风")
             report(recognizing)
-            return try_model(model, directory, samples)
+            return try_model(model, directory, samples, self.settings.gpu_acceleration)
 
         def listening_done():
             card.stop_recording = None

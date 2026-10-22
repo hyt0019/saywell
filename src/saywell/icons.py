@@ -189,7 +189,15 @@ def _keyboard(p):
     _lines(p, (8, 14.4), (16, 14.4))
 
 
+def _translate(p):
+    # A globe: rim, one meridian and the equator.
+    p.addEllipse(QPointF(12, 12), 8.5, 8.5)
+    p.addEllipse(QPointF(12, 12), 3.6, 8.5)
+    _lines(p, (3.5, 12), (20.5, 12))
+
+
 PATHS = {
+    "translate": _translate,
     "mic": _mic,
     "history": _history,
     "import": _import,

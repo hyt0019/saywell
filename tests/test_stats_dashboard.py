@@ -152,3 +152,60 @@ def test_statistics_can_be_turned_off(qt_app, monkeypatch):
     finally:
         window.shutdown()
         window.close()
+
+
+def test_translate_button_replaces_the_result_and_can_be_undone(qt_app, monkeypatch):
+    import time
+
+    from saywell.app import MainWindow
+    from saywell.cleanup import ApiCleaner
+
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
+    monkeypatch.setattr("saywell.app.read_key", lambda *args, **kwargs: "key")
+    calls = []
+
+    def translate(self, text, language, cancel=None):
+        calls.append((text, language))
+        return CleanupResult(text, "The meeting is at 10 tomorrow.", usage={"prompt_tokens": 40}, translated_to=language)
+
+    monkeypatch.setattr(ApiCleaner, "translate", translate)
+    window = MainWindow(Settings(), native=False)
+    try:
+        window.result.setPlainText("明天十点开会。")
+        window.fill_translate_menu()
+        languages = [action.text() for action in window.translate_menu.actions()[1:]]
+        assert languages[0] == "英语" and "日语" in languages
+        window.translate_result("英语")
+        assert window.translating and not window.translate_button.isEnabled()
+        deadline = time.monotonic() + 5
+        while window.translating and time.monotonic() < deadline:
+            qt_app.processEvents()
+        assert calls == [("明天十点开会。", "英语")]
+        assert window.result.toPlainText() == "The meeting is at 10 tomorrow."
+        assert window.usage.day(date.today()).requests == 1
+        window.result.undo()
+        assert window.result.toPlainText() == "明天十点开会。"
+        window.translate_result("日语")
+        while window.translating and time.monotonic() < deadline + 5:
+            qt_app.processEvents()
+        assert Settings.load().translate_language == "日语"  # Remembered for next time.
+    finally:
+        window.shutdown()
+        window.close()
+
+
+def test_gpu_fallback_is_reported_once_with_the_result(qt_app, monkeypatch):
+    from saywell.app import MainWindow
+
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
+    window = MainWindow(Settings(asr_model="qwen3-asr", gpu_acceleration=True), native=False)
+    try:
+        job, _ = window.begin("busy")
+        result = CleanupResult("你好", "你好。")
+        window.on_complete(
+            job, {"result": result, "asr_seconds": 0.5, "duration": 1.0, "device": "", "gpu_problem": "显卡驱动不支持或显存不足"}
+        )
+        assert "已改用 CPU" in window.notice.text() and window.device == "CPU"
+    finally:
+        window.shutdown()
+        window.close()

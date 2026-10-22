@@ -1,5 +1,20 @@
 # 验证记录
 
+## 2026-10-22：GPU 加速、语音翻译和翻译按钮
+
+- **GPU 加速（Qwen3-ASR）**：Qwen3-ASR 同时带 llama.cpp b11696 的 CPU 版和 Vulkan 版（`llama-b11696-bin-win-vulkan-x64.zip`，32,220,792 字节，SHA-256 `f62bbf1c…812e75`）。在 RTX 5080（另有 AMD 核显）上实测：
+  - llama.cpp 自动选用独显，日志为 `using device Vulkan1 (NVIDIA GeForce RTX 5080)`、`CLIP using Vulkan1 backend`；
+  - 同一段 75.6 秒录音，GPU 识别 1.48 秒，CPU 7.48 秒，识别文字一致；
+  - 首次使用时编译着色器约 5 秒，再次启动后首个请求 0.23 秒。
+- **GPU 回退**：用 `GGML_VK_VISIBLE_DEVICES=9` 模拟没有可用显卡，程序提示“没有找到可用的显卡”，自动改用 CPU，识别正常，GPU 日志另存为 `llama-server-gpu.log`。这时 llama.cpp 仍会打印“offloaded 29/29 layers to GPU”，所以只认 `using device` 这一行。
+- **语音翻译（真实 DeepSeek 接口）**：
+  - 应触发的 4 句（“翻译成英文”“把这句话翻成日语”“用英文说”，以及不带句号的“翻译成韩语”）都直接给出译文，其中“三点，不对，四点”的改口也已应用；
+  - 不应触发的 3 句照常整理：“我要把这份合同翻译成英文发给客户”、“你能不能把这段话翻译成英文给我看一下？”（第一版提示词把这句误翻成英文，补充反例后修正）、普通改口句；
+  - 关闭开关后只整理不翻译；
+  - 加了翻译规则后，此前宣传片用的 8 句例句整理结果不变，平均每次约 0.00071 元（高峰价）。
+- **翻译按钮（真实接口）**：同一句译成日语、繁体中文、英语，结果正确，每次约 180 tokens；替换后按 Ctrl+Z 可还原，并计入 API 用量。
+- **测试**：187 项离线测试通过，新增 10 项，覆盖 GPU 选择与回退、日志识别、语音翻译开关、翻译按钮和撤销、回退提示。
+
 ## 2026-10-17：发布 v0.2.0
 
 - 已发布 [v0.2.0](https://github.com/hyt0019/saywell/releases/tag/v0.2.0)（好好说 Saywell 0.2.0）：标签指向 `05b5bab`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/38951997916) 通过。

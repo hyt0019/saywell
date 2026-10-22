@@ -110,6 +110,8 @@ class Pipeline:
         return thread
 
     def _run(self, job: int, cancel: threading.Event, settings: Settings, source, kind: str):
+        # device stays None for text-only runs, which do not touch the speech model.
+        gpu_problem, device = "", None
         try:
             started = time.monotonic()
             if kind == "text":
@@ -125,18 +127,23 @@ class Pipeline:
                         if cancel.is_set():
                             raise Cancelled("已取消。")
                         model = get_model(settings.asr_model)
+                        gpu = settings.gpu_acceleration and model.gpu
                         current = self.recognizer
                         if (
                             current is None
                             or current.directory != settings.models
                             or getattr(current, "model", model.id) != model.id
+                            or getattr(current, "gpu", False) != gpu
                         ):
                             from .asr import LocalRecognizer
 
                             self._close_recognizer()  # Release the previous model before loading.
                             self.events.stage.emit(job, f"正在加载 {model.name}…")
-                            self.recognizer = LocalRecognizer(settings.models, model.id)
+                            self.recognizer = LocalRecognizer(settings.models, model.id, gpu)
+                            # Tell the user once, on the load where GPU acceleration fell back to the CPU.
+                            gpu_problem = getattr(self.recognizer, "gpu_problem", "")
                             self.events.stage.emit(job, "正在本地识别…")
+                        device = getattr(self.recognizer, "device", "")
                         text = self.recognizer.transcribe(
                             samples, cancel, lambda value: self.events.transcript.emit(job, value)
                         )
@@ -157,6 +164,7 @@ class Pipeline:
                     settings.model,
                     settings.api_timeout,
                     base_url=settings.api_base_url,
+                    voice_translation=settings.voice_translation,
                 ).clean(text, settings.glossary, cancel)
             except Cancelled:
                 raise
@@ -179,6 +187,8 @@ class Pipeline:
                     "asr_seconds": asr_seconds,
                     "duration": duration,
                     "used_original": used_original,
+                    "device": device,
+                    "gpu_problem": gpu_problem,
                 },
             )
         except Cancelled:

@@ -38,7 +38,11 @@ API 地址支持 Base URL（如 `https://api.example.com/v1`）或完整 `/chat/
 
 精选模型在 `models.py` 的 `CATALOG`，扩展模型在 `PLAZA`。每个模型固定 Hugging Face 提交版本并记录每个文件的大小和哈希（LFS 文件用 SHA-256，小文件用 git blob SHA-1），`kind` 对应 `sherpa_onnx.OfflineRecognizer.from_<kind>`，`inputs` 和 `options` 是传给它的文件与参数。
 
-`kind="llama_server"` 的模型（目前是 Qwen3-ASR Q8_0 GGUF）由 `llama.py` 运行：llama.cpp 官方 Windows CPU 发布包作为模型文件之一固定版本下载并校验，首次使用时只把 `llama-server.exe`、DLL 和许可文件解压到模型文件夹的 `llama.cpp/`。程序在 127.0.0.1 的随机端口启动 llama-server，带随机 API Key，进程放进 Windows 作业对象，程序退出或崩溃时一并结束。识别仍走 `LocalRecognizer` 的分段逻辑，每段以 WAV 通过 `/v1/chat/completions` 的 `input_audio` 发送，回答中 `<asr_text>` 之后的部分是识别文字。`seconds_per_minute` 是本机实测识别 60 秒语音的耗时，卡片上统一显示为“60 秒语音约 X 秒”。新增模型时补上分类、实测速度和模型主页，并实测能下载、校验、加载和识别；许可协议记录在 THIRD_PARTY_NOTICES.md。
+`kind="llama_server"` 的模型（目前是 Qwen3-ASR Q8_0 GGUF）由 `llama.py` 运行：llama.cpp 官方 Windows CPU 发布包作为模型文件之一固定版本下载并校验，首次使用时只把 `llama-server.exe`、DLL 和许可文件解压到模型文件夹的 `llama.cpp/`。程序在 127.0.0.1 的随机端口启动 llama-server，带随机 API Key，进程放进 Windows 作业对象，程序退出或崩溃时一并结束。识别仍走 `LocalRecognizer` 的分段逻辑，每段以 WAV 通过 `/v1/chat/completions` 的 `input_audio` 发送，回答中 `<asr_text>` 之后的部分是识别文字。
+
+GPU 加速：`AsrModel.gpu=True` 的模型（Qwen3-ASR）同时带有 llama.cpp 的 Vulkan 发布包，解压到 `llama.cpp-vulkan/`。设置中开启 GPU 加速后，先用 Vulkan 版加 `-ngl 999 -lv 4` 启动；只有日志里出现 `using device …` 才算用上了显卡（没有可用显卡时它照样打印“offloaded N/N layers to GPU”，不能作为依据），否则关掉它、把日志留成 `llama-server-gpu.log`，改用 CPU 版启动，并在结果下方提示一次。有独显和核显时 llama.cpp 自己选独显。Vulkan 在新机器上第一次识别要编译着色器（RTX 5080 上约 5 秒），之后由驱动缓存。卡片上的速度仍是 CPU 实测值，不写 GPU 速度。
+
+`seconds_per_minute` 是本机实测识别 60 秒语音的耗时，卡片上统一显示为“60 秒语音约 X 秒”。新增模型时补上分类、实测速度和模型主页，并实测能下载、校验、加载和识别；许可协议记录在 THIRD_PARTY_NOTICES.md。
 
 ## 发布安装包
 

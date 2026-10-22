@@ -166,3 +166,46 @@ def test_ambiguous_number_negation_requires_review():
         "不是＋数字" in warning
         for warning in validate_cleanup("预算3000元，不是5000元", CleanupPayload(text="预算5000元。"))
     )
+
+
+def capture_transport(payload, seen):
+    def handler(request):
+        seen.append(json.loads(request.content))
+        content = json.dumps(payload, ensure_ascii=False)
+        return httpx.Response(
+            200,
+            json={"choices": [{"finish_reason": "stop", "message": {"content": content}}], "usage": {"total_tokens": 30}},
+        )
+
+    return httpx.MockTransport(handler)
+
+
+def test_spoken_translation_request_types_the_translation_without_chinese_checks():
+    seen = []
+    payload = {"text": "The plan is not settled yet, don't send it.", "edits": [], "warnings": [], "translated_to": "英语"}
+    cleaner = DeepSeekCleaner("test", transport=capture_transport(payload, seen))
+    result = cleaner.clean("这个方案还没确定，不要发。翻译成英文。")
+    assert result.text == payload["text"] and result.translated_to == "英语"
+    assert not result.warnings  # Negation, hedge and length checks compare Chinese wording only.
+    assert "唯一的例外是翻译要求" in seen[0]["messages"][0]["content"]
+
+
+def test_spoken_translation_can_be_turned_off():
+    seen = []
+    payload = {"text": "这个方案还没确定。", "edits": [], "warnings": [], "translated_to": "英语"}
+    cleaner = DeepSeekCleaner("test", transport=capture_transport(payload, seen), voice_translation=False)
+    assert cleaner.clean("这个方案还没确定。翻译成英文。").translated_to == ""
+    prompt = seen[0]["messages"][0]["content"]
+    assert "唯一的例外是翻译要求" not in prompt and "只整理不翻译" in prompt
+
+
+def test_translate_button_sends_the_text_and_target_language():
+    seen = []
+    cleaner = DeepSeekCleaner("test", transport=capture_transport({"text": "明日の十時に会議です。"}, seen))
+    result = cleaner.translate("明天十点开会。", "日语")
+    assert result.text == "明日の十時に会議です。" and result.original == "明天十点开会。"
+    assert result.translated_to == "日语" and result.usage["total_tokens"] == 30 and not result.warnings
+    system, user = seen[0]["messages"]
+    assert "翻译成日语" in system["content"] and json.loads(user["content"]) == {"text": "明天十点开会。"}
+    with pytest.raises(CleanupError, match="格式"):
+        DeepSeekCleaner("test", transport=capture_transport({"text": ""}, [])).translate("你好", "英语")

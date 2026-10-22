@@ -158,3 +158,70 @@ def test_try_recording_counts_down_and_can_finish_early(monkeypatch):
     early = checks.record_clip(10, None, stop)
     assert fake.stopped and early.size < 16000  # Only what was recorded before "说完了".
     assert checks.TRY_SECONDS == 10
+
+
+def _fake_server(monkeypatch, fail_gpu=False, device="NVIDIA GeForce RTX 5080"):
+    """Record which engine starts, without launching llama-server."""
+    from saywell import llama
+
+    started = []
+    monkeypatch.setattr(llama, "unpack_engine", lambda archive, target: target / SERVER)
+
+    def start(self, server, model, mmproj, threads, gpu):
+        started.append((server.parent.name, gpu))
+        if gpu and fail_gpu:
+            raise llama.ModelError("Vulkan device lost")
+
+    monkeypatch.setattr(llama.LlamaServerRecognizer, "_start", start)
+    monkeypatch.setattr(llama.LlamaServerRecognizer, "_gpu_device", lambda self: device)
+    monkeypatch.setattr(llama.LlamaServerRecognizer, "close", lambda self: None)
+    return llama, started
+
+
+def _recognizer(llama, tmp_path, use_gpu):
+    return llama.LlamaServerRecognizer(
+        tmp_path / "m.gguf", tmp_path / "p.gguf", tmp_path / "cpu.zip", 4, gpu_engine=tmp_path / "vk.zip", use_gpu=use_gpu
+    )
+
+
+def test_gpu_acceleration_runs_the_vulkan_engine(monkeypatch, tmp_path):
+    llama, started = _fake_server(monkeypatch)
+    recognizer = _recognizer(llama, tmp_path, use_gpu=True)
+    assert started == [("llama.cpp-vulkan", True)]
+    assert recognizer.device == "NVIDIA GeForce RTX 5080" and not recognizer.gpu_problem
+    started.clear()
+    _recognizer(llama, tmp_path, use_gpu=False)
+    assert started == [("llama.cpp", False)]
+
+
+@pytest.mark.parametrize("fail_gpu,device,problem", [(True, "GPU", "显卡驱动"), (False, "", "没有找到")])
+def test_gpu_problems_fall_back_to_the_cpu_engine(monkeypatch, tmp_path, fail_gpu, device, problem):
+    llama, started = _fake_server(monkeypatch, fail_gpu=fail_gpu, device=device)
+    recognizer = _recognizer(llama, tmp_path, use_gpu=True)
+    assert started == [("llama.cpp-vulkan", True), ("llama.cpp", False)]
+    assert recognizer.device == "" and problem in recognizer.gpu_problem
+
+
+def test_gpu_device_is_read_from_the_server_log(tmp_path):
+    from saywell.llama import LlamaServerRecognizer
+
+    recognizer = LlamaServerRecognizer.__new__(LlamaServerRecognizer)
+    recognizer.log = tmp_path / "llama-server.log"
+    # Lines as llama.cpp b11696 writes them at log level 4.
+    recognizer.log.write_text(
+        "llama_prepare_model_devices: using device Vulkan1 (NVIDIA GeForce RTX 5080) (0000:01:00.0) - 15205 MiB free\n"
+        "load_tensors: offloaded 29/29 layers to GPU\n",
+        encoding="utf-8",
+    )
+    assert recognizer._gpu_device() == "NVIDIA GeForce RTX 5080"
+    # With no usable card it still claims the layers were offloaded, but names no device.
+    recognizer.log.write_text("load_tensors: offloaded 29/29 layers to GPU\nCLIP using CPU backend\n", encoding="utf-8")
+    assert recognizer._gpu_device() == ""
+
+
+def test_qwen3_ships_both_engines_and_supports_gpu():
+    from saywell.models import LLAMA_CPP, LLAMA_CPP_VULKAN
+
+    assert QWEN3_ASR.gpu and LLAMA_CPP in QWEN3_ASR.files and LLAMA_CPP_VULKAN in QWEN3_ASR.files
+    assert dict(QWEN3_ASR.inputs)["gpu_engine"] == LLAMA_CPP_VULKAN.name
+    assert LLAMA_CPP_VULKAN.url.endswith("/b11696/llama-b11696-bin-win-vulkan-x64.zip")

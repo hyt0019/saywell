@@ -43,6 +43,8 @@ class AsrModel:
     seconds_per_minute: float = 0.0
     # Plaza (模型广场) filter group; empty for the curated models.
     category: str = ""
+    # Can run on the graphics card when the user turns on GPU acceleration.
+    gpu: bool = False
 
     @property
     def size(self) -> int:
@@ -170,8 +172,17 @@ LLAMA_CPP = ModelFile(
     19575690,
     "1e7c47dff58467540d53e6cf302d83951bcb165afb252c2952ed3872190fc60d",
 )
-# The server and its libraries are unpacked here, inside the model folder, on first use.
+# The Vulkan build runs on NVIDIA, AMD and Intel graphics cards without CUDA; it is used
+# when GPU acceleration is on and falls back to the CPU build if the card cannot run it.
+LLAMA_CPP_VULKAN = ModelFile(
+    "llama-b11696-bin-win-vulkan-x64.zip",
+    "https://github.com/ggml-org/llama.cpp/releases/download/b11696/llama-b11696-bin-win-vulkan-x64.zip",
+    32220792,
+    "f62bbf1ce154911ce37a381b9b308893b064301ecb7512f30c7c2abf7f812e75",
+)
+# The servers and their libraries are unpacked here, inside the model folder, on first use.
 ENGINE_DIR = "llama.cpp"
+GPU_ENGINE_DIR = "llama.cpp-vulkan"
 _qwen3 = _hf("ggml-org/Qwen3-ASR-0.6B-GGUF", "928ab958557df9aa2ef1c93e0e83c7ad0933fae2")
 
 QWEN3_ASR = AsrModel(
@@ -189,15 +200,18 @@ QWEN3_ASR = AsrModel(
             "mmproj-Qwen3-ASR-0.6B-Q8_0.gguf", 214392480, "41a342b5e4c514e968cb756de6cd1b7be39eff43c44c57a2ef5fc6522e36603d"
         ),
         LLAMA_CPP,
+        LLAMA_CPP_VULKAN,
         VAD,
     ),
     inputs=(
         ("model", "Qwen3-ASR-0.6B-Q8_0.gguf"),
         ("mmproj", "mmproj-Qwen3-ASR-0.6B-Q8_0.gguf"),
         ("engine", LLAMA_CPP.name),
+        ("gpu_engine", LLAMA_CPP_VULKAN.name),
     ),
     homepage="https://huggingface.co/Qwen/Qwen3-ASR-0.6B",
     seconds_per_minute=4.16,
+    gpu=True,
 )
 
 # ---------- 模型广场：精选模型之外的扩展选择 ----------

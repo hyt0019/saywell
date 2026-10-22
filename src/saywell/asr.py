@@ -25,15 +25,15 @@ def tidy_spacing(text: str) -> str:
     return _SPACING.sub("", text)
 
 
-def create_recognizer(directory: Path, model_id: str):
+def create_recognizer(directory: Path, model_id: str, gpu: bool = False):
     """Build the recognizer from the catalog entry: kind picks the sherpa-onnx loader,
-    or the local llama.cpp server for GGUF models."""
+    or the local llama.cpp server for GGUF models (on the graphics card when gpu is set)."""
     model = get_model(model_id)
     if model.kind == "llama_server":
         from .llama import LlamaServerRecognizer, server_threads
 
         files = {key: directory / name for key, name in model.inputs}
-        return LlamaServerRecognizer(**files, threads=server_threads())
+        return LlamaServerRecognizer(**files, threads=server_threads(), use_gpu=gpu and model.gpu)
     threads = min(4, max(1, (os.cpu_count() or 2) // 2))
     loader = getattr(sherpa_onnx.OfflineRecognizer, f"from_{model.kind}")
     files = {key: str(directory / name) for key, name in model.inputs}
@@ -41,13 +41,18 @@ def create_recognizer(directory: Path, model_id: str):
 
 
 class LocalRecognizer:
-    def __init__(self, directory: Path, model: str = DEFAULT_MODEL):
+    def __init__(self, directory: Path, model: str = DEFAULT_MODEL, gpu: bool = False):
         spec = get_model(model)
         if not models_ready(directory, verify=True, model=spec):
             raise ModelError(f"{spec.name} 未就绪或校验失败，请在“语音模型”中重新下载。")
         self.directory = directory
         self.model = spec.id
-        self.recognizer = create_recognizer(directory, spec.id)
+        # GPU acceleration only applies to models that support it; remember what was asked for
+        # so turning the switch reloads the model.
+        self.gpu = gpu and spec.gpu
+        self.recognizer = create_recognizer(directory, spec.id, self.gpu)
+        self.device = getattr(self.recognizer, "device", "")
+        self.gpu_problem = getattr(self.recognizer, "gpu_problem", "")
 
     def close(self) -> None:
         """Stop a model that runs in its own process; in-process models are freed with this object."""

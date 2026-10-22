@@ -216,9 +216,9 @@ def test_pipeline_loads_selected_model_and_reloads_after_switch(monkeypatch):
     created = []
 
     class Recognizer:
-        def __init__(self, directory, model):
-            created.append(model)
-            self.directory, self.model = directory, model
+        def __init__(self, directory, model, gpu=False):
+            created.append(model if not gpu else f"{model}+gpu")
+            self.directory, self.model, self.gpu = directory, model, gpu
 
         def transcribe(self, *args):
             return "识别文字"
@@ -239,6 +239,12 @@ def test_pipeline_loads_selected_model_and_reloads_after_switch(monkeypatch):
     pipeline._run(2, threading.Event(), Settings(asr_model="xasr"), samples, "audio")
     assert created == ["xasr"]
     assert ("stage", (2, "正在加载 X-ASR 中英…")) in emitted
+    # GPU acceleration only matters for models that support it, and switching it reloads them.
+    pipeline._run(3, threading.Event(), Settings(asr_model="xasr", gpu_acceleration=True), samples, "audio")
+    assert created == ["xasr"]
+    pipeline._run(4, threading.Event(), Settings(asr_model="qwen3-asr", gpu_acceleration=True), samples, "audio")
+    pipeline._run(5, threading.Event(), Settings(asr_model="qwen3-asr"), samples, "audio")
+    assert created == ["xasr", "qwen3-asr+gpu", "qwen3-asr"]
     assert pipeline.release_recognizer() and pipeline.recognizer is None
 
 
@@ -403,7 +409,9 @@ def test_try_button_listens_until_finished_then_shows_the_text(model_dialog, mon
         return np.ones(16000, dtype=np.float32)
 
     monkeypatch.setattr(checks, "record_clip", record)
-    monkeypatch.setattr(checks, "try_model", lambda model, directory, samples: checks.CheckResult(True, "“你好” · 识别用时 0.2 秒"))
+    monkeypatch.setattr(
+        checks, "try_model", lambda model, directory, samples, gpu=False: checks.CheckResult(True, "“你好” · 识别用时 0.2 秒")
+    )
     card = model_dialog.dialog.cards["sensevoice"]
     card.try_button.click()
     assert listening.wait(5)

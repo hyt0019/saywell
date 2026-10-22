@@ -129,12 +129,12 @@ def record_clip(
     return clip.reshape(-1)
 
 
-def try_model(model: AsrModel, directory: Path, samples: np.ndarray) -> CheckResult:
+def try_model(model: AsrModel, directory: Path, samples: np.ndarray, gpu: bool = False) -> CheckResult:
     if samples.size == 0 or float(np.max(np.abs(samples))) < 0.003:
         return CheckResult(False, "没有听到声音，请检查麦克风后再试")
     from .asr import LocalRecognizer
 
-    recognizer = LocalRecognizer(directory, model.id)
+    recognizer = LocalRecognizer(directory, model.id, gpu)
     try:
         started = time.monotonic()
         text = recognizer.transcribe(samples)
@@ -143,4 +143,5 @@ def try_model(model: AsrModel, directory: Path, samples: np.ndarray) -> CheckRes
         recognizer.close()
     if not text.strip():
         return CheckResult(False, "没有识别出文字，请靠近麦克风、说清楚一些再试")
-    return CheckResult(True, f"“{text.strip()}” · 识别用时 {spent:.1f} 秒")
+    where = " · GPU" if getattr(recognizer, "device", "") else ""
+    return CheckResult(True, f"“{text.strip()}” · 识别用时 {spent:.1f} 秒{where}")

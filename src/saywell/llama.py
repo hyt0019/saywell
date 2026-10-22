@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -21,12 +22,15 @@ from types import SimpleNamespace
 import httpx
 import numpy as np
 
-from .models import ENGINE_DIR, ModelError
+from .models import ENGINE_DIR, GPU_ENGINE_DIR, ModelError
 from .settings import data_dir
 
 SERVER = "llama-server.exe"
 START_TIMEOUT = 120
 _job = None
+# While loading, llama.cpp logs "using device Vulkan1 (NVIDIA GeForce RTX 5080) …" for each card it uses.
+# (Its "offloaded 29/29 layers to GPU" line is printed even when no card is usable, so it proves nothing.)
+_DEVICE = re.compile(r"using device (\S+) \(([^)]+)\)")
 
 
 def _kill_with_app(process: subprocess.Popen) -> None:
@@ -100,23 +104,56 @@ class _Stream:
 
 
 class LlamaServerRecognizer:
-    def __init__(self, model: Path, mmproj: Path, engine: Path, threads: int):
-        server = unpack_engine(engine, engine.parent / ENGINE_DIR)
+    def __init__(
+        self,
+        model: Path,
+        mmproj: Path,
+        engine: Path,
+        threads: int,
+        gpu_engine: Path | None = None,
+        use_gpu: bool = False,
+    ):
+        self.log = data_dir() / "llama-server.log"
+        self.log.parent.mkdir(parents=True, exist_ok=True)
+        # Which graphics card does the work; empty when running on the CPU.
+        self.device = ""
+        # Why GPU acceleration was asked for but not used, shown to the user once.
+        self.gpu_problem = ""
+        if use_gpu and gpu_engine is not None:
+            try:
+                self._start(unpack_engine(gpu_engine, gpu_engine.parent / GPU_ENGINE_DIR), model, mmproj, threads, gpu=True)
+                self.device = self._gpu_device()
+                if self.device:
+                    return
+                self.gpu_problem = "没有找到可用的显卡"
+            except (ModelError, OSError, zipfile.BadZipFile):
+                self.gpu_problem = "显卡驱动不支持或显存不足"
+            self.close()
+            try:  # Keep the failed attempt's log for troubleshooting; the CPU run writes a new one.
+                self.log.replace(self.log.with_name("llama-server-gpu.log"))
+            except OSError:
+                pass
+        self._start(unpack_engine(engine, engine.parent / ENGINE_DIR), model, mmproj, threads, gpu=False)
+
+    def _start(self, server: Path, model: Path, mmproj: Path, threads: int, gpu: bool) -> None:
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         self.key = secrets.token_urlsafe(24)
         self.url = f"http://127.0.0.1:{port}"
-        log = data_dir() / "llama-server.log"
-        log.parent.mkdir(parents=True, exist_ok=True)
-        self.log = log
-        with log.open("wb") as output:
+        arguments = [
+            str(server), "-m", str(model), "--mmproj", str(mmproj),
+            "--host", "127.0.0.1", "--port", str(port), "--api-key", self.key,
+            "-t", str(threads), "-c", "4096", "-np", "1", "--no-webui",
+        ]
+        if gpu:
+            # Every layer on the card; llama.cpp itself picks the dedicated GPU over an integrated one.
+            # Log level 4 adds the "using device …" and "offloaded N/N layers" lines read by _gpu_device;
+            # the default level no longer prints them.
+            arguments += ["-ngl", "999", "-lv", "4"]
+        with self.log.open("wb") as output:
             self.process = subprocess.Popen(
-                [
-                    str(server), "-m", str(model), "--mmproj", str(mmproj),
-                    "--host", "127.0.0.1", "--port", str(port), "--api-key", self.key,
-                    "-t", str(threads), "-c", "4096", "-np", "1", "--no-webui",
-                ],
+                arguments,
                 stdout=output,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
@@ -132,6 +169,15 @@ class LlamaServerRecognizer:
         except BaseException:
             self.close()
             raise
+
+    def _gpu_device(self) -> str:
+        """The card named in the server log, or "" if the model ended up on the CPU."""
+        try:
+            text = self.log.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        device = _DEVICE.search(text)
+        return device.group(2) if device else ""
 
     def _wait_ready(self) -> None:
         deadline = time.monotonic() + START_TIMEOUT
