@@ -768,9 +768,16 @@ class MainWindow(QMainWindow):
     def open_models(self):
         if self.state != "idle":
             return
-        dialog = ModelDialog(self.settings, self.downloads, self.apply_model_settings, self)
+        dialog = ModelDialog(self.settings, self.downloads, self.apply_model_settings, self, self.release_model)
         dialog.exec()
         self.refresh_controls()
+
+    def release_model(self) -> bool:
+        """Unload the speech model so its files can be deleted; False while it is recognizing."""
+        if not self.pipeline.release_recognizer():
+            return False
+        self.device = ""
+        return True
 
     def apply_model_settings(self, new: Settings) -> bool:
         try:

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from saywell import models, settings as settings_module, ui
 from saywell.asr import join_segments, tidy_spacing
 from saywell.cleanup import Cancelled
-from saywell.models import CATALOG, SENSE_VOICE, VAD, AsrModel, ModelFile, download_model, get_model
+from saywell.models import ALL_MODELS, CATALOG, SENSE_VOICE, VAD, AsrModel, ModelFile, download_model, get_model
 from saywell.pipeline import ModelDownloads, Pipeline
 from saywell.settings import Settings
 from saywell.ui import STYLE, ModelDialog
@@ -183,7 +183,6 @@ def test_model_dialog_downloads_into_chosen_location_then_switches(model_dialog)
     assert view.applied[-1].asr_model == "xasr"
     assert view.dialog.cards["xasr"].property("active")
     assert not view.dialog.cards["sensevoice"].property("active")
-    assert not view.dialog.cards["sensevoice"].delete_button.isVisibleTo(view.dialog)
 
 
 def test_model_dialog_deletes_only_model_files(model_dialog, monkeypatch):
@@ -201,6 +200,48 @@ def test_model_dialog_deletes_only_model_files(model_dialog, monkeypatch):
     view.dialog.cards["canary"].delete_button.click()
     assert not folder.exists()
     assert keep.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.parametrize("model_id", ["sensevoice", "qwen3-asr", "firered-aed"])
+def test_every_downloaded_model_can_be_deleted_including_the_one_in_use(model_dialog, monkeypatch, model_id):
+    view = model_dialog
+    released = []
+    view.dialog.release = lambda: released.append(True) or True
+    view.dialog.settings = replace(view.dialog.settings, asr_model=model_id)
+    view.ready.update({model.id for model in ALL_MODELS})
+    view.dialog.refresh()
+    assert not any(card.delete_button.isHidden() for card in view.dialog.cards.values())
+    deleted = []
+    monkeypatch.setattr(ui, "delete_model_files", lambda model, directory: deleted.append(model.id))
+    questions = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: questions.append(args[2]) or QMessageBox.StandardButton.Yes)
+    view.dialog.cards[model_id].delete_button.click()
+    assert deleted == [model_id]
+    assert released == [True]  # The model in use is unloaded before its files go.
+    assert "正在使用" in questions[0]
+    assert "已删除" in view.dialog.message.text()
+
+
+def test_model_in_use_is_kept_while_recognizing_and_failed_delete_is_reported(model_dialog, monkeypatch):
+    view = model_dialog
+    view.dialog.release = lambda: False
+    view.dialog.refresh()
+    deleted, warnings = [], []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    monkeypatch.setattr(ui, "delete_model_files", lambda model, directory: deleted.append(model.id))
+    view.dialog.cards["sensevoice"].delete_button.click()
+    assert deleted == [] and "正在识别" in warnings[0]
+
+    def locked(model, directory):
+        raise PermissionError("in use")
+
+    view.dialog.release = lambda: True
+    monkeypatch.setattr(ui, "delete_model_files", locked)
+    view.dialog.cards["sensevoice"].delete_button.click()
+    assert "正在使用或没有权限" in warnings[1]
+    assert "已删除" not in view.dialog.message.text()
+    assert view.dialog.settings.model_paths == {"sensevoice": str(view.root / "legacy")}  # Pin kept.
 
 
 def test_model_dialog_warns_before_download_without_disk_space(model_dialog, monkeypatch):

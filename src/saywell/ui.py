@@ -67,7 +67,6 @@ from .models import (
     GPU_ENGINE_DIR,
     PLAZA,
     PLAZA_CATEGORIES,
-    SENSE_VOICE,
     AsrModel,
     models_ready,
 )
@@ -1674,7 +1673,7 @@ class ModelCard(QFrame):
         self.progress.setVisible(mine)
         self.progress.setValue(percent if mine else 0)
         self.cancel_button.setVisible(mine)
-        self.delete_button.setVisible(ready and not active and not mine and self.model.id != SENSE_VOICE.id)
+        self.delete_button.setVisible(ready and not mine)
         self.action.setVisible(not mine)
         self.action.set_icon(None)
         if mine:
@@ -1701,11 +1700,13 @@ class ModelDialog(QDialog):
 
     changed = Signal(object)
 
-    def __init__(self, settings: Settings, downloads, apply, parent=None):
+    def __init__(self, settings: Settings, downloads, apply, parent=None, release=None):
         super().__init__(parent)
         self.settings = settings
         self.downloads = downloads
         self.apply = apply
+        # Unloads the model in use before its files are deleted; returns False while it is recognizing.
+        self.release = release
         self.setWindowTitle("语音模型 · 好好说")
         available = self.screen().availableGeometry().height() if self.screen() else 900
         self.resize(720, max(560, min(860, available - 60)))
@@ -1959,17 +1960,25 @@ class ModelDialog(QDialog):
 
     def delete_model(self, model: AsrModel):
         directory = self.settings.model_path(model.id)
+        active = model.id == self.settings.asr_model
+        note = "这是正在使用的模型，删除后要先换用其他模型或重新下载，才能继续录音。\n\n" if active else ""
         answer = QMessageBox.question(
             self,
             "删除模型",
-            f"删除 {model.name} 的模型文件（{model.size_label}）？\n{directory}\n\n之后需要时可以重新下载。",
+            f"删除 {model.name} 的模型文件（{model.size_label}）？\n{directory}\n\n{note}之后需要时可以重新下载。",
         )
         if answer != QMessageBox.StandardButton.Yes:
+            return
+        # The model in use may still be loaded; Qwen3-ASR's engine keeps its files open.
+        if active and self.release and not self.release():
+            QMessageBox.warning(self, "未能删除", "模型正在识别，请稍后重试。")
             return
         try:
             delete_model_files(model, directory)
         except OSError:
             QMessageBox.warning(self, "未能删除", "模型文件正在使用或没有权限，请稍后重试。")
+            self.refresh()
+            return
         paths = {key: value for key, value in self.settings.model_paths.items() if key != model.id}
         if paths != self.settings.model_paths:
             self.commit(replace(self.settings, model_paths=paths))
