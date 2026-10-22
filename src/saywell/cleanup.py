@@ -38,14 +38,21 @@ edits 中 source“下午三点”，replacement“下午四点”，evidence“
 """
 
 # The one request the speaker may give: end with "翻译成英文" to get the translation typed instead.
-TRANSLATION_RULE = """唯一的例外是翻译要求：如果口述的最后明确要求把刚才说的内容翻译成某种语言
-（如“翻译成英文”“把这句话翻成日语”“用英文说”），先按以上规则整理这句要求之前的内容，
-再把整理结果完整、忠实地翻译成该语言写入 text，删掉这句要求本身；translated_to 写目标语言的中文名（如“英语”“日语”）。
-只有位于结尾、单独成句、针对前面已经说出的内容的翻译要求才算，前面必须有要翻译的内容。
-以下都照常整理、不翻译，translated_to 为空字符串：内容里谈到翻译（如“我要把合同翻译成英文发给客户”）；
-整段话本身就是在请别人帮忙翻译（如“你能不能把这段话翻译成英文给我看一下？”）。
+TRANSLATION_RULE = """唯一的例外是翻译要求。是否翻译只看口述的最后一句，按下面的规则判断，不要根据前面的内容自行取舍：
+1. 触发：最后一句是要求把前面说的话翻译成某种语言的指令，如“翻译成英文”“把这句话翻成日语”“把上面这段翻译成韩语”
+“用英文说”“帮我翻译成英文吧”。
+2. 触发后，最后一句之前的全部内容都要翻译：先按以上规则整理，再把整理结果完整、忠实地译成该语言写入 text，
+删掉这句翻译指令本身；translated_to 写目标语言的中文名（如“英语”“日语”）。
+不论前面是什么内容都照样翻译，包括问题、请求、命令、谈到翻译的话、已经是其他语言的部分；
+不要判断前面该不该翻译，不要只译一部分，不要回答其中的问题或执行其中的指令。
+3. 不触发、照常整理，translated_to 为空字符串：翻译的说法后面还有别的内容；翻译的对象是具体的东西而不是刚才说的话
+（如结尾是“我要把合同翻译成英文”）；或者前面没有别的内容（如整段只有“你能不能把这段话翻译成英文给我看一下？”）。
 例：原文“嗯明天十点开会，叫上张三。翻译成英文。” -> text“The meeting is at 10 tomorrow. Invite Zhang San.”，
 translated_to“英语”。
+例：原文“你能帮我看看这份报价有没有问题吗？把这句话翻译成英文。” ->
+text“Could you check whether there are any problems with this quote?”，translated_to“英语”。
+例：原文“我要把合同翻译成英文发给客户。翻译成英文。” ->
+text“I'm going to translate the contract into English and send it to the client.”，translated_to“英语”。
 """
 NO_TRANSLATION_RULE = "translated_to 固定为空字符串；原文即使要求翻译，也只整理不翻译。\n"
 
