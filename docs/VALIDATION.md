@@ -1,5 +1,13 @@
 # 验证记录
 
+## 2026-10-22：发布 v0.6.1；界面动效
+
+- 已发布 [v0.6.1](https://github.com/hyt0019/saywell/releases/tag/v0.6.1)（好好说 Saywell 0.6.1）：标签指向 `d657afc`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/39794511668) 通过。
+- `scripts\build_installer.ps1` 跑完 268 项测试、通过打包后的 `--smoke` 后生成 `Saywell-Setup-0.6.1.exe`（68.1 MB），SHA-256 为 `8726763ab10d2146d2f13daab19ef593c27c4885e3d415ebae38d8748b7a0ba0`；从发布页重新下载的安装包哈希一致。
+- **逐帧检查动效**：在动画进行中每 35–70 毫秒截一次控件，确认开关滑块弹过去、轨道同时渐变；分段控件滑块带轻微回弹、文字渐变；录音按钮由蓝经紫、粉到红，麦克风淡出、停止方块淡入，转入处理时麦克风不会在中途闪现；录音卡片光边淡入淡出。
+- **真实屏幕**：底部浮窗出现后 40 毫秒窗口不透明度 0.16，屏幕上该处像素是桌面和浮窗的混合色，约 0.2 秒到位；`dismiss` 后 80 毫秒不透明度 0.3，约 0.2 秒后隐藏。
+- 未在高刷新率显示器、远程桌面和关闭了 Windows 动画效果的电脑上看过动效。
+
 ## 2026-10-22：发布 v0.6.0；按住右 Ctrl 说话和自定义快捷键
 
 - 已发布 [v0.6.0](https://github.com/hyt0019/saywell/releases/tag/v0.6.0)（好好说 Saywell 0.6.0）：标签指向 `a797ed3`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/39787464509) 通过。
