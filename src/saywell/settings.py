@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -82,6 +83,9 @@ class Settings:
     collect_stats: bool = True
     start_on_login: bool = False
     glossary: list[str] = field(default_factory=lambda: ["DeepSeek", "API", "Windows", "Ctrl", "Shift"])
+    # Imported professional lexicons: {"id", "name", "enabled", "count"}; the terms live in
+    # lexicons/<id>.txt under the data folder (see vocabulary.py).
+    lexicons: list[dict] = field(default_factory=list)
     api_timeout: float = 25.0
     asr_model: str = DEFAULT_MODEL
     # Where new model downloads go. Models downloaded before a location change
@@ -142,6 +146,18 @@ class Settings:
                 elif key == "glossary":
                     if isinstance(value, list) and all(isinstance(word, str) for word in value):
                         values[key] = [word[:80] for word in value[:100]]
+                elif key == "lexicons":
+                    if isinstance(value, list):
+                        values[key] = [
+                            {"id": item["id"], "name": item["name"][:80], "enabled": item["enabled"], "count": item["count"]}
+                            for item in value
+                            if isinstance(item, dict)
+                            and isinstance(item.get("id"), str)
+                            and re.fullmatch(r"[0-9a-f]{32}", item["id"])
+                            and isinstance(item.get("name"), str)
+                            and type(item.get("enabled")) is bool
+                            and type(item.get("count")) is int
+                        ]
                 elif key == "asr_model":
                     if value in MODEL_IDS:
                         values[key] = value

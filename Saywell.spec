@@ -1,5 +1,5 @@
 # Build with: .venv\Scripts\python.exe -m PyInstaller --noconfirm Saywell.spec
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 import os
 from pathlib import Path
 import sys
@@ -16,7 +16,7 @@ a = Analysis(
     ['scripts/run_app.py'],
     pathex=['src'],
     binaries=sherpa_binaries,
-    datas=sherpa_data + [('src/saywell/assets', 'saywell/assets')],
+    datas=sherpa_data + collect_data_files('pypinyin') + [('src/saywell/assets', 'saywell/assets')],
     hiddenimports=sherpa_hidden + ['saywell.cli', 'keyring.backends.Windows', 'win32crypt'],
     excludes=['tkinter', 'pytest', 'ruff'],
 )

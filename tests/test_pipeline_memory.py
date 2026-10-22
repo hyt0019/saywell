@@ -28,7 +28,7 @@ def test_recording_is_released_after_asr_and_on_failure_or_cancel(monkeypatch, o
     recording = weakref.ref(samples)
     api_retained_audio = []
 
-    def transcribe(audio, cancel, partial):
+    def transcribe(audio, cancel, partial, _vocabulary=None):
         entered_asr.set()
         if not allow_asr.wait(5):
             raise RuntimeError("Test worker timed out")

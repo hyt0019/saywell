@@ -8,6 +8,7 @@ from pathlib import Path
 from .cleanup import ApiCleaner, CleanupError
 from .models import ALL_MODELS
 from .settings import Settings, read_key
+from .vocabulary import Vocabulary
 
 
 def main() -> int:
@@ -56,7 +57,7 @@ def main() -> int:
             audio = decode_audio(args.input)
             data["duration"] = round(audio.size / 16000, 2)
             recognizer = LocalRecognizer(model_dir, asr_model)
-            text = recognizer.transcribe(audio)
+            text = recognizer.transcribe(audio, vocabulary=Vocabulary.for_settings(settings))
             del audio
             data.update(original=text, asr_seconds=round(time.monotonic() - started, 2))
         else:
@@ -68,7 +69,7 @@ def main() -> int:
                 args.model or settings.model,
                 settings.api_timeout,
                 base_url=base_url,
-            ).clean(text, settings.glossary)
+            ).clean(text, Vocabulary.for_settings(settings).glossary_for(text))
             data.update(
                 text=result.text,
                 warnings=result.warnings,

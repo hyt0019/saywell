@@ -25,6 +25,7 @@
 | PyAV / FFmpeg | 音频解码与重采样 | https://github.com/PyAV-Org/PyAV |
 | sounddevice / PortAudio | 麦克风采集 | https://github.com/spatialaudio/python-sounddevice |
 | NumPy | 音频数组处理 | https://numpy.org/ |
+| pypinyin | 专业词库按读音比对，MIT | https://github.com/mozillazg/python-pinyin |
 | HTTPX / Pydantic | HTTP 与输出校验 | https://www.python-httpx.org/ ; https://docs.pydantic.dev/ |
 | keyring / pywin32 | Windows 凭据与系统接口 | https://github.com/jaraco/keyring ; https://github.com/mhammond/pywin32 |
 | PyInstaller | 应用打包 | https://pyinstaller.org/ |
@@ -32,3 +33,5 @@
 所有模型均为 sherpa-onnx 官方转换的版本（https://huggingface.co/csukuangfj 、https://huggingface.co/csukuangfj2 ），由用户在“语音模型”中按需下载，不随程序分发。应用图标为本项目自有素材。
 
 精确依赖版本见 requirements-lock.txt。应用采用目录式打包以保留独立动态库；模型权重不嵌入可执行文件。DeepSeek 是需要用户自备密钥的外部 API 服务。
+
+搜狗细胞词库（.scel）的文件结构参考 ciku（MIT）和深蓝词库转换的公开说明自行解析，未复制其代码。程序不内置、也不代为下载任何第三方词库，词库文件由用户自行导入。

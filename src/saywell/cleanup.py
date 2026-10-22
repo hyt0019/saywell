@@ -62,6 +62,10 @@ def system_prompt(voice_translation: bool = True) -> str:
     return SYSTEM_PROMPT + (TRANSLATION_RULE if voice_translation else NO_TRANSLATION_RULE)
 
 
+# 100 personal glossary words plus up to 30 matched lexicon terms (vocabulary.py).
+GLOSSARY_LIMIT = 130
+
+
 class CleanupError(RuntimeError):
     pass
 
@@ -107,7 +111,7 @@ class ApiCleaner:
     ) -> CleanupResult:
         text = self._check(text)
         started = time.monotonic()
-        user = {"transcript": text, "glossary": (glossary or [])[:100]}
+        user = {"transcript": text, "glossary": (glossary or [])[:GLOSSARY_LIMIT]}
         messages = [
             {"role": "system", "content": system_prompt(self.voice_translation)},
             {

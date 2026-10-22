@@ -65,6 +65,7 @@ from .ui import (
     text_column,
     tray_icon,
 )
+from .vocabulary import delete_lexicons, warm
 from .windows import Hotkeys, PasteError, current_target, modifiers_held, paste_text, shortcut_held
 
 IDLE_STATS = "音频只在本机识别，录音不落盘；整理时仅发送文字至所选 API。"
@@ -864,6 +865,15 @@ class MainWindow(QMainWindow):
             return
         dialog = SettingsDialog(current, self)
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        known = {item["id"] for item in current.lexicons} | getattr(dialog, "imported_ids", set())
+        try:
+            self.apply_settings_dialog(dialog, accepted)
+        finally:
+            # Lexicon files imported or removed in the dialog go unless the saved settings list them.
+            delete_lexicons(known - {item["id"] for item in self.settings.lexicons})
+            warm(self.settings.lexicons)
+
+    def apply_settings_dialog(self, dialog, accepted: bool):
         if getattr(dialog, "stats_cleared", False):
             (self.usage or StatsStore()).clear()
             if self.usage is not None:
@@ -1015,6 +1025,11 @@ def main() -> int:
         import httpx
 
         httpx.Client().close()
+        # Imported lexicons are matched by pinyin; the packaged pypinyin data must be there.
+        from .vocabulary import TermIndex
+
+        if TermIndex.build(["龚彧宸"]).lookup("龚玉晨") != ["龚彧宸"]:
+            raise RuntimeError("Pinyin matching does not work in this build.")
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Saywell")
     app.setOrganizationName("Saywell")
@@ -1029,6 +1044,7 @@ def main() -> int:
     if not args.smoke:
         migrate_legacy_entry()
     window = MainWindow(native=not args.smoke)
+    warm(window.settings.lexicons)  # Ready before the first dictation needs it.
     try:
         HistoryStore().prune()
     except OSError:

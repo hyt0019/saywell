@@ -98,6 +98,8 @@ class _Stream:
         self.samples = np.zeros(0, dtype=np.float32)
         self.rate = 16000
         self.result = SimpleNamespace(text="")
+        # Terms the speaker may use; Qwen3-ASR reads them as a system message.
+        self.context = ""
 
     def accept_waveform(self, rate: int, samples: np.ndarray) -> None:
         self.rate, self.samples = rate, np.asarray(samples, dtype=np.float32)
@@ -197,10 +199,12 @@ class LlamaServerRecognizer:
 
     def decode_stream(self, stream: _Stream) -> None:
         audio = base64.b64encode(wav_bytes(stream.samples, stream.rate)).decode("ascii")
+        messages = [{"role": "system", "content": stream.context}] if stream.context else []
+        messages.append(
+            {"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": audio, "format": "wav"}}]}
+        )
         body = {
-            "messages": [
-                {"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": audio, "format": "wav"}}]}
-            ],
+            "messages": messages,
             "temperature": 0,
             "max_tokens": 512,
         }

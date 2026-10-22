@@ -71,6 +71,7 @@ from .models import (
     models_ready,
 )
 from .settings import Settings, read_key, save_key
+from .vocabulary import FILE_FILTER, LexiconError, import_lexicon
 from .shortcuts import RECORDING_CHOICES
 
 INK = "#1D1D1F"
@@ -1447,7 +1448,7 @@ class SettingsDialog(QDialog):
 
         words = Section(
             "个人词库",
-            "每行一个常用人名、项目名或英文术语，最多 100 个，整理时用于纠正拼写。",
+            "每行一个常用人名、项目名或英文术语，最多 100 个。整理时用于纠正拼写，用 Qwen3-ASR 时识别也会参考。",
             Glyph.EDIT,
         )
         self.glossary = QPlainTextEdit("\n".join(settings.glossary))
@@ -1455,6 +1456,29 @@ class SettingsDialog(QDialog):
         self.glossary.setMaximumHeight(180)
         words.body.addWidget(self.glossary)
         layout.addWidget(words)
+
+        lexicons = Section(
+            "专业词库",
+            "导入输入法或其他工具的词库。只在本机比对读音，和你说的话读音相近的词才会用于识别和整理；"
+            "中文词三个字及以上才参与比对，两个字的词请加到个人词库。",
+            Glyph.IMPORT,
+        )
+        # Edited here and saved with the other settings; files of unsaved imports are deleted afterwards.
+        self.lexicons = [dict(item) for item in settings.lexicons]
+        self.imported_ids: set[str] = set()
+        self.lexicon_rows = QVBoxLayout()
+        self.lexicon_rows.setSpacing(6)
+        lexicons.body.addLayout(self.lexicon_rows)
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(10)
+        self.import_button = make_button("导入词库…", Glyph.IMPORT, "toolbar")
+        self.import_button.clicked.connect(self.import_lexicon)
+        actions_row.addWidget(self.import_button, 0, Qt.AlignmentFlag.AlignTop)
+        self.lexicon_status = label("支持 txt、csv、json、搜狗 .scel、Rime .dict.yaml", "muted", wrap=True)
+        actions_row.addWidget(self.lexicon_status, 1)
+        lexicons.body.addLayout(actions_row)
+        layout.addWidget(lexicons)
+        self.fill_lexicons()
         layout.addStretch()
 
         footer, actions = footer_bar()
@@ -1503,6 +1527,64 @@ class SettingsDialog(QDialog):
 
         run_task(self, lambda _report: check_api(base_url, key, model, timeout), finished)
 
+    def fill_lexicons(self):
+        while self.lexicon_rows.count():
+            widget = self.lexicon_rows.takeAt(0).widget()
+            if widget:
+                widget.deleteLater()
+        if not self.lexicons:
+            self.lexicon_rows.addWidget(label("还没有导入专业词库。", "muted"))
+        for lexicon in self.lexicons:
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
+            line.setSpacing(8)
+            switch = Switch(f"{lexicon['name']} · {lexicon['count']:,} 个词")
+            switch.setChecked(lexicon["enabled"])
+            switch.toggled.connect(lambda on, item=lexicon: item.update(enabled=on))
+            line.addWidget(switch, 1)
+            remove = make_button("删除", Glyph.DELETE, "danger")
+            remove.clicked.connect(lambda _=False, item=lexicon: self.remove_lexicon(item))
+            line.addWidget(remove)
+            self.lexicon_rows.addWidget(row)
+
+    def import_lexicon(self):
+        from .checks import CheckResult
+
+        path, _ = QFileDialog.getOpenFileName(self, "导入词库", "", FILE_FILTER)
+        if not path:
+            return
+        self.import_button.setEnabled(False)
+        self.lexicon_status.setText("正在读取词库…")
+
+        def work(_report):
+            try:
+                return import_lexicon(Path(path))
+            except LexiconError as exc:
+                return CheckResult(False, str(exc))
+            except Exception:  # noqa: BLE001 - unreadable or malformed files of any kind
+                return CheckResult(False, "无法读取这个文件，请确认是支持的词库格式。")
+
+        def finished(result):
+            self.import_button.setEnabled(True)
+            if isinstance(result, CheckResult):
+                self.lexicon_status.setText("")
+                QMessageBox.warning(self, "无法导入词库", result.message)
+                return
+            entry, parsed = result
+            self.lexicons.append(entry)
+            self.imported_ids.add(entry["id"])
+            self.fill_lexicons()
+            more = "，超出 20 万词的部分未导入" if parsed.truncated else ""
+            self.lexicon_status.setText(f"已导入“{entry['name']}”，共 {entry['count']:,} 个词{more}。保存设置后生效。")
+
+        run_task(self, work, finished)
+
+    def remove_lexicon(self, lexicon: dict):
+        self.lexicons = [item for item in self.lexicons if item["id"] != lexicon["id"]]
+        self.fill_lexicons()
+        self.lexicon_status.setText(f"已移除“{lexicon['name']}”，保存设置后生效。")
+
     def save(self):
         words = list(dict.fromkeys(x.strip() for x in self.glossary.toPlainText().splitlines() if x.strip()))
         if len(words) > 100 or any(len(word) > 80 for word in words):
@@ -1543,6 +1625,7 @@ class SettingsDialog(QDialog):
                 collect_stats=self.collect_stats.isChecked(),
                 start_on_login=self.startup.isChecked(),
                 glossary=words,
+                lexicons=[dict(item) for item in self.lexicons],
                 voice_translation=self.voice_translation.isChecked(),
                 keep_in_clipboard=self.keep_in_clipboard.isChecked(),
                 gpu_acceleration=self.gpu.isChecked(),

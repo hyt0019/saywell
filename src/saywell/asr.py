@@ -53,6 +53,8 @@ class LocalRecognizer:
         self.recognizer = create_recognizer(directory, spec.id, self.gpu)
         self.device = getattr(self.recognizer, "device", "")
         self.gpu_problem = getattr(self.recognizer, "gpu_problem", "")
+        # Qwen3-ASR takes glossary terms as text context; sherpa-onnx models here do not.
+        self.uses_context = spec.kind == "llama_server"
 
     def close(self) -> None:
         """Stop a model that runs in its own process; in-process models are freed with this object."""
@@ -60,8 +62,20 @@ class LocalRecognizer:
         if close:
             close()
 
+    def _decode(self, clip: np.ndarray, context: str = "") -> str:
+        stream = self.recognizer.create_stream()
+        stream.accept_waveform(SAMPLE_RATE, clip)
+        if context:
+            stream.context = context
+        self.recognizer.decode_stream(stream)
+        return tidy_spacing(stream.result.text.strip())
+
     def transcribe(
-        self, samples: np.ndarray, cancel: Event | None = None, partial: Callable[[str], None] | None = None
+        self,
+        samples: np.ndarray,
+        cancel: Event | None = None,
+        partial: Callable[[str], None] | None = None,
+        vocabulary=None,
     ) -> str:
         if samples.size == 0 or float(np.max(np.abs(samples))) < 0.0001:
             return ""
@@ -92,6 +106,7 @@ class LocalRecognizer:
             segments.append((item.start, item.start + len(item.samples)))
             vad.pop()
         texts = []
+        vocabulary = vocabulary if self.uses_context else None
         for index, (start, end) in enumerate(segments):
             if cancel and cancel.is_set():
                 raise Cancelled("已取消识别。")
@@ -100,10 +115,15 @@ class LocalRecognizer:
             following = segments[index + 1][0] if index + 1 < len(segments) else samples.size
             left = max(0, start - 2400, (previous + start) // 2)
             right = min(samples.size, end + 2400, (following + end) // 2)
-            stream = self.recognizer.create_stream()
-            stream.accept_waveform(SAMPLE_RATE, samples[left:right])
-            self.recognizer.decode_stream(stream)
-            text = tidy_spacing(stream.result.text.strip())
+            clip = samples[left:right]
+            text = self._decode(clip)
+            # A segment that sounds like glossary or lexicon terms is heard once more with them
+            # as context, so the audio decides whether they fit.
+            terms = vocabulary.matches(text) if vocabulary and text else []
+            if terms:
+                if cancel and cancel.is_set():
+                    raise Cancelled("已取消识别。")
+                text = self._decode(clip, vocabulary.context(terms)) or text
             if text:
                 texts.append(text)
                 if partial:

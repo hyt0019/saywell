@@ -11,6 +11,7 @@ from .cleanup import ApiCleaner, Cancelled, CleanupError
 from .core import CleanupResult
 from .models import ModelError, download_model, get_model
 from .settings import Settings, read_key
+from .vocabulary import Vocabulary
 
 
 class Events(QObject):
@@ -114,6 +115,7 @@ class Pipeline:
         gpu_problem, device = "", None
         try:
             started = time.monotonic()
+            vocabulary = Vocabulary.for_settings(settings)
             if kind == "text":
                 text = source
                 duration = 0
@@ -145,7 +147,7 @@ class Pipeline:
                             self.events.stage.emit(job, "正在本地识别…")
                         device = getattr(self.recognizer, "device", "")
                         text = self.recognizer.transcribe(
-                            samples, cancel, lambda value: self.events.transcript.emit(job, value)
+                            samples, cancel, lambda value: self.events.transcript.emit(job, value), vocabulary
                         )
                 finally:
                     samples = None  # Audio is no longer needed while waiting for the text API.
@@ -165,7 +167,7 @@ class Pipeline:
                     settings.api_timeout,
                     base_url=settings.api_base_url,
                     voice_translation=settings.voice_translation,
-                ).clean(text, settings.glossary, cancel)
+                ).clean(text, vocabulary.glossary_for(text), cancel)
             except Cancelled:
                 raise
             except CleanupError as exc:
