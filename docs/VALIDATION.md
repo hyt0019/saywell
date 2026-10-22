@@ -1,5 +1,12 @@
 # 验证记录
 
+## 2026-10-22：发布 v0.4.1；任意已下载模型可删除
+
+- 已发布 [v0.4.1](https://github.com/hyt0019/saywell/releases/tag/v0.4.1)（好好说 Saywell 0.4.1）：标签指向 `8c60a94`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/39768356805) 通过。
+- `scripts\build_installer.ps1` 跑完 196 项测试、通过打包后的 `--smoke`（含 HTTPS 检查）后生成 `Saywell-Setup-0.4.1.exe`（67.4 MB），SHA-256 为 `4d644fa772b58900526748a521836fd31918792d5283976fb5d634c4c1022b63`；从发布页重新下载的安装包哈希一致。打包后的程序 `--cli clean` 调用 DeepSeek 正常。
+- **删除模型**：以前正在使用的模型和 SenseVoice 不显示“删除”。现在每个已下载的模型都显示，删除正在使用的模型前先卸载。用 Qwen3-ASR 的副本实测：不卸载直接删，GGUF 文件能删掉，但 `llama.cpp/` 里的 10 个引擎文件留下，llama-server 继续运行；先卸载再删，文件夹完整移除。新增测试覆盖推荐、广场和使用中的模型都能删除，识别中不删除，删除失败不再提示“已删除”也不丢失模型位置记录。
+- 未在干净环境中完整走一遍安装、首次使用和卸载。
+
 ## 2026-10-22：发布 v0.4.0
 
 - 已发布 [v0.4.0](https://github.com/hyt0019/saywell/releases/tag/v0.4.0)（好好说 Saywell 0.4.0）：标签指向 `d2683ed`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/39766687947) 通过。
