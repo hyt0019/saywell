@@ -1,5 +1,11 @@
 # 验证记录
 
+## 2026-10-22：发布 v0.3.0
+
+- 已发布 [v0.3.0](https://github.com/hyt0019/saywell/releases/tag/v0.3.0)（好好说 Saywell 0.3.0）：标签指向 `91ffcd9`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/39748510133) 通过。
+- `scripts\build_installer.ps1` 跑完 187 项测试后生成 `Saywell-Setup-0.3.0.exe`（67.5 MB），SHA-256 为 `52130da1d70c297e4493209e33ac812db6ca25db8d462c551a2ad2dcfb11e514`；从发布页重新下载的安装包哈希一致。打包出的程序 `--smoke` 退出码 0。
+- 未在干净环境中完整走一遍安装、首次使用和卸载；GPU 加速只在一台 RTX 5080 + AMD 核显的电脑上实测过。
+
 ## 2026-10-22：GPU 加速、语音翻译和翻译按钮
 
 - **GPU 加速（Qwen3-ASR）**：Qwen3-ASR 同时带 llama.cpp b11696 的 CPU 版和 Vulkan 版（`llama-b11696-bin-win-vulkan-x64.zip`，32,220,792 字节，SHA-256 `f62bbf1c…812e75`）。在 RTX 5080（另有 AMD 核显）上实测：
