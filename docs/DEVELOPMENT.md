@@ -65,9 +65,9 @@ GPU 加速：`AsrModel.gpu=True` 的模型（Qwen3-ASR）同时带有 llama.cpp 
 4. 打标签并发布：
 
 ```powershell
-git tag v0.4.1
-git push origin v0.4.1
-gh release create v0.4.1 release\Saywell-Setup-0.4.1.exe release\Saywell-Setup-0.4.1.exe.sha256 --title "好好说 Saywell 0.4.1" --notes-file docs\releases\v0.4.1.md
+git tag v0.5.0
+git push origin v0.5.0
+gh release create v0.5.0 release\Saywell-Setup-0.5.0.exe release\Saywell-Setup-0.5.0.exe.sha256 --title "好好说 Saywell 0.5.0" --notes-file docs\releases\v0.5.0.md
 ```
 
 也可以在 GitHub 网页的 Releases → Draft a new release 中选择标签、填写说明并上传这两个文件。
