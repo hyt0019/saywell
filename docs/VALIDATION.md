@@ -1,5 +1,18 @@
 # 验证记录
 
+## 2026-10-22：发布 v0.4.0
+
+- 已发布 [v0.4.0](https://github.com/hyt0019/saywell/releases/tag/v0.4.0)（好好说 Saywell 0.4.0）：标签指向 `d2683ed`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/39766687947) 通过。
+- `scripts\build_installer.ps1` 跑完 192 项测试、通过打包后的 `--smoke`（含 HTTPS 检查）后生成 `Saywell-Setup-0.4.0.exe`（67.4 MB），SHA-256 为 `f19a44c8a6b2e8466fd6f2a8329436ad15cd2c478b094d6f9d7f7ea38d1f99ad`；从发布页重新下载的安装包哈希一致。
+- 未在干净环境中完整走一遍安装、首次使用和卸载。
+
+## 2026-10-22：修复 0.3.0 无法联网；结果留在剪贴板
+
+- **原因**：0.3.0 用 Codex 自带的 Python 3.12.14 运行时打包。它改过的 `ssl.py` 在每次创建 `SSLContext` 时读取同目录的 `codex-rejected-cas.pem`，PyInstaller 不会打包这个文件。用控制台调试版复现：打包后的程序里连 `ssl.create_default_context()` 都抛出不带文件名的 `FileNotFoundError: [Errno 2]`，所以整理、翻译、下载模型、查询余额和 Qwen3-ASR（本地引擎也用 httpx）全部失败；源码运行一切正常。0.2.0 在运行时更新前打包，不受影响。
+- **修复**：虚拟环境改用 python.org 的 Python 3.12.10（OpenSSL 3.0.16）重建，依赖版本不变。`--smoke` 会创建一次 httpx 客户端，`scripts/build.ps1` 打包后运行它，失败即中止构建。
+- **打包后的程序实测**：`--cli clean` 调用 DeepSeek 正常；`--cli download-models --asr-model qwen3-asr` 下载约 1.07 GB 的 5 个文件并全部通过哈希校验；用 Qwen3-ASR（CPU）识别 75.61 秒示例录音耗时 10.39 秒（含加载模型），整理 2.34 秒。源码在新环境下用 GPU 识别同一录音：选中 RTX 5080，1.41 秒。
+- **结果留在剪贴板**：新增测试覆盖自动输入成功、失败和没有输入框三种情况（结果都留在剪贴板），主窗口录音不改动剪贴板，以及 `paste_text(keep_result=True)` 到时不恢复原剪贴板。没有在真实游戏里试过。
+
 ## 2026-10-22：发布 v0.3.0
 
 - 已发布 [v0.3.0](https://github.com/hyt0019/saywell/releases/tag/v0.3.0)（好好说 Saywell 0.3.0）：标签指向 `91ffcd9`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/39748510133) 通过。
