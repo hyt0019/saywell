@@ -69,6 +69,16 @@ GPU 加速：`AsrModel.gpu=True` 的模型（Qwen3-ASR）同时带有 llama.cpp 
 - **使用**：AI 整理时发送整份个人词库加最多 30 个比对到的专业词（`GLOSSARY_LIMIT = 130`）。Qwen3-ASR 第一遍识别不带上下文；某段文字比对到词时，带上这些词作为 system 消息再识别这一段，由声音决定写法。不能每段都带上下文：只要有上下文，Qwen3-ASR 就会在部分段落的中英文之间加空格，与分隔符无关。sherpa-onnx 的模型不接受文字上下文，只靠整理这一步。
 - **打包**：pypinyin 的字典是 JSON 数据文件，PyInstaller 没有现成钩子，由 `Saywell.spec` 的 `collect_data_files('pypinyin')` 收进程序；`--smoke` 会实际比对一次读音，缺文件时构建失败。
 
+## 动效
+
+界面控件都由 `ui.py` 自己绘制，状态变化用 `Tween` 过渡：它是一个会滑向新目标的数值，中途改目标时从当前位置接着走，连点两下开关会平滑折返而不是跳变。
+
+- 缓动只用两种：`ease_out`（快起慢停，用于悬停、淡入淡出等不该回弹的变化）和 `spring`（阻尼弹簧，阻尼小于 1 时落位带一点回弹，用于开关滑块、分段控件的白色滑块、按钮松开、浮窗出现）。
+- 开关：滑块弹过去，轨道颜色同时变蓝；按住时滑块朝目标方向拉长。按钮：按下时缩小约 3.5%，松开后弹回；选中状态（筛选标签、分段文字）渐变。
+- 录音按钮从蓝色经过极光色里的紫、粉过渡到红色，麦克风缩小淡出、停止方块放大淡入；处理中转为灰底加旋转弧线。录音卡片边缘的光、底部浮窗的状态点颜色都是渐变切换。
+- 屏幕底部的浮窗出现时上浮约 16 像素并淡入，消失时淡出下沉（`dismiss`）；消失途中再次显示会直接折返。
+- 控件不可见时（窗口隐藏、设置窗口还没打开）状态直接到位，不播放动画。
+
 ## 发布安装包
 
 一次性准备：`winget install JRSoftware.InnoSetup`（按用户安装即可）；如需命令行发布，再安装 GitHub CLI 并运行 `gh auth login`。
@@ -79,9 +89,9 @@ GPU 加速：`AsrModel.gpu=True` 的模型（Qwen3-ASR）同时带有 llama.cpp 
 4. 打标签并发布：
 
 ```powershell
-git tag v0.6.0
-git push origin v0.6.0
-gh release create v0.6.0 release\Saywell-Setup-0.6.0.exe release\Saywell-Setup-0.6.0.exe.sha256 --title "好好说 Saywell 0.6.0" --notes-file docs\releases\v0.6.0.md
+git tag v0.6.1
+git push origin v0.6.1
+gh release create v0.6.1 release\Saywell-Setup-0.6.1.exe release\Saywell-Setup-0.6.1.exe.sha256 --title "好好说 Saywell 0.6.1" --notes-file docs\releases\v0.6.1.md
 ```
 
 也可以在 GitHub 网页的 Releases → Draft a new release 中选择标签、填写说明并上传这两个文件。

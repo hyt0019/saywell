@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLay
 
 from .icons import draw_icon
 from .stats import TYPING_CHARS_PER_MINUTE, Day, StatsStore
-from .ui import ACCENT, INK, MUTED, Glyph, label, make_button
+from .ui import ACCENT, INK, MUTED, Glyph, Tween, label, make_button
 
 WEEKDAYS = "一二三四五六日"
 SUBTLE = "#8E8E93"
@@ -75,6 +75,7 @@ class HoverCard(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.title = ""
         self.body = ""
+        self.fade = Tween(self, duration=160, on_change=lambda: self.setWindowOpacity(self.fade.value))
 
     def fonts(self) -> tuple[QFont, QFont]:
         title = QFont(self.font())
@@ -94,7 +95,10 @@ class HoverCard(QWidget):
         if screen and target.x() + self.width() > screen.right():
             target.setX(position.x() - self.width() - 8)
         self.move(target)
-        self.show()
+        if not self.isVisible():
+            self.fade.to(0.0, animate=False)  # Fades in once; following the pointer stays instant.
+            self.show()
+            self.fade.to(1.0)
         self.update()
 
     def paintEvent(self, _event):

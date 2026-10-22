@@ -232,6 +232,61 @@ def mix(a: QColor, b: QColor, t: float) -> QColor:
 CLEAR_COLOR = "#00000000"
 
 
+def ease_out(t: float) -> float:
+    """Fast start, gentle stop: fades, hovers and anything that should not bounce."""
+    return 1 - (1 - t) ** 3
+
+
+def spring(t: float, damping: float = 0.7) -> float:
+    """Step response of a damped spring, settled by t = 1. Below damping 1 it lands with a
+    small overshoot, which is what makes switches and thumbs feel physical rather than linear."""
+    if t >= 1:
+        return 1.0
+    omega = 10.0
+    if damping >= 1:
+        return 1 - math.exp(-omega * t) * (1 + omega * t)
+    damped = omega * math.sqrt(1 - damping * damping)
+    decay = math.exp(-damping * omega * t)
+    return 1 - decay * (math.cos(damped * t) + damping * omega / damped * math.sin(damped * t))
+
+
+class Tween(QObject):
+    """A number that glides to each new target. Retargeting mid-flight starts from where it is,
+    so a quick double toggle reverses smoothly instead of jumping."""
+
+    def __init__(self, owner: QObject, value: float = 0.0, duration: int = 240, ease=ease_out, on_change=None):
+        super().__init__(owner)
+        self.value = self.start = self.target = value
+        self.duration = duration
+        self.ease = self.current_ease = ease
+        self.on_change = on_change or owner.update
+        self.animation = QVariantAnimation(self)
+        self.animation.setStartValue(0.0)
+        self.animation.setEndValue(1.0)
+        self.animation.valueChanged.connect(self._step)
+
+    def to(self, target: float, duration: int | None = None, ease=None, animate: bool = True):
+        if not animate:
+            self.animation.stop()
+            self.value = self.start = self.target = target
+            self.on_change()
+            return
+        if target == self.target and (self.animation.state() == QVariantAnimation.State.Running or self.value == target):
+            return
+        self.animation.stop()
+        self.start, self.target = self.value, target
+        self.current_ease = ease or self.ease
+        self.animation.setDuration(duration or self.duration)
+        self.animation.start()
+
+    def running(self) -> bool:
+        return self.animation.state() == QVariantAnimation.State.Running
+
+    def _step(self, t):
+        self.value = self.start + (self.target - self.start) * self.current_ease(float(t))
+        self.on_change()
+
+
 @dataclass(frozen=True)
 class ButtonLook:
     background: str
@@ -266,8 +321,9 @@ BUTTON_LOOKS = {
 
 
 class Button(QPushButton):
-    """Pill button drawn by the app: soft hover and press transitions, an optional line icon,
-    and a short "done" flash (for example 已复制) after an action."""
+    """Pill button drawn by the app: soft hover, a press that gives a little and springs back,
+    checked states that fade rather than flip, an optional line icon, and a short "done" flash
+    (for example 已复制) after an action."""
 
     def __init__(self, text: str = "", icon: str | None = None, kind: str | None = None, icon_color: str | None = None):
         super().__init__(text)
@@ -277,12 +333,14 @@ class Button(QPushButton):
             self.setObjectName(kind)
         self.icon_name = icon
         self.icon_color = icon_color
-        self.hover = 0.0
         self.keyboard_focus = False
         self.restore: tuple[str, str | None] | None = None
-        self.animation = QVariantAnimation(self)
-        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self.animation.valueChanged.connect(self._hovered)
+        self.hover = Tween(self)
+        self.press = Tween(self)
+        self.check = Tween(self, duration=220)
+        self.pressed.connect(lambda: self.press.to(1.0, 90))
+        self.released.connect(lambda: self.press.to(0.0, 420, lambda t: spring(t, 0.55)))
+        self.toggled.connect(lambda on: self.check.to(float(on), animate=self.isVisible()))
         self.flash_timer = QTimer(self)
         self.flash_timer.setSingleShot(True)
         self.flash_timer.timeout.connect(self._end_flash)
@@ -333,24 +391,22 @@ class Button(QPushButton):
         return self.sizeHint()
 
     # ---------- interaction ----------
-    def _hovered(self, value):
-        self.hover = float(value)
-        self.update()
-
-    def _animate(self, target: float, duration: int):
-        self.animation.stop()
-        self.animation.setDuration(duration)
-        self.animation.setStartValue(self.hover)
-        self.animation.setEndValue(target)
-        self.animation.start()
-
     def enterEvent(self, event):
-        self._animate(1.0, 140)
+        self.hover.to(1.0, 140)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self._animate(0.0, 220)
+        self.hover.to(0.0, 260)
         super().leaveEvent(event)
+
+    def showEvent(self, event):
+        self.check.to(float(self.isChecked()), animate=False)
+        super().showEvent(event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.EnabledChange and not self.isEnabled():
+            self.press.to(0.0, animate=False)  # Disabled mid-press: no release will come.
+        super().changeEvent(event)
 
     def focusInEvent(self, event):
         self.keyboard_focus = event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason)
@@ -362,19 +418,25 @@ class Button(QPushButton):
         look = self.look
         if not self.isEnabled():
             painter.setOpacity(0.4)
-        checked = self.isCheckable() and self.isChecked()
+        enabled = self.isEnabled()
+        checked = self.check.value if self.isCheckable() else 0.0
+        press = max(0.0, min(1.0, self.press.value)) if enabled else 0.0
+        # A press sinks the pill by a few percent; the release spring lets it overshoot back.
+        scale = 1 - 0.035 * self.press.value if enabled else 1.0
+        if scale != 1.0:
+            painter.translate(self.width() / 2, self.height() / 2)
+            painter.scale(scale, scale)
+            painter.translate(-self.width() / 2, -self.height() / 2)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         radius = rect.height() / 2
-        background = QColor(look.checked_background) if checked and look.checked_background else mix(
-            QColor(look.background), QColor(look.hover), self.hover if self.isEnabled() else 0
-        )
-        if self.isDown():
-            background = QColor(look.pressed)
+        background = mix(QColor(look.background), QColor(look.hover), self.hover.value if enabled else 0)
+        background = mix(background, QColor(look.pressed), press)
         border = QColor(look.border)
-        if look.hover_border and self.isEnabled():
-            border = mix(border, QColor(look.hover_border), self.hover)
-        if checked and look.checked_background:
-            border = QColor(look.checked_background)
+        if look.hover_border and enabled:
+            border = mix(border, QColor(look.hover_border), self.hover.value)
+        if look.checked_background and checked:
+            background = mix(background, QColor(look.checked_background), checked)
+            border = mix(border, QColor(look.checked_background), checked)
         painter.setPen(QPen(border, 1) if border.alpha() else Qt.PenStyle.NoPen)
         painter.setBrush(background)
         painter.drawRoundedRect(rect, radius, radius)
@@ -384,14 +446,16 @@ class Button(QPushButton):
             painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(rect.adjusted(1.5, 1.5, -1.5, -1.5), radius - 1.5, radius - 1.5)
-        color = QColor(look.checked_text if checked and look.checked_text else look.text)
+        color = QColor(look.text)
+        if look.checked_text and checked:
+            color = mix(color, QColor(look.checked_text), checked)
         text = self.text().strip()
         font = self.label_font()
         width = QFontMetrics(font).horizontalAdvance(text) if text else 0
         content = width + (16 + (6 if text else 0) if self.icon_name else 0)
         x = (self.width() - content) / 2
         if self.icon_name:
-            tint = QColor(self.icon_color) if self.icon_color and not checked else color
+            tint = mix(QColor(self.icon_color), color, checked) if self.icon_color else color
             draw_icon(painter, self.icon_name, QRectF(x, (self.height() - 16) / 2, 16, 16), tint)
             x += 16 + 6
         if text:
@@ -598,11 +662,12 @@ class Toast(QWidget):
         self.icon = "check"
         self.effect = QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self.effect)
-        self.fade = QPropertyAnimation(self.effect, b"opacity", self)
-        self.fade.finished.connect(self._faded)
+        self.home = (0, 0)
+        # Floats up a few pixels as it fades in, and drifts down as it fades out.
+        self.presence = Tween(self, on_change=self._present)
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
-        self.timer.timeout.connect(lambda: self._fade_to(0.0, 240))
+        self.timer.timeout.connect(lambda: self.presence.to(0.0, 260))
         self.hide()
 
     def show_text(self, text: str, icon: str = "check", milliseconds: int = 1600):
@@ -612,22 +677,20 @@ class Toast(QWidget):
         width = QFontMetrics(font).horizontalAdvance(text) + 16 + 8 + 36
         self.resize(width, 38)
         parent = self.parentWidget()
-        self.move((parent.width() - width) // 2, parent.height() - 38 - 10)
+        self.home = ((parent.width() - width) // 2, parent.height() - 38 - 10)
         self.raise_()
-        self.show()
-        self._fade_to(1.0, 180)
+        if not self.isVisible():
+            self.presence.to(0.0, animate=False)
+            self.show()
+        self.presence.to(1.0, 420, lambda t: spring(t, 0.8))
         self.timer.start(milliseconds)
         self.update()
 
-    def _fade_to(self, value: float, duration: int):
-        self.fade.stop()
-        self.fade.setDuration(duration)
-        self.fade.setStartValue(self.effect.opacity())
-        self.fade.setEndValue(value)
-        self.fade.start()
-
-    def _faded(self):
-        if self.effect.opacity() < 0.01:
+    def _present(self):
+        value = self.presence.value
+        self.effect.setOpacity(max(0.0, min(1.0, value)))
+        self.move(self.home[0], round(self.home[1] + (1 - value) * 10))
+        if value <= 0.001 and self.presence.target == 0.0:
             self.hide()
 
     def paintEvent(self, _event):
@@ -646,7 +709,8 @@ class Toast(QWidget):
 
 
 class Segmented(QFrame):
-    """Segmented control whose white thumb slides to the chosen segment."""
+    """Segmented control whose white thumb glides to the chosen segment and settles with a
+    slight spring; the labels cross-fade between grey and black as it passes."""
 
     changed = Signal(int)
 
@@ -666,10 +730,9 @@ class Segmented(QFrame):
             self.buttons.append(button)
             layout.addWidget(button)
         self.thumb = QRectF()
-        self.animation = QVariantAnimation(self)
-        self.animation.setDuration(240)
-        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self.animation.valueChanged.connect(self._moved)
+        self.origin = QRectF()
+        self.destination = QRectF()
+        self.glide = Tween(self, duration=460, ease=lambda t: spring(t, 0.78), on_change=self._moved)
         self.group.idClicked.connect(self._clicked)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
@@ -680,25 +743,32 @@ class Segmented(QFrame):
         self.buttons[index].setChecked(True)
         target = QRectF(self.buttons[index].geometry())
         if animate and self.isVisible() and not self.thumb.isNull():
-            self.animation.stop()
-            self.animation.setStartValue(self.thumb)
-            self.animation.setEndValue(target)
-            self.animation.start()
+            self.origin, self.destination = QRectF(self.thumb), target
+            self.glide.to(0.0, animate=False)
+            self.glide.to(1.0)
         else:
-            self.thumb = target
+            self.glide.animation.stop()
+            self.thumb = self.destination = target
             self.update()
 
     def _clicked(self, index: int):
         self.set_current(index)
         self.changed.emit(index)
 
-    def _moved(self, value):
-        self.thumb = QRectF(value)
+    def _moved(self):
+        t = self.glide.value
+        a, b = self.origin, self.destination
+        self.thumb = QRectF(
+            a.x() + (b.x() - a.x()) * t,
+            a.y() + (b.y() - a.y()) * t,
+            a.width() + (b.width() - a.width()) * t,
+            a.height() + (b.height() - a.height()) * t,
+        )
         self.update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self.current() >= 0 and self.animation.state() != QVariantAnimation.State.Running:
+        if self.current() >= 0 and not self.glide.running():
             self.thumb = QRectF(self.buttons[self.current()].geometry())
 
     def showEvent(self, event):
@@ -714,7 +784,7 @@ class Segmented(QFrame):
         rect = QRectF(self.rect())
         painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
         if not self.thumb.isNull():
-            thumb = self.thumb.adjusted(0, 0, 0, 0)
+            thumb = QRectF(self.thumb)
             painter.setBrush(QColor(0, 0, 0, 16))
             painter.drawRoundedRect(thumb.adjusted(0, 1, 0, 1.5), thumb.height() / 2, thumb.height() / 2)
             painter.setBrush(QColor("#FFFFFF"))
@@ -897,7 +967,8 @@ def aurora_gradient(center, angle: float) -> QConicalGradient:
 class MicButton(QPushButton):
     """Round record button: a calm solid circle at rest, a breathing red ring while
     recording and a thin rotating arc while processing. objectName "recording"
-    switches it to the stop state."""
+    switches it to the stop state. Between states the color blends and the microphone
+    shrinks away as the stop square grows in, so the button morphs instead of swapping."""
 
     DIAMETER = 76.0
 
@@ -905,16 +976,18 @@ class MicButton(QPushButton):
         super().__init__(text, parent)
         self.busy = False
         self.phase = 0.0
-        self.hover = 0.0
         self.animation = QVariantAnimation(self)
         self.animation.setStartValue(0.0)
         self.animation.setEndValue(1.0)
         self.animation.setDuration(1400)
         self.animation.setLoopCount(-1)
         self.animation.valueChanged.connect(self._tick)
-        self.hover_animation = QVariantAnimation(self)
-        self.hover_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self.hover_animation.valueChanged.connect(self._hovered)
+        self.hover = Tween(self, duration=160)
+        self.press = Tween(self)
+        self.recording = Tween(self, duration=420, on_change=self._settle)
+        self.working = Tween(self, duration=360, on_change=self._settle)
+        self.pressed.connect(lambda: self.press.to(1.0, 110))
+        self.released.connect(lambda: self.press.to(0.0, 520, lambda t: spring(t, 0.5)))
         self.keyboard_focus = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
@@ -927,12 +1000,23 @@ class MicButton(QPushButton):
         )
         super().focusInEvent(event)
 
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.EnabledChange and not self.isEnabled():
+            self.press.to(0.0, animate=False)
+        super().changeEvent(event)
+
     def _tick(self, value):
         self.phase = float(value)
         self.update()
 
-    def _hovered(self, value):
-        self.hover = float(value)
+    def _settle(self):
+        # The ring and arc keep moving while they fade out; the loop stops once both are gone.
+        if (
+            not self.busy and self.objectName() != "recording"
+            and self.recording.value <= 0.001 and self.working.value <= 0.001
+        ):
+            self.animation.stop()
+            self.phase = 0.0
         self.update()
 
     def set_busy(self, busy: bool):
@@ -940,57 +1024,54 @@ class MicButton(QPushButton):
         self._sync_animation()
 
     def _sync_animation(self):
-        animate = self.busy or self.objectName() == "recording"
-        if animate and self.animation.state() != QVariantAnimation.State.Running:
+        if not hasattr(self, "recording"):  # Qt may name the widget before __init__ finishes.
+            return
+        recording = self.objectName() == "recording"
+        animate = self.isVisible()
+        self.recording.to(float(recording), animate=animate)
+        self.working.to(float(self.busy), animate=animate)
+        if (recording or self.busy) and self.animation.state() != QVariantAnimation.State.Running:
             self.animation.start()
-        elif not animate and self.animation.state() == QVariantAnimation.State.Running:
-            self.animation.stop()
-            self.phase = 0.0
-        self.update()
+        self._settle()
 
     def setObjectName(self, name: str):
         super().setObjectName(name)
         self._sync_animation()
 
-    def _hover_to(self, target: float):
-        self.hover_animation.stop()
-        self.hover_animation.setDuration(160)
-        self.hover_animation.setStartValue(self.hover)
-        self.hover_animation.setEndValue(target)
-        self.hover_animation.start()
-
     def enterEvent(self, event):
-        self._hover_to(1.0)
+        self.hover.to(1.0)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self._hover_to(0.0)
+        self.hover.to(0.0)
         super().leaveEvent(event)
 
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        recording = self.objectName() == "recording"
-        diameter = self.DIAMETER
-        center_x, center_y = self.width() / 2, 12 + diameter / 2
+        recording = max(0.0, min(1.0, self.recording.value))
+        working = max(0.0, min(1.0, self.working.value))
+        hover = self.hover.value
+        diameter = self.DIAMETER * (1 - 0.06 * self.press.value)
+        center_x, center_y = self.width() / 2, 12 + self.DIAMETER / 2
         circle = QRectF(center_x - diameter / 2, center_y - diameter / 2, diameter, diameter)
         if not self.isEnabled() and not self.busy:
             painter.setOpacity(0.4)
         painter.setPen(Qt.PenStyle.NoPen)
-        if recording:
+        if recording > 0:
             # One soft ring breathing outward.
             radius = diameter / 2 + 2 + self.phase * 11
             ring = QColor(RECORD)
-            ring.setAlphaF(0.28 * (1 - self.phase))
+            ring.setAlphaF(0.28 * (1 - self.phase) * recording * (1 - working))
             painter.setBrush(ring)
             painter.drawEllipse(QRectF(center_x - radius, center_y - radius, radius * 2, radius * 2))
-            fill = mix(QColor(RECORD), QColor("#FF5A50"), self.hover)
-        elif self.busy:
-            fill = QColor("#F2F2F5")
-        else:
-            fill = mix(QColor(ACCENT), QColor("#1A80EC"), self.hover)
-        if self.isDown() and not self.busy:
-            fill = fill.darker(112)
+        idle_fill = mix(QColor(ACCENT), QColor("#1A80EC"), hover)
+        record_fill = mix(QColor(RECORD), QColor("#FF5A50"), hover)
+        # Straight blue → red goes through a muddy purple; the aurora's violet and pink keep it bright.
+        path = (idle_fill.name(), AURORA[1], AURORA[2], record_fill.name())
+        fill = mix(blend(path, recording), QColor("#F2F2F5"), working)
+        if not self.busy:
+            fill = mix(fill, fill.darker(112), max(0.0, min(1.0, self.press.value)))
         painter.setBrush(fill)
         painter.drawEllipse(circle)
         if self.hasFocus() and self.keyboard_focus:
@@ -999,18 +1080,26 @@ class MicButton(QPushButton):
             painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(circle.adjusted(-5, -5, 5, 5))
-        if recording:
+        base = painter.opacity()
+        mic = max(0.0, 1 - recording - working)  # Stays hidden while recording hands over to working.
+        if mic > 0.01:
+            size = 30 * (0.6 + 0.4 * mic)
+            painter.setOpacity(base * mic)
+            draw_icon(painter, "mic", QRectF(center_x - size / 2, center_y - size / 2, size, size), "#FFFFFF", 2.0)
+        stop = recording * (1 - working)
+        if stop > 0.01:
+            size = 22 * (0.5 + 0.5 * stop)
+            painter.setOpacity(base * stop)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor("#FFFFFF"))
-            painter.drawRoundedRect(QRectF(center_x - 11, center_y - 11, 22, 22), 5, 5)
-        elif self.busy:
+            painter.drawRoundedRect(QRectF(center_x - size / 2, center_y - size / 2, size, size), 5, 5)
+        if working > 0.01:
+            painter.setOpacity(base * working)
             pen = QPen(QColor(ACCENT), 2.4)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawArc(circle.adjusted(20, 20, -20, -20), int(-self.phase * 360 * 16), 100 * 16)
-        else:
-            draw_icon(painter, "mic", QRectF(center_x - 15, center_y - 15, 30, 30), "#FFFFFF", 2.0)
         painter.setOpacity(1.0 if self.isEnabled() or self.busy else 0.4)
         font = QFont(self.font())
         font.setPixelSize(13)
@@ -1068,19 +1157,27 @@ class HeroCard(QFrame):
         self.animation.setDuration(4200)
         self.animation.setLoopCount(-1)
         self.animation.valueChanged.connect(self._tick)
+        # The two lights fade into each other rather than switching on and off.
+        self.listening = Tween(self, duration=520, on_change=self._settle)
+        self.working = Tween(self, duration=520, on_change=self._settle)
 
     def _tick(self, value):
         self.phase = float(value)
         self.update()
 
+    def _settle(self):
+        if self.mode == "idle" and self.listening.value <= 0.001 and self.working.value <= 0.001:
+            self.animation.stop()
+        self.update()
+
     def set_mode(self, mode: str):
         self.mode = mode if mode in ("recording", "busy") else "idle"
-        if self.mode == "idle":
-            self.animation.stop()
-            self.phase = 0.0
-        elif self.animation.state() != QVariantAnimation.State.Running:
+        animate = self.isVisible()
+        self.listening.to(float(self.mode == "recording"), animate=animate)
+        self.working.to(float(self.mode == "busy"), animate=animate)
+        if self.mode != "idle" and self.animation.state() != QVariantAnimation.State.Running:
             self.animation.start()
-        self.update()
+        self._settle()
 
     def paintEvent(self, _event):
         painter = QPainter(self)
@@ -1090,30 +1187,49 @@ class HeroCard(QFrame):
         painter.setPen(QPen(QColor("#E5E5EA"), 1))
         painter.setBrush(QColor("#FFFFFF"))
         painter.drawRoundedRect(rect, radius, radius)
-        if self.mode == "idle":
-            return
-        if self.mode == "recording":
-            gradient = aurora_gradient(rect.center(), -self.phase * 360)
-        else:
-            gradient = QConicalGradient(rect.center(), -self.phase * 360)
-            gradient.setColorAt(0.0, QColor(0, 113, 227, 220))
-            gradient.setColorAt(0.25, QColor(0, 113, 227, 0))
-            gradient.setColorAt(0.75, QColor(0, 113, 227, 0))
-            gradient.setColorAt(1.0, QColor(0, 113, 227, 220))
+        busy = QConicalGradient(rect.center(), -self.phase * 360)
+        busy.setColorAt(0.0, QColor(0, 113, 227, 220))
+        busy.setColorAt(0.25, QColor(0, 113, 227, 0))
+        busy.setColorAt(0.75, QColor(0, 113, 227, 0))
+        busy.setColorAt(1.0, QColor(0, 113, 227, 220))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        for inset, width, alpha in ((1.0, 2.0, 1.0), (3.5, 4, 0.16)):
-            painter.setOpacity(alpha)
-            painter.setPen(QPen(QBrush(gradient), width))
-            painter.drawRoundedRect(rect.adjusted(inset, inset, -inset, -inset), radius - inset, radius - inset)
+        for strength, gradient in (
+            (self.listening.value, aurora_gradient(rect.center(), -self.phase * 360)),
+            (self.working.value, busy),
+        ):
+            if strength <= 0.001:
+                continue
+            for inset, width, alpha in ((1.0, 2.0, 1.0), (3.5, 4, 0.16)):
+                painter.setOpacity(alpha * strength)
+                painter.setPen(QPen(QBrush(gradient), width))
+                painter.drawRoundedRect(rect.adjusted(inset, inset, -inset, -inset), radius - inset, radius - inset)
         painter.setOpacity(1.0)
 
 
 class Switch(QCheckBox):
-    """A toggle switch that keeps the QCheckBox API."""
+    """A toggle switch that keeps the QCheckBox API. The knob springs across while the track
+    fills with blue; holding it down stretches the knob toward where it is going, as on iOS."""
+
+    TRACK_OFF = "#E5E5EA"
+    TRACK_OFF_HOVER = "#DADADF"
+    TRACK_ON_HOVER = "#1A80EC"
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(text, parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.keyboard_focus = False
+        self.position = Tween(self, float(self.isChecked()), 520, lambda t: spring(t, 0.62))
+        self.fill = Tween(self, float(self.isChecked()), 260)
+        self.stretch = Tween(self, duration=160)
+        self.hover = Tween(self)
+        self.toggled.connect(self._toggled)
+        self.pressed.connect(lambda: self.stretch.to(1.0))
+        self.released.connect(lambda: self.stretch.to(0.0, 300))
+
+    def _toggled(self, on: bool):
+        animate = self.isVisible()
+        self.position.to(float(on), animate=animate)
+        self.fill.to(float(on), animate=animate)
 
     def sizeHint(self):
         metrics = self.fontMetrics()
@@ -1122,25 +1238,52 @@ class Switch(QCheckBox):
     def hitButton(self, pos):
         return self.rect().contains(pos)
 
+    def enterEvent(self, event):
+        self.hover.to(1.0, 140)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hover.to(0.0, 260)
+        super().leaveEvent(event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.EnabledChange and not self.isEnabled():
+            self.stretch.to(0.0, animate=False)
+        super().changeEvent(event)
+
+    def focusInEvent(self, event):
+        # Clicking also focuses a checkbox; only Tab should draw the ring.
+        self.keyboard_focus = event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason)
+        super().focusInEvent(event)
+
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         track = QRectF(1, (self.height() - 24) / 2, 42, 24)
-        on = self.isChecked()
         if not self.isEnabled():
             painter.setOpacity(0.5)
+        hover = self.hover.value if self.isEnabled() else 0.0
+        off = mix(QColor(self.TRACK_OFF), QColor(self.TRACK_OFF_HOVER), hover)
+        on = mix(QColor(ACCENT), QColor(self.TRACK_ON_HOVER), hover)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(ACCENT) if on else QColor("#E5E5EA"))
+        painter.setBrush(mix(off, on, max(0.0, min(1.0, self.fill.value))))
         painter.drawRoundedRect(track, 12, 12)
-        knob = QRectF(track.right() - 22 if on else track.left() + 2, track.top() + 2, 20, 20)
-        painter.setBrush(QColor(0, 0, 0, 30))
-        painter.drawEllipse(knob.adjusted(0, 1, 0, 1))
+        # The knob is anchored to the side it rests on, so stretching grows it toward the other.
+        width = 20 + 5 * self.stretch.value
+        left, right = track.left() + 2, track.right() - 2 - width
+        knob = QRectF(left + (right - left) * self.position.value, track.top() + 2, width, 20)
+        painter.setBrush(QColor(0, 0, 0, 22))
+        painter.drawRoundedRect(knob.adjusted(-0.5, 0.5, 0.5, 1.5), 10.5, 10.5)
+        painter.setBrush(QColor(0, 0, 0, 12))
+        painter.drawRoundedRect(knob.adjusted(-1, 1.5, 1, 3), 11, 11)
         painter.setBrush(QColor("#FFFFFF"))
-        painter.drawEllipse(knob)
-        if self.hasFocus():
-            painter.setPen(QPen(QColor(ACCENT), 1.5))
+        painter.drawRoundedRect(knob, 10, 10)
+        if self.hasFocus() and self.keyboard_focus:
+            ring = QColor(ACCENT)
+            ring.setAlphaF(0.55)
+            painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(track.adjusted(-2.5, -2.5, 2.5, 2.5), 14, 14)
+            painter.drawRoundedRect(track.adjusted(-3, -3, 3, 3), 15, 15)
         painter.setPen(QColor(INK))
         painter.setFont(self.font())
         painter.drawText(
@@ -1166,10 +1309,16 @@ class RecordingOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tone = "rec"
+        self.color = QColor(self.TONES["rec"])
+        self.previous = QColor(self.color)
         self.phase = 0.0
+        self.home = None
+        # Rises a little into place when it appears and sinks away when dismissed.
+        self.presence = Tween(self, on_change=self._present)
+        self.shade = Tween(self, 1.0, 320)
         self.dismiss_timer = QTimer(self)
         self.dismiss_timer.setSingleShot(True)
-        self.dismiss_timer.timeout.connect(self.hide)
+        self.dismiss_timer.timeout.connect(self.dismiss)
         self.pulse = QVariantAnimation(self)
         self.pulse.setStartValue(0.0)
         self.pulse.setEndValue(1.0)
@@ -1200,7 +1349,14 @@ class RecordingOverlay(QWidget):
         self.update()
 
     def set_tone(self, tone: str):
-        self.tone = tone if tone in self.TONES else "rec"
+        tone = tone if tone in self.TONES else "rec"
+        if tone != self.tone:
+            # The status dot shifts hue (red → orange → green) instead of swapping.
+            self.previous = mix(self.previous, self.color, max(0.0, min(1.0, self.shade.value)))
+            self.color = QColor(self.TONES[tone])
+            self.shade.to(0.0, animate=False)
+            self.shade.to(1.0, animate=self.isVisible())
+        self.tone = tone
         if self.tone in ("rec", "busy"):
             if self.pulse.state() != QVariantAnimation.State.Running:
                 self.pulse.start()
@@ -1212,16 +1368,38 @@ class RecordingOverlay(QWidget):
     def show_near_bottom(self):
         self.dismiss_timer.stop()
         area = self.screen().availableGeometry()
-        self.move(area.center().x() - self.width() // 2, area.bottom() - self.height() - 28)
-        self.show()
+        self.home = (area.center().x() - self.width() // 2, area.bottom() - self.height() - 28)
+        if not self.isVisible():
+            self.presence.to(0.0, animate=False)
+            self.show()
+        self.presence.to(1.0, 460, lambda t: spring(t, 0.8))
 
     def show_message(self, title: str, hint: str, milliseconds: int = 4500, tone: str = "done"):
+        changed = self.isVisible() and self.label.text() != title
         self.label.setText(title)
         self.hint.setText(hint)
         self.level.hide()
         self.set_tone(tone)
         self.show_near_bottom()
+        if changed:
+            fade_in(self.label, 260, 0.15)
+            fade_in(self.hint, 320, 0.0)
         self.dismiss_timer.start(milliseconds)
+
+    def dismiss(self):
+        """Fade out and sink a few pixels, then hide. Showing again midway turns it back."""
+        self.dismiss_timer.stop()
+        if self.isVisible():
+            self.presence.to(0.0, 240)
+
+    def _present(self):
+        value = self.presence.value
+        self.setWindowOpacity(max(0.0, min(1.0, value)))
+        if self.home:
+            # Past 1 the spring overshoots, so it lifts a pixel above its spot and settles.
+            self.move(self.home[0], round(self.home[1] + (1 - value) * 16))
+        if value <= 0.001 and self.presence.target == 0.0 and self.isVisible():
+            self.hide()
 
     def hideEvent(self, event):
         self.pulse.stop()
@@ -1242,7 +1420,7 @@ class RecordingOverlay(QWidget):
         painter.setBrush(gradient)
         painter.setPen(QPen(QColor(255, 255, 255, 34), 1))
         painter.drawRoundedRect(body, 22, 22)
-        color = QColor(self.TONES.get(self.tone, RECORD))
+        color = mix(self.previous, self.color, max(0.0, min(1.0, self.shade.value)))
         center = body.left() + 22, body.center().y()
         if self.tone in ("rec", "busy"):
             ring = 6 + self.phase * 9
@@ -2112,7 +2290,11 @@ class ModelDialog(QDialog):
     def filter_plaza(self, category: str):
         self.chips[category].setChecked(True)
         for model in PLAZA:
-            self.cards[model.id].setVisible(category == "全部" or model.category == category)
+            card = self.cards[model.id]
+            shown = category == "全部" or model.category == category
+            if shown and card.isHidden() and self.isVisible():
+                fade_in(card, 260)
+            card.setVisible(shown)
 
     def done(self, result):
         for signal, slot in (

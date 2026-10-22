@@ -458,8 +458,12 @@ class MainWindow(QMainWindow):
             tone, text = ("done", "已整理") if self.result.toPlainText().strip() else ("idle", "就绪")
         self.pill.setText(f"<span style='color:{self.TONES[tone]}'>●</span>&nbsp;&nbsp;{text}")
         self.pill.setProperty("tone", tone)
-        self.hero_bottom.setCurrentIndex(1 if self.state == "recording" else 0)
-        action = "按住说话" if self.settings.hold_to_talk else "按一下开始，再按结束"
+        bottom = 1 if self.state == "recording" else 0
+        if self.hero_bottom.currentIndex() != bottom:
+            self.hero_bottom.setCurrentIndex(bottom)
+            if self.isVisible():
+                fade_in(self.hero_bottom.currentWidget(), 280)
+        action ="按住说话" if self.settings.hold_to_talk else "按一下开始，再按结束"
         self.shortcut_label.setText(f"{shortcut_label(self.settings.hotkey)} {action}")
 
     def result_edited(self):
@@ -468,8 +472,11 @@ class MainWindow(QMainWindow):
         self.refresh_controls()
 
     def set_notice(self, text: str = ""):
+        appearing = bool(text) and not self.notice.isVisible() and self.isVisible()
         self.notice.setText(text)
         self.notice.setVisible(bool(text))
+        if appearing:
+            fade_in(self.notice, 320)
 
     def configure_hotkeys(self):
         if not self.hotkeys:
@@ -645,7 +652,7 @@ class MainWindow(QMainWindow):
 
     def finish_ui(self):
         self.state = "idle"
-        self.overlay.hide()
+        self.overlay.dismiss()
         self.meter.setValue(0)
         if self.hotkeys:
             self.hotkeys.unregister(3)
