@@ -165,8 +165,10 @@ class PasteError(RuntimeError):
     pass
 
 
-def paste_text(text: str, target: InputTarget, clipboard, restore_callback=None) -> None:
-    """Paste once, with a focus check immediately before the Win32 input call."""
+def paste_text(text: str, target: InputTarget, clipboard, restore_callback=None, keep_result: bool = False) -> None:
+    """Paste once, with a focus check immediately before the Win32 input call.
+
+    keep_result leaves the pasted text on the clipboard instead of restoring the previous content."""
     from PySide6.QtCore import QMimeData
 
     # Apply at the final boundary too: edits and older history can contain newlines.
@@ -191,7 +193,7 @@ def paste_text(text: str, target: InputTarget, clipboard, restore_callback=None)
     sequence = user32.GetClipboardSequenceNumber()
 
     def restore():
-        if user32.GetClipboardSequenceNumber() == sequence:
+        if not keep_result and user32.GetClipboardSequenceNumber() == sequence:
             clipboard.setMimeData(original)
         if restore_callback:
             restore_callback()

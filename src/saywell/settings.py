@@ -92,6 +92,9 @@ class Settings:
     gpu_acceleration: bool = False
     # Saying "翻译成英文" at the end inserts the translation instead.
     voice_translation: bool = True
+    # Leave each result on the clipboard instead of restoring the previous content, for games
+    # and other places where no text box can be opened while speaking.
+    keep_in_clipboard: bool = False
     # Last language chosen for the 翻译 button on the text page.
     translate_language: str = "英语"
 

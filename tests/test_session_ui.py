@@ -90,7 +90,7 @@ def test_hold_release_cleanup_and_automatic_input_stay_in_background(window, mon
     monkeypatch.setattr("saywell.app.shortcut_held", lambda _: held[0])
     monkeypatch.setattr("saywell.app.modifiers_held", lambda: False)
     monkeypatch.setattr(
-        "saywell.app.paste_text", lambda text, dest, _: pastes.append((text, dest))
+        "saywell.app.paste_text", lambda text, dest, _, **_options: pastes.append((text, dest))
     )
     monkeypatch.setattr(window.recorder, "start", lambda _: recording.append("start"))
     monkeypatch.setattr(window.recorder, "stop", lambda: samples)
@@ -147,7 +147,7 @@ def test_global_errors_keep_main_window_hidden(window, monkeypatch, failure):
     def mic_failure(_):
         raise AudioError("麦克风不可用")
 
-    def paste_failure(*_):
+    def paste_failure(*_args, **_options):
         raise PasteError("无法输入")
 
     monkeypatch.setattr(window, "reveal", lambda: pytest.fail("Errors must not steal focus"))
@@ -171,6 +171,45 @@ def test_global_errors_keep_main_window_hidden(window, monkeypatch, failure):
     assert window.notice.text()
     assert window.overlay.isVisible()
     assert not window.isVisible()
+
+
+@pytest.mark.parametrize("outcome", ["inserted", "failed", "no_target"])
+def test_keep_in_clipboard_leaves_result_for_manual_paste(window, monkeypatch, outcome):
+    from dataclasses import replace
+
+    options = []
+
+    def paste(text, _target, clipboard, **kwargs):
+        options.append(kwargs)
+        if outcome == "failed":
+            raise PasteError("无法输入")
+        clipboard.setText(single_line_text(text))
+
+    window.settings = replace(window.settings, keep_in_clipboard=True)
+    QApplication.clipboard().setText("previous")
+    monkeypatch.setattr("saywell.app.paste_text", paste)
+    monkeypatch.setattr("saywell.app.modifiers_held", lambda: False)
+    monkeypatch.setattr(window, "reveal", lambda: pytest.fail("Dictation must not activate main window"))
+    window.from_hotkey = True
+    job, _ = window.begin("busy")
+    window.target = None if outcome == "no_target" else object()
+    result = CleanupResult("打开商店", "打开商店\n买药水。")
+    window.on_complete(job, {"result": result, "asr_seconds": 1, "duration": 2})
+    assert QApplication.clipboard().text() == "打开商店 买药水。"
+    assert options == ([] if outcome == "no_target" else [{"keep_result": True}])
+    assert window.overlay.isVisible()
+
+
+def test_keep_in_clipboard_skips_results_shown_in_main_window(window, monkeypatch):
+    from dataclasses import replace
+
+    window.settings = replace(window.settings, keep_in_clipboard=True)
+    QApplication.clipboard().setText("previous")
+    monkeypatch.setattr(window, "reveal", lambda: None)
+    window.from_hotkey = False
+    job, _ = window.begin("busy")
+    window.on_complete(job, {"result": CleanupResult("原文", "结果。"), "asr_seconds": 1, "duration": 2})
+    assert QApplication.clipboard().text() == "previous"
 
 
 def test_status_overlay_cannot_take_keyboard_focus(window):
@@ -397,3 +436,25 @@ def test_terminal_and_regular_paste_are_single_line_without_enter(window, monkey
     assert sent[4:] == (sent[2:4] if partial_send else [])
     timers[0]()
     assert clipboard.text() == "previous clipboard"
+
+
+def test_paste_can_leave_result_on_clipboard(window, monkeypatch):
+    from saywell import windows
+
+    target = InputTarget(100, 101, (0, 0, 0, 0), 200)
+    clipboard = QApplication.clipboard()
+    clipboard.setText("previous clipboard")
+    timers = []
+    monkeypatch.setattr(windows, "current_target", lambda: target)
+    monkeypatch.setattr(windows, "is_password", lambda _: False)
+    monkeypatch.setattr(windows, "modifiers_held", lambda: False)
+    monkeypatch.setattr(windows.user32, "IsWindow", lambda _: True)
+    monkeypatch.setattr(windows.user32, "GetClassNameW", lambda *args: 0)
+    monkeypatch.setattr(windows.user32, "GetClipboardSequenceNumber", lambda: 123)
+    monkeypatch.setattr(windows.user32, "SendInput", lambda count, *args: count)
+    monkeypatch.setattr(windows.QTimer, "singleShot", lambda _ms, callback: timers.append(callback))
+    restored = []
+    windows.paste_text("游戏里的话。", target, clipboard, lambda: restored.append(True), keep_result=True)
+    timers[0]()
+    assert clipboard.text() == "游戏里的话。"
+    assert restored == [True]

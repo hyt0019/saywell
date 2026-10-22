@@ -612,6 +612,9 @@ class MainWindow(QMainWindow):
         self.set_notice("\n".join(warnings))
         if self.from_hotkey and self.target:
             self.attempt_insert(job, self.target)
+        elif self.from_hotkey and self.settings.keep_in_clipboard:
+            QApplication.clipboard().setText(single_line_text(result.text))
+            self.feedback("整理好了，结果已复制", "打开输入框后按 Ctrl+V 粘贴")
         else:
             self.feedback("整理好了，结果已保留", f"在目标输入框按 {INSERT_HOTKEY} 输入")
 
@@ -631,18 +634,23 @@ class MainWindow(QMainWindow):
             return
         if not self.gate.claim_insert(job):
             return
+        keep = self.settings.keep_in_clipboard
         try:
-            paste_text(self.result.toPlainText(), target, QApplication.clipboard())
+            paste_text(self.result.toPlainText(), target, QApplication.clipboard(), keep_result=keep)
             self.status.setText("已提交输入")
             self.hint.setText("请在目标应用查看文字。可继续按录音快捷键输入下一段。")
             self.refresh_controls()
             if self.from_hotkey:
-                self.feedback("已输入", "可以继续按住快捷键说下一段", 1200)
+                self.feedback("已输入，剪贴板里也有一份" if keep else "已输入", "可以继续按住快捷键说下一段", 1200)
         except PasteError as exc:
             self.gate.inserted = False
             self.set_notice(str(exc))
             self.refresh_controls()
-            self.feedback("未能自动输入，结果已保留", "点击托盘图标查看原因或复制结果", tone="warn")
+            if keep:
+                QApplication.clipboard().setText(single_line_text(self.result.toPlainText()))
+                self.feedback("未能自动输入，结果已复制", "打开输入框后按 Ctrl+V 粘贴", tone="warn")
+            else:
+                self.feedback("未能自动输入，结果已保留", "点击托盘图标查看原因或复制结果", tone="warn")
 
     def schedule_manual_insert(self):
         if self.state != "idle" or not self.result.toPlainText().strip() or self.gate.inserted:

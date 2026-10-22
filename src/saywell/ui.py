@@ -1407,6 +1407,15 @@ class SettingsDialog(QDialog):
         self.hold.setChecked(settings.hold_to_talk)
         form.addRow(field_label("录音方式"), self.hold)
         form.addRow(field_label("输入方式"), label("直接输入单行文字，支持终端，不自动回车", "muted", wrap=True))
+        keep = QVBoxLayout()
+        keep.setSpacing(4)
+        self.keep_in_clipboard = Switch("输入后把结果留在剪贴板")
+        self.keep_in_clipboard.setChecked(settings.keep_in_clipboard)
+        keep.addWidget(self.keep_in_clipboard)
+        keep.addWidget(
+            label("适合游戏等说话时打不开输入框的场合，之后按 Ctrl+V 粘贴。关闭时会恢复原来的剪贴板内容。", "muted", wrap=True)
+        )
+        form.addRow(field_label("剪贴板"), keep)
         self.voice_translation = Switch("说完加一句“翻译成英文”，直接输入译文")
         self.voice_translation.setChecked(settings.voice_translation)
         form.addRow(field_label("语音翻译"), self.voice_translation)
@@ -1536,6 +1545,7 @@ class SettingsDialog(QDialog):
                 start_on_login=self.startup.isChecked(),
                 glossary=words,
                 voice_translation=self.voice_translation.isChecked(),
+                keep_in_clipboard=self.keep_in_clipboard.isChecked(),
                 gpu_acceleration=self.gpu.isChecked(),
             )
             self.accept()
