@@ -46,6 +46,20 @@ GPU 加速：`AsrModel.gpu=True` 的模型（Qwen3-ASR）同时带有 llama.cpp 
 
 `seconds_per_minute` 是本机实测识别 60 秒语音的耗时，卡片上统一显示为“60 秒语音约 X 秒”。新增模型时补上分类、实测速度和模型主页，并实测能下载、校验、加载和识别；许可协议记录在 THIRD_PARTY_NOTICES.md。
 
+## 快捷键
+
+`shortcuts.py` 定义快捷键名称和规则，`windows.py` 负责监听，`app.py` 里的 `activate_hotkey` / `solo_*` 方法把两者接起来。
+
+- **组合键和单键**（`Alt+X`、`Ctrl+Alt+K`、`F8`）：用 `RegisterHotKey` 注册，名称按 Ctrl、Alt、Shift、Win 的顺序保存。`shortcut_problem` 拒绝会影响打字的单键（字母、数字、空格、方向键，或只加 Shift）、常用编辑和系统快捷键，以及补输用的 `Alt+V`；F1–F24、Pause、ScrollLock 可以单独用。设置里的“自定义…”用 `HotkeyRecorder` 读取按键的 Windows 虚拟键码；Qt 在修饰键自身按下时会翻转它的修饰位，所以单独记一次。
+- **单独按住的键**（`RightCtrl`、`RightAlt`、`CapsLock`，默认 `RightCtrl`）：`RegisterHotKey` 不能注册单独的修饰键，由 `SoloKeyHook` 的低级键盘钩子（`WH_KEYBOARD_LL`）监听。
+  - 钩子放在自己的线程和消息循环里。Windows 每次按键都要等低级钩子返回，放在界面线程上，界面一卡就会让全系统打字卡顿。Windows 还会悄悄摘掉响应太慢的钩子，所以每 30 秒重新装一次。
+  - 钩子只报告按下、松开、按住期间又按了别的键（组合）三种事件，计时在界面线程：按下后 `SOLO_HOLD_MS`（300 毫秒）内松开或按了别的键，就是普通按键，不录音。
+  - 右 Ctrl 和右 Alt 照常传给其他程序，所以右 Ctrl+C 不受影响。单独按住再松开 Alt 会打开当前窗口的菜单栏、抢走输入框焦点，所以开始录音时补发一次未分配的虚拟键 0xE8（AutoHotkey 的 menu mask 同理）。实测：不补发时，一个带菜单栏的窗口在松开右 Alt 后菜单被激活；补发后不会。
+  - CapsLock 被钩子拦下，不传给其他程序，否则按住说话会切换大小写；轻按或组合时由程序补发一次，所以轻按照常切换。
+  - 程序自己发出的按键（粘贴的 Ctrl+V、0xE8、补发的 CapsLock）在 `dwExtraInfo` 带 `OWN_INPUT` 标记，钩子只跳过这些。远程桌面、屏幕键盘等其他注入的按键照常识别，也方便用 `SendInput` 实测钩子。
+- 按住说话时，组合键用 `GetAsyncKeyState` 判断是否松开；单独按住的键看钩子记下的状态（CapsLock 被拦下后系统里的按键状态不会变）。设置窗口打开期间暂停录音快捷键，录新快捷键和在窗口里按右 Ctrl 都不会开始录音；保存时先试着启用新快捷键，失败则不改设置。
+- 旧版本保存的 `Alt+X` 等名称照常解析，升级不改用户的选择；新安装默认是按住右 Ctrl。
+
 ## 词库
 
 `vocabulary.py` 管个人词库和导入的专业词库。

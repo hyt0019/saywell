@@ -10,6 +10,7 @@ from pathlib import Path
 
 from PySide6.QtCore import (
     QEasingCurve,
+    QEvent,
     QObject,
     QPropertyAnimation,
     QRectF,
@@ -72,7 +73,7 @@ from .models import (
 )
 from .settings import Settings, read_key, save_key
 from .vocabulary import FILE_FILTER, LexiconError, import_lexicon
-from .shortcuts import RECORDING_CHOICES
+from .shortcuts import KEY_NAMES, RECORDING_CHOICES, shortcut_label, shortcut_name, shortcut_problem
 
 INK = "#1D1D1F"
 MUTED = "#6E6E73"
@@ -1354,6 +1355,92 @@ def footer_bar() -> tuple[QFrame, QHBoxLayout]:
     return frame, layout
 
 
+CUSTOM_HOTKEY = "custom"
+
+
+class HotkeyRecorder(QDialog):
+    """Captures a key combination for the recording shortcut."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("自定义快捷键 · 好好说")
+        self.setMinimumWidth(420)
+        self.chosen = ""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 20)
+        layout.setSpacing(12)
+        layout.addWidget(label("按下想用的快捷键", "cardTitle"))
+        layout.addWidget(
+            label(
+                "例如 Ctrl+Alt+K、Win+Shift+H 或 F8，按 Esc 取消。"
+                "想单独按住右 Ctrl、右 Alt 或 CapsLock 说话，请直接在列表里选。",
+                "muted",
+                wrap=True,
+            )
+        )
+        self.keys = label("等待按键…", "cardTitle")
+        layout.addWidget(self.keys)
+        self.problem = label("", "caption", wrap=True)
+        layout.addWidget(self.problem)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = make_button("取消")
+        cancel.clicked.connect(self.reject)
+        self.use = make_button("使用这个快捷键", Glyph.CHECK, "primary")
+        self.use.setEnabled(False)
+        self.use.clicked.connect(self.accept)
+        for button in (cancel, self.use):
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # Space and Enter are keys to record here.
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def event(self, event):
+        # Tab would otherwise move the focus before keyPressEvent sees it.
+        if event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+            self.keyPressEvent(event)
+            return True
+        return super().event(event)
+
+    def keyPressEvent(self, event):
+        modifiers = event.modifiers()
+        held = [
+            name
+            for name, flag in (
+                ("Ctrl", Qt.KeyboardModifier.ControlModifier),
+                ("Alt", Qt.KeyboardModifier.AltModifier),
+                ("Shift", Qt.KeyboardModifier.ShiftModifier),
+                ("Win", Qt.KeyboardModifier.MetaModifier),
+            )
+            if modifiers & flag
+        ]
+        key = event.key()
+        if key == Qt.Key.Key_Escape and not held:
+            self.reject()
+            return
+        pressed = {
+            Qt.Key.Key_Control: "Ctrl", Qt.Key.Key_Alt: "Alt", Qt.Key.Key_AltGr: "Alt",
+            Qt.Key.Key_Shift: "Shift", Qt.Key.Key_Meta: "Win",
+        }.get(key)
+        if pressed:
+            # Qt flips a modifier's own bit on its key press, so add it explicitly.
+            self.keys.setText(shortcut_name({*held, pressed}, "…"))
+            return
+        key_name = KEY_NAMES.get(event.nativeVirtualKey())
+        name = shortcut_name(held, key_name) if key_name else "+".join(held + ["?"])
+        problem = shortcut_problem(name) if key_name else "不支持这个键，请换一个。"
+        self.keys.setText(name)
+        self.problem.setText(problem or "可以使用。")
+        self.chosen = "" if problem else name
+        self.use.setEnabled(not problem)
+
+    @classmethod
+    def ask(cls, parent=None) -> str | None:
+        dialog = cls(parent)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        return dialog.chosen if accepted and dialog.chosen else None
+
+
 class SettingsDialog(QDialog):
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
@@ -1417,13 +1504,23 @@ class SettingsDialog(QDialog):
         except Exception:
             self.mic.setToolTip("未能列出麦克风，请检查音频设备。")
         form.addRow(field_label("麦克风"), self.mic)
+        hotkey = QVBoxLayout()
+        hotkey.setSpacing(4)
         self.hotkey = ComboBox()
-        self.hotkey.addItems(RECORDING_CHOICES)
+        for name in RECORDING_CHOICES:
+            self.hotkey.addItem(shortcut_label(name), name)
         if settings.hotkey not in RECORDING_CHOICES:
-            self.hotkey.addItem(settings.hotkey)
-        self.hotkey.setCurrentText(settings.hotkey)
+            self.hotkey.addItem(shortcut_label(settings.hotkey), settings.hotkey)
+        self.hotkey.addItem("自定义…", CUSTOM_HOTKEY)
+        self.hotkey.setCurrentIndex(max(0, self.hotkey.findData(settings.hotkey)))
+        self.hotkey_choice = settings.hotkey
+        self.hotkey.activated.connect(self.choose_hotkey)
         self.hotkey.setMaximumWidth(200)
-        form.addRow(field_label("录音快捷键"), self.hotkey)
+        hotkey.addWidget(self.hotkey)
+        hotkey.addWidget(
+            label("右 Ctrl、右 Alt、CapsLock 要单独按住约 0.3 秒才开始录音；轻按或和其他键一起按时，仍是原来的功能。", "muted", wrap=True)
+        )
+        form.addRow(field_label("录音快捷键"), hotkey)
         self.hold = Switch("按住快捷键说话，松开结束")
         self.hold.setChecked(settings.hold_to_talk)
         form.addRow(field_label("录音方式"), self.hold)
@@ -1548,6 +1645,18 @@ class SettingsDialog(QDialog):
 
         run_task(self, lambda _report: check_api(base_url, key, model, timeout), finished)
 
+    def choose_hotkey(self, index: int):
+        name = self.hotkey.itemData(index)
+        if name == CUSTOM_HOTKEY:
+            name = HotkeyRecorder.ask(self)
+            if not name:
+                self.hotkey.setCurrentIndex(self.hotkey.findData(self.hotkey_choice))
+                return
+            if self.hotkey.findData(name) < 0:
+                self.hotkey.insertItem(self.hotkey.count() - 1, shortcut_label(name), name)
+            self.hotkey.setCurrentIndex(self.hotkey.findData(name))
+        self.hotkey_choice = name
+
     def fill_lexicons(self):
         while self.lexicon_rows.count():
             widget = self.lexicon_rows.takeAt(0).widget()
@@ -1640,7 +1749,7 @@ class SettingsDialog(QDialog):
                 api_base_url=base_url,
                 api_timeout=float(self.timeout.value()),
                 microphone=self.mic.currentData(),
-                hotkey=self.hotkey.currentText(),
+                hotkey=self.hotkey_choice,
                 hold_to_talk=self.hold.isChecked(),
                 save_history=self.history.isChecked(),
                 collect_stats=self.collect_stats.isChecked(),

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .api_config import DEFAULT_API_BASE_URL, chat_completion_url, credential_account, is_deepseek_api
 from .models import ALL_MODELS, DEFAULT_MODEL, get_model, models_ready
-from .shortcuts import DEFAULT_HOTKEY, HOTKEYS
+from .shortcuts import DEFAULT_HOTKEY, parse_shortcut
 
 MODEL_IDS = {model.id for model in ALL_MODELS}
 
@@ -173,7 +173,7 @@ class Settings:
                         values[key] = relocated(value) if value else value
                 elif type(value) is type(getattr(defaults, key)):
                     values[key] = value
-            if "hotkey" in values and values["hotkey"] not in HOTKEYS:
+            if "hotkey" in values and parse_shortcut(values["hotkey"]) is None:
                 values.pop("hotkey")
             if not 1 <= values.get("api_timeout", 25) <= 120:
                 values.pop("api_timeout", None)

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import ctypes
+import threading
 from ctypes import wintypes
 from dataclasses import dataclass
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, QTimer, Signal
 
 from .core import single_line_text
-from .shortcuts import HOTKEYS, INSERT_HOTKEY
+from .shortcuts import INSERT_HOTKEY, MODIFIERS, parse_shortcut
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 user32.GetForegroundWindow.restype = wintypes.HWND
@@ -88,9 +89,11 @@ def is_password(target: InputTarget) -> bool:
 
 
 def shortcut_held(name: str) -> bool:
-    modifiers, key = HOTKEYS[name]
-    keys = [key] + [vk for bit, vk in ((1, 0x12), (2, 0x11), (4, 0x10)) if modifiers & bit]
-    return all(user32.GetAsyncKeyState(vk) & 0x8000 for vk in keys)
+    shortcut = parse_shortcut(name)
+    if shortcut is None:
+        return False
+    groups = [(shortcut.key,)] + [vks for _name, flag, vks in MODIFIERS if shortcut.modifiers & flag]
+    return all(any(user32.GetAsyncKeyState(vk) & 0x8000 for vk in group) for group in groups)
 
 
 def modifiers_held() -> bool:
@@ -161,6 +164,144 @@ class INPUT(ctypes.Structure):
     _fields_ = [("type", wintypes.DWORD), ("union", INPUTUNION)]
 
 
+# Marks keystrokes the app sends itself (paste, the Alt mask key, a re-sent CapsLock tap) so the
+# solo-key hook skips them while still seeing keys injected by remote desktops and on-screen keyboards.
+OWN_INPUT = 0x53415957
+
+
+def send_keys(*strokes: tuple[int, int]) -> bool:
+    """Send (virtual key, flags) keystrokes marked as the app's own."""
+    events = (INPUT * len(strokes))()
+    for event, (key, flags) in zip(events, strokes, strict=True):
+        event.type = 1
+        event.ki = KEYBDINPUT(key, user32.MapVirtualKeyW(key, 0) & 0xFF, flags, 0, OWN_INPUT)
+    return user32.SendInput(len(strokes), ctypes.byref(events), ctypes.sizeof(INPUT)) == len(strokes)
+
+
+def tap_key(key: int) -> bool:
+    return send_keys((key, 0), (key, 2))
+
+
+def mask_alt_release() -> bool:
+    """Releasing Alt after holding it alone opens the active window's menu bar and takes the
+    focus away from the text field. Any other key pressed while Alt is down prevents that;
+    0xE8 is unassigned, so it does nothing else (AutoHotkey uses the same trick)."""
+    return tap_key(0xE8)
+
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", wintypes.DWORD),
+        ("scanCode", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+HOOKPROC = ctypes.WINFUNCTYPE(wintypes.LPARAM, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
+user32.SetWindowsHookExW.restype = wintypes.HHOOK
+user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+user32.CallNextHookEx.restype = wintypes.LPARAM
+user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+user32.SetTimer.argtypes = [wintypes.HWND, ctypes.c_size_t, wintypes.UINT, ctypes.c_void_p]
+user32.SetTimer.restype = ctypes.c_size_t
+WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP = 0x0100, 0x0101, 0x0104, 0x0105
+
+
+class SoloKeyEvents(QObject):
+    pressed = Signal()  # The key went down (key repeat is ignored).
+    released = Signal()
+    chorded = Signal()  # Another key went down while it was held: an ordinary shortcut.
+
+
+class SoloKeyHook:
+    """Watches one key held on its own (right Ctrl, right Alt, CapsLock) with a low-level hook.
+
+    The hook runs on its own thread and message loop: Windows waits for every low-level hook
+    before delivering each keystroke, so a busy GUI thread would make typing stall everywhere.
+    Windows also drops a hook that is slow to answer without telling anyone, so it is put back
+    every 30 seconds. With swallow, the key never reaches other programs (CapsLock would flip)."""
+
+    def __init__(self, key: int, swallow: bool = False):
+        self.key = key
+        self.swallow = swallow
+        self.events = SoloKeyEvents()
+        self.held = False
+        self.chorded = False
+        self.thread: threading.Thread | None = None
+        self.thread_id = 0
+
+    def handle(self, message: int, key: int, extra: int) -> bool:
+        """Process one keystroke; True when it should be kept from other programs."""
+        if extra == OWN_INPUT:
+            return False
+        down = message in (WM_KEYDOWN, WM_SYSKEYDOWN)
+        if key == self.key:
+            if down and not self.held:
+                self.held, self.chorded = True, False
+                self.events.pressed.emit()
+            elif not down and self.held:
+                self.held = False
+                self.events.released.emit()
+            return self.swallow
+        if down and self.held and not self.chorded:
+            self.chorded = True
+            self.events.chorded.emit()
+        return False
+
+    def start(self) -> bool:
+        ready = threading.Event()
+        result = []
+
+        def callback(code, message, data):
+            if code == 0:
+                info = ctypes.cast(data, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                try:
+                    if self.handle(int(message), info.vkCode, info.dwExtraInfo):
+                        return 1
+                except Exception:  # noqa: BLE001 - never let a hook error block the keyboard
+                    pass
+            return user32.CallNextHookEx(None, code, message, data)
+
+        def run():
+            self.thread_id = kernel32.GetCurrentThreadId()
+            procedure = HOOKPROC(callback)  # Kept referenced for as long as the hook lives.
+            module = kernel32.GetModuleHandleW(None)
+            hook = user32.SetWindowsHookExW(13, procedure, module, 0)  # WH_KEYBOARD_LL
+            result.append(bool(hook))
+            ready.set()
+            if not hook:
+                return
+            user32.SetTimer(None, 0, 30_000, None)
+            msg = wintypes.MSG()
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                if msg.message == 0x0113:  # WM_TIMER: reinstall in case Windows dropped the hook.
+                    user32.UnhookWindowsHookEx(hook)
+                    hook = user32.SetWindowsHookExW(13, procedure, module, 0)
+            if hook:
+                user32.UnhookWindowsHookEx(hook)
+
+        self.thread = threading.Thread(target=run, name="solo-key-hook", daemon=True)
+        self.thread.start()
+        ready.wait(5)
+        return bool(result and result[0])
+
+    def stop(self) -> None:
+        if self.thread and self.thread.is_alive():
+            user32.PostThreadMessageW(self.thread_id, 0x0012, 0, 0)  # WM_QUIT
+            self.thread.join(2)
+        self.thread = None
+        self.held = False
+
+
 class PasteError(RuntimeError):
     pass
 
@@ -213,7 +354,7 @@ def paste_text(text: str, target: InputTarget, clipboard, restore_callback=None,
         # Always request the dedicated Insert key so Num Lock cannot change the chord.
         if key == 0x2D or scan & 0xFF00 == 0xE000:
             flags |= 0x0001  # KEYEVENTF_EXTENDEDKEY, required for the dedicated Insert key.
-        event.ki = KEYBDINPUT(key, scan & 0xFF, flags, 0, 0)
+        event.ki = KEYBDINPUT(key, scan & 0xFF, flags, 0, OWN_INPUT)
     sent = user32.SendInput(4, ctypes.byref(events), ctypes.sizeof(INPUT))
     QTimer.singleShot(1000, restore)
     if sent != 4:

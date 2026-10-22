@@ -40,7 +40,7 @@ from .models import get_model, models_ready
 from .pipeline import Events, ModelDownloads, Pipeline
 from .session import SessionGate
 from .settings import Settings, data_dir, read_key
-from .shortcuts import DEFAULT_HOTKEY, HOTKEYS, INSERT_HOTKEY
+from .shortcuts import DEFAULT_HOTKEY, INSERT_HOTKEY, SOLO_HOLD_MS, parse_shortcut, shortcut_label
 from .startup import StartupError, migrate_legacy_entry, save_settings_with_startup, startup_enabled
 from .stats import StatsStore
 from .ui import (
@@ -66,7 +66,17 @@ from .ui import (
     tray_icon,
 )
 from .vocabulary import delete_lexicons, warm
-from .windows import Hotkeys, PasteError, current_target, modifiers_held, paste_text, shortcut_held
+from .windows import (
+    Hotkeys,
+    PasteError,
+    SoloKeyHook,
+    current_target,
+    mask_alt_release,
+    modifiers_held,
+    paste_text,
+    shortcut_held,
+    tap_key,
+)
 
 IDLE_STATS = "音频只在本机识别，录音不落盘；整理时仅发送文字至所选 API。"
 
@@ -94,6 +104,14 @@ class MainWindow(QMainWindow):
         self.quitting = False
         self.native = native
         self.hotkeys = Hotkeys() if native else None
+        # A recording key held on its own (right Ctrl, right Alt, CapsLock): a press only starts
+        # recording after SOLO_HOLD_MS, so quick taps and shortcuts such as right Ctrl+C keep working.
+        self.solo: SoloKeyHook | None = None
+        self.solo_state = ""  # "pending" while waiting, "chord" if another key came, "active" once started
+        self.solo_timer = QTimer(self)
+        self.solo_timer.setSingleShot(True)
+        self.solo_timer.setInterval(SOLO_HOLD_MS)
+        self.solo_timer.timeout.connect(self.solo_long_press)
         self.overlay = RecordingOverlay()
         self.usage = StatsStore() if self.settings.collect_stats else None
         self.balance: str | None = None
@@ -442,7 +460,7 @@ class MainWindow(QMainWindow):
         self.pill.setProperty("tone", tone)
         self.hero_bottom.setCurrentIndex(1 if self.state == "recording" else 0)
         action = "按住说话" if self.settings.hold_to_talk else "按一下开始，再按结束"
-        self.shortcut_label.setText(f"{self.settings.hotkey} {action}")
+        self.shortcut_label.setText(f"{shortcut_label(self.settings.hotkey)} {action}")
 
     def result_edited(self):
         if self.state == "idle":
@@ -456,11 +474,70 @@ class MainWindow(QMainWindow):
     def configure_hotkeys(self):
         if not self.hotkeys:
             return
-        modifiers, key = HOTKEYS.get(self.settings.hotkey, HOTKEYS[DEFAULT_HOTKEY])
-        if not self.hotkeys.register(1, modifiers, key):
+        if not self.activate_hotkey(self.settings.hotkey):
             self.set_notice("录音快捷键被其他程序占用，请在设置中更换。仍可点击开始录音。")
         if not self.hotkeys.register(2, 0x0001, ord("V")):
             self.set_notice(f"{INSERT_HOTKEY} 被其他程序占用，请使用复制结果或输入按钮。")
+
+    def activate_hotkey(self, name: str) -> bool:
+        """Listen for the recording shortcut name instead of the current one."""
+        self.suspend_hotkey()
+        shortcut = parse_shortcut(name) or parse_shortcut(DEFAULT_HOTKEY)
+        if not shortcut.solo:
+            return self.hotkeys.register(1, shortcut.modifiers, shortcut.key)
+        # CapsLock is kept from other programs and re-sent on a quick tap, so holding it to
+        # talk does not flip it; the right-hand modifiers pass through untouched.
+        self.solo = SoloKeyHook(shortcut.key, swallow=shortcut.name == "CapsLock")
+        self.solo.events.pressed.connect(self.solo_pressed)
+        self.solo.events.released.connect(self.solo_released)
+        self.solo.events.chorded.connect(self.solo_chorded)
+        if self.solo.start():
+            return True
+        self.solo = None
+        return False
+
+    def suspend_hotkey(self):
+        """Stop listening for the recording shortcut, e.g. while settings are open."""
+        if self.hotkeys:
+            self.hotkeys.unregister(1)
+        if self.solo:
+            self.solo.stop()
+            self.solo = None
+        self.solo_timer.stop()
+        self.solo_state = ""
+
+    def hotkey_active(self) -> bool:
+        return bool(self.solo) or bool(self.hotkeys and 1 in self.hotkeys.registered)
+
+    def hotkey_held(self) -> bool:
+        if self.solo:
+            return self.solo.held
+        return shortcut_held(self.settings.hotkey)
+
+    def solo_pressed(self):
+        self.solo_state = "pending"
+        self.solo_timer.start()
+
+    def solo_chorded(self):
+        if self.solo_state == "pending":
+            self.solo_timer.stop()
+            self.solo_state = "chord"
+
+    def solo_long_press(self):
+        if self.solo_state != "pending" or not self.solo:
+            return
+        self.solo_state = "active"
+        if self.settings.hotkey == "RightAlt":
+            mask_alt_release()
+        self.on_hotkey(1)
+
+    def solo_released(self):
+        state, self.solo_state = self.solo_state, ""
+        self.solo_timer.stop()
+        # A swallowed CapsLock that turned out to be a tap (or part of a shortcut) still toggles.
+        if state in ("pending", "chord") and self.solo and self.solo.swallow:
+            tap_key(self.solo.key)
+        # Hold-to-talk notices the release in tick() through hotkey_held().
 
     def on_hotkey(self, identifier: int):
         if identifier == 1:
@@ -549,7 +626,7 @@ class MainWindow(QMainWindow):
             if self.recorder.limit_reached.is_set():
                 self.stop_recording()
                 self.set_notice("已达到 2 分钟上限，正在处理刚才的录音。")
-            elif self.from_hotkey and self.settings.hold_to_talk and not shortcut_held(self.settings.hotkey):
+            elif self.from_hotkey and self.settings.hold_to_talk and not self.hotkey_held():
                 self.stop_recording()
 
     def on_level(self, level: float):
@@ -864,6 +941,8 @@ class MainWindow(QMainWindow):
             self.set_notice(str(exc))
             return
         dialog = SettingsDialog(current, self)
+        # Typing a new shortcut, or holding right Ctrl in the dialog, must not start a recording.
+        self.suspend_hotkey()
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
         known = {item["id"] for item in current.lexicons} | getattr(dialog, "imported_ids", set())
         try:
@@ -872,6 +951,7 @@ class MainWindow(QMainWindow):
             # Lexicon files imported or removed in the dialog go unless the saved settings list them.
             delete_lexicons(known - {item["id"] for item in self.settings.lexicons})
             warm(self.settings.lexicons)
+            self.configure_hotkeys()
 
     def apply_settings_dialog(self, dialog, accepted: bool):
         if getattr(dialog, "stats_cleared", False):
@@ -881,12 +961,9 @@ class MainWindow(QMainWindow):
             self.refresh_overview()
         if accepted:
             new = dialog.updated
-            if self.hotkeys and new.hotkey != self.settings.hotkey:
-                modifiers, key = HOTKEYS[new.hotkey]
-                if not self.hotkeys.register(1, modifiers, key):
-                    self.configure_hotkeys()
-                    self.set_notice("所选快捷键已被占用，设置未修改，请选择其他组合。")
-                    return
+            if self.hotkeys and not self.activate_hotkey(new.hotkey):
+                self.set_notice("所选快捷键已被占用，设置未修改，请选择其他组合。")
+                return  # open_settings puts the saved shortcut back.
             try:
                 save_settings_with_startup(new)
                 if new.gpu_acceleration != self.settings.gpu_acceleration:
@@ -986,7 +1063,7 @@ class MainWindow(QMainWindow):
             self.hide()
             self.tray.showMessage(
                 "好好说仍在运行",
-                f"使用 {self.settings.hotkey} 录音；右键托盘图标可退出。",
+                f"使用 {shortcut_label(self.settings.hotkey)} 录音；右键托盘图标可退出。",
                 QSystemTrayIcon.MessageIcon.Information,
                 2500,
             )
@@ -1005,6 +1082,7 @@ class MainWindow(QMainWindow):
         self.overlay.close()
         self.tray.hide()
         if self.hotkeys:
+            self.suspend_hotkey()
             self.hotkeys.close()
             QApplication.instance().removeNativeEventFilter(self.hotkeys)
 
@@ -1030,6 +1108,11 @@ def main() -> int:
 
         if TermIndex.build(["龚彧宸"]).lookup("龚玉晨") != ["龚彧宸"]:
             raise RuntimeError("Pinyin matching does not work in this build.")
+        # The default shortcut, holding right Ctrl, needs the low-level keyboard hook.
+        hook = SoloKeyHook(0xA3)
+        if not hook.start():
+            raise RuntimeError("The keyboard hook cannot be installed in this build.")
+        hook.stop()
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Saywell")
     app.setOrganizationName("Saywell")
@@ -1053,7 +1136,7 @@ def main() -> int:
         models_ready(window.settings.models, model=window.settings.asr_model)
         and bool(read_key(api_base_url=window.settings.api_base_url))
         and QSystemTrayIcon.isSystemTrayAvailable()
-        and (args.smoke or 1 in window.hotkeys.registered)
+        and (args.smoke or window.hotkey_active())
     )
     if not args.background or not background_ready:
         window.show()

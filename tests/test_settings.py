@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from saywell import settings
 
 
@@ -34,10 +36,20 @@ def test_old_data_folder_stays_in_use_while_it_cannot_be_moved(tmp_path, monkeyp
     assert not (tmp_path / "Saywell").exists()
 
 
-def test_default_shortcut_is_two_keys_and_hold_to_talk_is_enabled():
+def test_default_shortcut_is_holding_right_ctrl_to_talk():
     value = settings.Settings()
-    assert value.hotkey == "Alt+X"
+    assert value.hotkey == "RightCtrl"
     assert value.hold_to_talk
+
+
+@pytest.mark.parametrize(
+    ("saved", "loaded"),
+    [("Alt+X", "Alt+X"), ("Ctrl+Shift+Space", "Ctrl+Shift+Space"), ("CapsLock", "CapsLock"), ("Hyper+Q", "RightCtrl")],
+)
+def test_saved_shortcuts_keep_working_and_unknown_ones_fall_back(tmp_path, saved, loaded):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"hotkey": saved}), encoding="utf-8")
+    assert settings.Settings.load(path).hotkey == loaded
 
 
 def test_two_key_shortcut_survives_reload(tmp_path):
