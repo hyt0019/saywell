@@ -268,6 +268,25 @@ def test_settings_dialog_startup_choice_is_optional_and_saved(window):
     dialog.close()
 
 
+def test_wheel_scrolls_settings_without_changing_choices(window):
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+
+    dialog = SettingsDialog(Settings(), window)
+    for widget in (dialog.mic, dialog.hotkey, dialog.timeout):
+        before = widget.currentIndex() if widget is not dialog.timeout else widget.value()
+        for delta in (-120, 120):
+            event = QWheelEvent(
+                QPointF(10, 10), QPointF(10, 10), QPoint(0, 0), QPoint(0, delta),
+                Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False,
+            )
+            QApplication.sendEvent(widget, event)
+            assert not event.isAccepted()  # Left for the scroll area.
+        after = widget.currentIndex() if widget is not dialog.timeout else widget.value()
+        assert after == before
+    dialog.close()
+
+
 def test_failed_startup_change_keeps_existing_window_settings(window, monkeypatch):
     from saywell.startup import StartupError
 

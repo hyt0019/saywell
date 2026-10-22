@@ -1020,7 +1020,17 @@ class MicButton(QPushButton):
 
 
 class ComboBox(QComboBox):
-    """QComboBox with a drawn chevron, so no image files are needed for the arrow."""
+    """QComboBox with a drawn chevron, so no image files are needed for the arrow.
+
+    The wheel scrolls the page instead of changing the choice: scrolling the settings
+    past the microphone list used to switch microphones. Choices change by clicking."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # The wheel no longer focuses it either.
+
+    def wheelEvent(self, event):
+        event.ignore()  # Passed on to the scroll area.
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -1029,6 +1039,17 @@ class ComboBox(QComboBox):
             painter, "chevron_down", QRectF(self.width() - 30, (self.height() - 14) / 2, 14, 14),
             MUTED if self.isEnabled() else DISABLED,
         )
+
+
+class SpinBox(QSpinBox):
+    """A number field the wheel scrolls past, like ComboBox."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 class HeroCard(QFrame):
@@ -1362,7 +1383,7 @@ class SettingsDialog(QDialog):
         self.model = QLineEdit(settings.model)
         self.model.setPlaceholderText("填写服务商提供的模型名称")
         form.addRow(field_label("模型名称"), self.model)
-        self.timeout = QSpinBox()
+        self.timeout = SpinBox()
         self.timeout.setRange(1, 120)
         self.timeout.setSuffix(" 秒")
         self.timeout.setValue(int(settings.api_timeout))
