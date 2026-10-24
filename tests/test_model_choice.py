@@ -77,9 +77,9 @@ def test_transcript_spacing_and_segment_joining():
     assert join_segments(["Hello world.", "Next", "你好。", "下一句"]) == "Hello world. Next你好。下一句"
 
 
-def fake_model(files: dict[str, bytes]) -> AsrModel:
+def fake_model(files: dict[str, bytes], base: str = "https://models.example/") -> AsrModel:
     specs = tuple(
-        ModelFile(name, f"https://models.example/{name}", len(data), hashlib.sha256(data).hexdigest())
+        ModelFile(name, f"{base}{name}", len(data), hashlib.sha256(data).hexdigest())
         for name, data in files.items()
     )
     return AsrModel("fake", "Fake", "sense_voice", "fake", "", ("a", "b", "c"), "", "", specs)
@@ -132,11 +132,189 @@ def test_cancelled_download_leaves_no_partial_file(tmp_path, monkeypatch):
     assert not list(tmp_path.rglob("*.part"))
 
 
+HF_BASE = "https://huggingface.co/org/repo/resolve/abc123/"
+REAL_CLIENT = httpx.Client
+
+
+def use_transport(monkeypatch, handler):
+    monkeypatch.setattr(
+        models.httpx, "Client", lambda **kwargs: REAL_CLIENT(transport=httpx.MockTransport(handler), **kwargs)
+    )
+
+
+def test_hugging_face_files_try_the_china_mirror_first_and_github_files_fall_back_to_proxies():
+    weights = SENSE_VOICE.files[0]
+    assert models.file_urls(weights) == (
+        weights.url.replace("https://huggingface.co/", "https://hf-mirror.com/"),
+        weights.url,
+    )
+    urls = models.file_urls(VAD)
+    assert urls[0] == VAD.url and len(urls) > 1
+    assert all(url.endswith(VAD.url) for url in urls)  # Proxies fetch the same pinned release file.
+    every = [url for model in ALL_MODELS for spec in model.files for url in models.file_urls(spec)]
+    assert all(url.startswith("https://") for url in every)
+
+
+def test_download_moves_on_when_an_address_cannot_be_reached(tmp_path, monkeypatch):
+    data = b"weights" * 100
+    hosts = []
+
+    def handler(request):
+        hosts.append(request.url.host)
+        if request.url.host == "hf-mirror.com":
+            raise httpx.ConnectError("blocked", request=request)
+        return httpx.Response(200, content=data)
+
+    use_transport(monkeypatch, handler)
+    download_model(fake_model({"model.onnx": data}, HF_BASE), tmp_path)
+    assert hosts == ["hf-mirror.com", "huggingface.co"]
+    assert (tmp_path / "model.onnx").read_bytes() == data
+
+
+@pytest.mark.parametrize("honours_range", [True, False])
+def test_interrupted_download_continues_from_the_saved_part(tmp_path, monkeypatch, honours_range):
+    data = bytes(range(256)) * 4000
+    requests = []
+
+    def handler(request):
+        requests.append((request.headers.get("range"), request.headers.get("accept-encoding")))
+        if len(requests) == 1:
+
+            def broken():
+                yield data[: models.CHUNK]
+                raise httpx.ReadError("connection reset", request=request)
+
+            return httpx.Response(200, content=broken())
+        if not honours_range:
+            return httpx.Response(200, content=data)
+        start = int(request.headers["range"].removeprefix("bytes=").removesuffix("-"))
+        return httpx.Response(206, content=data[start:])
+
+    use_transport(monkeypatch, handler)
+    progress = []
+    download_model(fake_model({"model.onnx": data}), tmp_path, lambda value, name: progress.append(value))
+    assert requests[1] == (f"bytes={models.CHUNK}-", "identity")
+    assert (tmp_path / "model.onnx").read_bytes() == data
+    assert not list(tmp_path.glob("*.part"))
+    assert progress[-1] == 100
+
+
+def test_failed_download_says_why_and_keeps_the_part_for_next_time(tmp_path, monkeypatch):
+    data = b"x" * (models.CHUNK * 2)
+    model = fake_model({"model.onnx": data})
+
+    use_transport(monkeypatch, lambda request: httpx.Response(429))
+    with pytest.raises(models.ModelError, match="繁忙"):
+        download_model(model, tmp_path)
+
+    def unreachable(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    use_transport(monkeypatch, unreachable)
+    with pytest.raises(models.ModelError, match="连不上.*导入"):
+        download_model(model, tmp_path)
+
+    calls = []
+
+    def flaky(request):
+        calls.append(request)
+        if len(calls) == 1:
+
+            def broken():
+                yield data[: models.CHUNK]
+                raise httpx.ReadError("reset", request=request)
+
+            return httpx.Response(200, content=broken())
+        raise httpx.ReadTimeout("stalled", request=request)
+
+    use_transport(monkeypatch, flaky)
+    with pytest.raises(models.ModelError, match="已下载的部分会保留"):
+        download_model(model, tmp_path)
+    assert len(calls) == 1 + models.RETRIES  # Gives up after attempts that add nothing.
+    assert (tmp_path / "model.onnx.part").stat().st_size == models.CHUNK
+
+
+def test_files_are_copied_from_a_local_pack_and_damaged_copies_are_downloaded(tmp_path, monkeypatch):
+    files = {"model.onnx": b"weights" * 100, "tokens.txt": b"a 1\nb 2\n"}
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    (pack / "model.onnx").write_bytes(files["model.onnx"])
+    (pack / "tokens.txt").write_bytes(b"x 1\nb 2\n")  # Right size, wrong content.
+    requests = []
+    mock_client(monkeypatch, files, requests)
+    model = fake_model(files)
+    download_model(model, tmp_path / "m", sources=(tmp_path / "missing", pack))
+    assert requests == ["/tokens.txt"]
+    assert models.models_ready(tmp_path / "m", verify=True, model=model)
+    assert not list((tmp_path / "m").glob("*.part"))
+
+
+def test_download_removes_unfinished_files_left_by_older_versions(tmp_path, monkeypatch):
+    files = {"model.onnx": b"weights"}
+    mock_client(monkeypatch, files, [])
+    stale = tmp_path / f"model.onnx.{'a' * 32}.part"
+    stale.write_bytes(b"old")
+    other = tmp_path / "model.onnx.notes.part"
+    other.write_bytes(b"keep")
+    download_model(fake_model(files), tmp_path)
+    assert not stale.exists() and other.exists()
+
+
+def test_offline_pack_folders_are_found_by_file_names_and_sizes(tmp_path, monkeypatch):
+    one = fake_model({"a.onnx": b"1" * 10, "tokens.txt": b"t"})
+    two = replace(fake_model({"b.onnx": b"2" * 20, "tokens.txt": b"t"}), id="other")
+    monkeypatch.setattr(models, "ALL_MODELS", (one, two))
+    pack = tmp_path / "好好说 Saywell" / "语音模型"
+    for folder, model in ((pack / "One", one), (pack / "Two", two)):
+        folder.mkdir(parents=True)
+        for spec in model.files:
+            (folder / spec.name).write_bytes(b"z" * spec.size)
+    (pack / "Broken").mkdir()
+    (pack / "Broken" / "tokens.txt").write_bytes(b"t")
+    assert models.find_models(tmp_path / "好好说 Saywell") == {"fake": pack / "One", "other": pack / "Two"}
+    assert models.find_models(pack / "Two") == {"other": pack / "Two"}
+    assert models.find_models(tmp_path / "missing") == {}
+
+
+@pytest.mark.parametrize("discard", [True, False])
+def test_queued_imports_run_in_turn_and_cancelling_stops_the_rest(qt_app, tmp_path, monkeypatch, discard):
+    calls, events = [], []
+    waiting = threading.Event()
+    part = models.part_path(tmp_path / "c" / get_model("canary").files[0].name)
+
+    def fake_download(model, directory, progress, cancel, sources):
+        calls.append((model.id, sources))
+        if model.id == "canary":
+            part.parent.mkdir(parents=True)
+            part.write_bytes(b"x")
+            waiting.set()
+            cancel.wait(5)
+            raise Cancelled("已取消下载。")
+
+    monkeypatch.setattr("saywell.pipeline.download_model", fake_download)
+    downloads = ModelDownloads()
+    downloads.finished.connect(lambda *args: events.append(("finished", args)))
+    downloads.failed.connect(lambda *args: events.append(("failed", args)))
+    pack = (tmp_path / "pack",)
+    jobs = [("xasr", tmp_path / "x", pack), ("canary", tmp_path / "c", pack), ("sensevoice", tmp_path, pack)]
+    assert downloads.start_many(jobs, "导入")
+    assert downloads.verb == "导入"
+    assert waiting.wait(5)
+    downloads.cancel(discard=discard)
+    downloads.thread.join(5)
+    qt_app.processEvents()
+    assert calls == [("xasr", pack), ("canary", pack)]
+    assert events == [("finished", ("xasr",)), ("failed", ("canary", ""))]
+    assert downloads.active is None
+    # Cancelling by hand deletes the unfinished file; quitting keeps it to continue next time.
+    assert part.exists() is not discard
+
+
 def test_background_download_reports_success_and_allows_one_at_a_time(qt_app, tmp_path, monkeypatch):
     calls, events = [], []
     release = threading.Event()
 
-    def fake_download(model, directory, progress, cancel):
+    def fake_download(model, directory, progress, cancel, sources):
         calls.append((model.id, directory))
         progress(50, "file")
         release.wait(5)
@@ -162,7 +340,9 @@ def model_dialog(qt_app, tmp_path, monkeypatch):
     starts = []
     monkeypatch.setattr(ui, "models_ready", lambda directory, model: model.id in ready)
     downloads = ModelDownloads()
-    monkeypatch.setattr(downloads, "start", lambda model_id, directory: starts.append((model_id, directory)) or True)
+    monkeypatch.setattr(
+        downloads, "start", lambda model_id, directory, sources=(): starts.append((model_id, directory)) or True
+    )
     value = Settings(download_dir=str(tmp_path), model_paths={"sensevoice": str(tmp_path / "legacy")})
     dialog = ModelDialog(value, downloads, lambda new: applied.append(new) or True)
     yield SimpleNamespace(dialog=dialog, ready=ready, applied=applied, starts=starts, root=tmp_path)
@@ -251,6 +431,51 @@ def test_model_dialog_warns_before_download_without_disk_space(model_dialog, mon
     model_dialog.dialog.cards["canary"].action.click()
     assert warnings == ["磁盘空间不足"]
     assert model_dialog.starts == []
+
+
+def test_model_dialog_imports_the_models_found_in_a_pack(model_dialog, monkeypatch):
+    view = model_dialog
+    pack = view.root / "pack"
+    monkeypatch.setattr(ui.QFileDialog, "getExistingDirectory", lambda *args: str(pack))
+    monkeypatch.setattr(ui, "free_space", lambda path: None)
+    notes = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: notes.append(args[1]))
+    started = []
+    monkeypatch.setattr(view.dialog.downloads, "start_many", lambda jobs, verb: started.append((jobs, verb)) or True)
+    monkeypatch.setattr(ui, "find_models", lambda folder: {})
+    view.dialog.import_button.click()
+    assert notes == ["没有找到模型"] and started == []
+
+    monkeypatch.setattr(ui, "find_models", lambda folder: {"sensevoice": folder / "s", "qwen3-asr": folder / "q"})
+    view.dialog.import_button.click()
+    # SenseVoice is already downloaded, so only Qwen3-ASR is copied into the download location.
+    assert started == [([("qwen3-asr", view.root / "qwen3-asr-0.6b-q8", (pack / "q",))], "导入")]
+    assert "正在导入 Qwen3-ASR 0.6B" in view.dialog.message.text()
+
+
+def test_main_window_switches_to_a_new_model_only_when_the_chosen_one_is_missing(qt_app, monkeypatch, tmp_path):
+    from saywell.app import MainWindow
+
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
+    monkeypatch.setattr(Settings, "save", lambda self, path=None: None)
+    ready = {"qwen3-asr"}
+    monkeypatch.setattr(
+        "saywell.app.models_ready",
+        lambda directory, model: (model if isinstance(model, str) else model.id) in ready,
+    )
+    window = MainWindow(Settings(download_dir=str(tmp_path)), native=False)
+    try:
+        window.downloads.verb = "导入"
+        window.on_download_finished("qwen3-asr")  # SenseVoice, the default, was never downloaded.
+        assert window.settings.asr_model == "qwen3-asr"
+        assert window.status.text() == "语音模型已就绪"
+        ready.add("canary")
+        window.on_download_finished("canary")  # A usable model is never replaced.
+        assert window.settings.asr_model == "qwen3-asr"
+        assert "Canary 180M Flash 已导入" in window.stats.text()
+    finally:
+        window.shutdown()
+        window.close()
 
 
 def test_pipeline_loads_selected_model_and_reloads_after_switch(monkeypatch):

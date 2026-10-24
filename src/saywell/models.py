@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import glob
 import hashlib
-import uuid
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import Callable
+from typing import Callable, Sequence
 
 import httpx
 
@@ -495,12 +496,79 @@ class ModelError(RuntimeError):
     pass
 
 
+HF = "https://huggingface.co/"
+GITHUB = "https://github.com/"
+# Hugging Face is blocked in mainland China. hf-mirror.com serves the same pinned revisions
+# there and sends visitors from elsewhere back to huggingface.co. GitHub release downloads are
+# often cut off there too, so they fall back to public download proxies. Every file is checked
+# against its pinned digest, so a mirror or proxy cannot change what gets installed.
+HF_MIRRORS = ("https://hf-mirror.com/", HF)
+GITHUB_PROXIES = ("https://ghfast.top/", "https://gh-proxy.com/", "https://gh.llkk.cc/")
+# Attempts in a row that add nothing before an address is given up; any progress resets the count.
+RETRIES = 3
+CHUNK = 256 * 1024
+# Errors that say the address itself cannot serve the file, so retrying it is pointless.
+_UNREACHABLE = (
+    httpx.HTTPStatusError,
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ProxyError,
+    httpx.TooManyRedirects,
+    httpx.UnsupportedProtocol,
+)
+
+
+def file_urls(spec: ModelFile) -> tuple[str, ...]:
+    """Addresses to try, in order, for one file."""
+    if spec.url.startswith(HF):
+        return tuple(base + spec.url.removeprefix(HF) for base in HF_MIRRORS)
+    if spec.url.startswith(GITHUB):
+        return (spec.url, *(proxy + spec.url for proxy in GITHUB_PROXIES))
+    return (spec.url,)
+
+
+def part_path(target: Path) -> Path:
+    """Where an unfinished download of `target` is kept until it is complete and verified."""
+    return target.with_name(f"{target.name}.part")
+
+
+def discard_partial(model: AsrModel, directory: Path) -> None:
+    for spec in model.files:
+        part_path(directory / spec.name).unlink(missing_ok=True)
+
+
+def download_problem(error: Exception | None) -> str:
+    if isinstance(error, ModelError):
+        return str(error)
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        if status == 429:
+            return "下载服务器繁忙，请过几分钟再试。"
+        return f"下载服务器拒绝了请求（HTTP {status}），请稍后再试。"
+    if isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ProxyError)):
+        return "连不上下载服务器，请检查网络或代理后重试，或用“导入”添加已下载的模型包。"
+    return "网络中断，已下载的部分会保留，重试时接着下载。"
+
+
+def _size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _hasher(spec: ModelFile):
+    if not spec.git_blob:
+        return hashlib.sha256()
+    hasher = hashlib.sha1()
+    hasher.update(f"blob {spec.size}\0".encode())
+    return hasher
+
+
 def verify_file(path: Path, spec: ModelFile) -> bool:
     if not path.is_file() or path.stat().st_size != spec.size:
         return False
-    hasher = hashlib.sha1() if spec.git_blob else hashlib.sha256()
-    if spec.git_blob:
-        hasher.update(f"blob {spec.size}\0".encode())
+    hasher = _hasher(spec)
     with path.open("rb") as file:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             hasher.update(chunk)
@@ -520,12 +588,134 @@ def models_ready(directory: Path, verify: bool = False, model: str | AsrModel = 
         return False
 
 
+def find_models(folder: Path, depth: int = 2) -> dict[str, Path]:
+    """Model folders in `folder` or up to `depth` levels below it, such as an unpacked offline
+    model pack, keyed by model id. A folder counts when every file has the expected size."""
+    found: dict[str, Path] = {}
+    level = [folder]
+    for _ in range(depth + 1):
+        below = []
+        for current in level:
+            for model in ALL_MODELS:
+                if model.id not in found and models_ready(current, model=model):
+                    found[model.id] = current
+            try:
+                below += sorted(path for path in current.iterdir() if path.is_dir())
+            except OSError:
+                pass
+        level = below
+    return {model.id: found[model.id] for model in ALL_MODELS if model.id in found}
+
+
+def _reporter(progress: Callable[[int, str], None] | None, done: int, total: int, name: str):
+    if not progress:
+        return lambda received: None
+    return lambda received: progress(int((done + received) * 100 / total), name)
+
+
+def _copy_local(
+    spec: ModelFile, target: Path, sources: Sequence[Path], report: Callable[[int], None], cancel: Event | None
+) -> bool:
+    """Copy a verified copy of `spec` from one of `sources`; False when none has one."""
+    part = part_path(target)
+    for folder in sources:
+        source = folder / spec.name
+        try:
+            if _size(source) != spec.size or source.resolve() == target.resolve():
+                continue
+        except OSError:
+            continue
+        hasher, copied = _hasher(spec), 0
+        with source.open("rb") as reader, part.open("wb") as writer:
+            for chunk in iter(lambda reader=reader: reader.read(CHUNK), b""):
+                if cancel and cancel.is_set():
+                    raise Cancelled("已取消下载。")
+                hasher.update(chunk)
+                writer.write(chunk)
+                copied += len(chunk)
+                report(copied)
+        if copied == spec.size and hasher.hexdigest() == spec.digest:
+            part.replace(target)
+            return True
+        part.unlink(missing_ok=True)  # A damaged copy; try the next source or the network.
+    return False
+
+
+def _fetch(
+    client: httpx.Client,
+    url: str,
+    part: Path,
+    spec: ModelFile,
+    report: Callable[[int], None],
+    cancel: Event | None,
+) -> None:
+    """Append the rest of the file at `url` to `part`, continuing where an earlier attempt stopped."""
+    have = _size(part)
+    # Raw bytes, so the offset means the same as the bytes already saved.
+    headers = {"Range": f"bytes={have}-", "Accept-Encoding": "identity"} if have else {}
+    with client.stream("GET", url, headers=headers) as response:
+        if response.status_code == 416:  # The saved bytes cannot belong to this file.
+            part.unlink(missing_ok=True)
+        response.raise_for_status()
+        if response.status_code != 206:
+            have = 0  # The server sent the whole file instead of the rest.
+        with part.open("ab" if have else "wb") as file:
+            received = have
+            for chunk in response.iter_bytes(CHUNK):
+                if cancel and cancel.is_set():
+                    raise Cancelled("已取消下载。")
+                received += len(chunk)
+                if received > spec.size:
+                    raise ModelError("下载大小与预期不符，请重试。")
+                file.write(chunk)
+                report(received)
+
+
+def _download_file(
+    client: httpx.Client, spec: ModelFile, target: Path, report: Callable[[int], None], cancel: Event | None
+) -> None:
+    part = part_path(target)
+    if _size(part) > spec.size:
+        part.unlink()
+    problem: Exception | None = None
+    for url in file_urls(spec):
+        failures = 0
+        while failures < RETRIES and _size(part) < spec.size:
+            before = _size(part)
+            try:
+                _fetch(client, url, part, spec, report, cancel)
+            except ModelError as exc:
+                part.unlink(missing_ok=True)
+                problem = exc
+                break
+            except _UNREACHABLE as exc:
+                problem = exc
+                break
+            except httpx.HTTPError as exc:  # Interrupted: resume from the saved part.
+                problem = exc
+                failures = 0 if _size(part) > before else failures + 1
+        if _size(part) == spec.size:
+            if verify_file(part, spec):
+                part.replace(target)
+                return
+            part.unlink()
+            problem = ModelError(f"{spec.name} 校验失败，请重新下载。")
+    raise ModelError(download_problem(problem))
+
+
 def download_model(
     model: AsrModel,
     directory: Path,
     progress: Callable[[int, str], None] | None = None,
     cancel: Event | None = None,
+    sources: Sequence[Path] = (),
 ) -> None:
+    """Fetch the files of `model` that are missing or damaged in `directory`.
+
+    A file with a verified copy in one of `sources` (an imported model pack, or another model's
+    folder for the shared VAD file) is copied instead of downloaded. An unfinished download stays
+    as a .part file and continues on the next attempt, also after a failure or a restart.
+    """
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -540,32 +730,18 @@ def download_model(
             if verify_file(target, spec):
                 done += spec.size
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.part")
-            received = 0
+            report = _reporter(progress, done, total, spec.name)
             try:
-                with client.stream("GET", spec.url) as response:
-                    response.raise_for_status()
-                    with temp.open("wb") as file:
-                        for chunk in response.iter_bytes(256 * 1024):
-                            if cancel and cancel.is_set():
-                                raise Cancelled("已取消下载。")
-                            received += len(chunk)
-                            if received > spec.size:
-                                raise ModelError("下载大小与预期不符，请重试。")
-                            file.write(chunk)
-                            if progress:
-                                progress(int((done + received) * 100 / total), spec.name)
-                if not verify_file(temp, spec):
-                    raise ModelError(f"{spec.name} 校验失败，请重新下载。")
-                temp.replace(target)
-                done += spec.size
-            except httpx.HTTPError:
-                raise ModelError("模型下载失败，请检查网络或代理后重试。") from None
+                target.parent.mkdir(parents=True, exist_ok=True)
+                # Versions before 0.6.2 named unfinished files <name>.<random>.part and could leave them behind.
+                for stale in target.parent.glob(f"{glob.escape(target.name)}.*.part"):
+                    if re.fullmatch(r"[0-9a-f]{32}", stale.name.removeprefix(f"{target.name}.")[:-5]):
+                        stale.unlink(missing_ok=True)
+                if not _copy_local(spec, target, sources, report, cancel):
+                    _download_file(client, spec, target, report, cancel)
             except OSError:
                 raise ModelError("模型写入失败，请检查磁盘空间和文件夹权限。") from None
-            finally:
-                temp.unlink(missing_ok=True)
+            done += spec.size
     if progress:
         progress(100, "模型已就绪")
 

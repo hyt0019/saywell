@@ -69,6 +69,9 @@ from .models import (
     PLAZA,
     PLAZA_CATEGORIES,
     AsrModel,
+    discard_partial,
+    find_models,
+    get_model,
     models_ready,
 )
 from .settings import Settings, read_key, save_key
@@ -1957,7 +1960,13 @@ def format_bytes(size: int) -> str:
     return f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{size / 1e6:.0f} MB"
 
 
+def progress_text(verb: str, percent: int) -> str:
+    check = "复制时逐个校验" if verb == "导入" else "下载后自动校验完整性"
+    return f"正在{verb} {percent}%  ·  {check}"
+
+
 def delete_model_files(model: AsrModel, directory: Path) -> None:
+    discard_partial(model, directory)
     for spec in model.files:
         (directory / spec.name).unlink(missing_ok=True)
     if model.kind == "llama_server":
@@ -2055,7 +2064,9 @@ class ModelCard(QFrame):
         for button in (self.verify_button, self.try_button, self.repair_button):
             button.setEnabled(not checking)
 
-    def update_state(self, *, active: bool, ready: bool, directory: Path, downloading: str | None, percent: int):
+    def update_state(
+        self, *, active: bool, ready: bool, directory: Path, downloading: str | None, percent: int, verb: str = "下载"
+    ):
         mine = downloading == self.model.id
         self.check_row.setVisible(ready and not mine)
         self.setProperty("active", active and ready)
@@ -2064,11 +2075,12 @@ class ModelCard(QFrame):
         self.progress.setVisible(mine)
         self.progress.setValue(percent if mine else 0)
         self.cancel_button.setVisible(mine)
+        self.cancel_button.setText(f"取消{verb}")
         self.delete_button.setVisible(ready and not mine)
         self.action.setVisible(not mine)
         self.action.set_icon(None)
         if mine:
-            self.state.setText(f"正在下载 {percent}%  ·  下载后自动校验完整性")
+            self.state.setText(progress_text(verb, percent))
         elif ready:
             self.state.setText(f"已下载  ·  {directory}")
         else:
@@ -2083,7 +2095,7 @@ class ModelCard(QFrame):
             self.action.setText(icon_text(f"下载 · {self.model.size_label.removeprefix('约 ')}"))
             self.action.set_icon(Glyph.DOWNLOAD)
             self.action.setEnabled(downloading is None)
-            self.action.setToolTip("请等待当前下载完成" if downloading else "")
+            self.action.setToolTip(f"请等待当前{verb}完成" if downloading else "")
 
 
 class ModelDialog(QDialog):
@@ -2106,7 +2118,9 @@ class ModelDialog(QDialog):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         outer.addWidget(
-            dialog_header("语音模型", "全部在本机识别，录音不会上传。按需下载，随时切换；当前模型保持不变，直到你选择其他模型。")
+            dialog_header(
+                "语音模型", "全部在本机识别，录音不会上传。按需下载或导入模型包，随时切换；正在用的模型不会被自动替换。"
+            )
         )
         tabs = QHBoxLayout()
         tabs.setContentsMargins(30, 6, 30, 10)
@@ -2135,6 +2149,10 @@ class ModelDialog(QDialog):
         self.open_location = make_button("打开", Glyph.FOLDER, "toolbar")
         self.open_location.clicked.connect(self.open_folder)
         row.addWidget(self.open_location)
+        self.import_button = make_button("导入…", Glyph.IMPORT, "toolbar")
+        self.import_button.setToolTip("从网盘等处下载的模型包导入，不用联网下载")
+        self.import_button.clicked.connect(self.import_models)
+        row.addWidget(self.import_button)
         location_row = QHBoxLayout()
         location_row.setContentsMargins(30, 0, 26, 4)
         location_row.addWidget(location)
@@ -2277,7 +2295,7 @@ class ModelDialog(QDialog):
 
     def repair_model(self, model: AsrModel):
         card = self.cards[model.id]
-        if self.downloads.start(model.id, self.settings.model_path(model.id)):
+        if self.downloads.start(model.id, self.settings.model_path(model.id), self.other_folders(model)):
             card.repair_button.hide()
             card.check_status.clear()
             self.message.setText(f"正在重新下载 {model.name} 不完整的文件，完整的文件不会重复下载。")
@@ -2313,9 +2331,10 @@ class ModelDialog(QDialog):
         space = free_space(root)
         self.location.setText(str(root))
         self.space.setText(f"剩余 {format_bytes(space)}" if space is not None else "")
-        busy = self.downloads.active
+        busy, verb = self.downloads.active, self.downloads.verb
         self.change_location.setEnabled(busy is None)
-        self.change_location.setToolTip("下载进行中，完成后再更改位置" if busy else "")
+        self.change_location.setToolTip(f"{verb}进行中，完成后再更改位置" if busy else "")
+        self.import_button.setEnabled(busy is None)
         for model in ALL_MODELS:
             directory = self.settings.model_path(model.id)
             self.cards[model.id].update_state(
@@ -2324,7 +2343,12 @@ class ModelDialog(QDialog):
                 directory=directory,
                 downloading=busy,
                 percent=self.downloads.percent,
+                verb=verb,
             )
+
+    def other_folders(self, model: AsrModel) -> tuple[Path, ...]:
+        """Other models' folders, which may already hold a file this model shares, such as the VAD."""
+        return tuple(dict.fromkeys(self.settings.model_path(other.id) for other in ALL_MODELS if other is not model))
 
     def commit(self, settings: Settings) -> bool:
         if not self.apply(settings):
@@ -2349,8 +2373,46 @@ class ModelDialog(QDialog):
                 f"{model.name} 需要约 {format_bytes(model.size)}，所选位置只剩 {format_bytes(space)}。\n请更改下载位置后重试。",
             )
             return
-        if self.downloads.start(model.id, directory):
+        if self.downloads.start(model.id, directory, self.other_folders(model)):
             self.message.setText(f"开始下载 {model.name}，可以关闭此窗口，下载会在后台继续。")
+        self.refresh()
+
+    def import_models(self):
+        """Copy the models in an offline pack (for example one shared on a cloud drive) into place."""
+        if self.downloads.active:
+            return
+        chosen = QFileDialog.getExistingDirectory(self, "选择模型包文件夹", str(Path.home() / "Downloads"))
+        if not chosen:
+            return
+        found = find_models(Path(chosen))
+        if not found:
+            QMessageBox.information(
+                self,
+                "没有找到模型",
+                "这个文件夹里没有完整的模型文件。\n请选择下载好的模型包文件夹，或其中某个模型的文件夹。",
+            )
+            return
+        jobs = [
+            (model_id, self.settings.model_path(model_id), (source,))
+            for model_id, source in found.items()
+            if not models_ready(self.settings.model_path(model_id), model=get_model(model_id))
+        ]
+        if not jobs:
+            names = "、".join(get_model(model_id).name for model_id in found)
+            self.message.setText(f"{names} 已在本机，不需要导入。")
+            return
+        need = sum(get_model(model_id).size for model_id, _, _ in jobs)
+        space = free_space(self.settings.download_root)
+        if space is not None and space < need * 1.05:
+            QMessageBox.warning(
+                self,
+                "磁盘空间不足",
+                f"导入需要约 {format_bytes(need)}，下载位置只剩 {format_bytes(space)}。\n请更改下载位置后重试。",
+            )
+            return
+        if self.downloads.start_many(jobs, "导入"):
+            names = "、".join(get_model(model_id).name for model_id, _, _ in jobs)
+            self.message.setText(f"正在导入 {names}，可以关闭此窗口，导入会在后台继续。")
         self.refresh()
 
     def delete_model(self, model: AsrModel):
@@ -2409,12 +2471,16 @@ class ModelDialog(QDialog):
         item = self.cards.get(model_id)
         if item:
             item.progress.setValue(percent)
-            item.state.setText(f"正在下载 {percent}%  ·  下载后自动校验完整性")
+            item.state.setText(progress_text(self.downloads.verb, percent))
 
     def on_finished(self, model_id: str):
-        self.message.setText("下载完成，点击“使用此模型”即可切换。")
+        name, verb = get_model(model_id).name, self.downloads.verb
+        if model_id == self.settings.asr_model:  # The main window switched to it, as nothing else was usable.
+            self.message.setText(f"{name} {verb}完成，已设为当前模型。")
+        else:
+            self.message.setText(f"{name} {verb}完成，点击“使用此模型”即可切换。")
         self.refresh()
 
     def on_failed(self, model_id: str, message: str):
-        self.message.setText(message or "已取消下载。")
+        self.message.setText(message or f"已取消{self.downloads.verb}。")
         self.refresh()

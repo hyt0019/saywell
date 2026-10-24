@@ -96,6 +96,7 @@ class MainWindow(QMainWindow):
         self.events = Events()
         self.pipeline = Pipeline(self.events)
         self.downloads = ModelDownloads()
+        self.model_dialog: ModelDialog | None = None
         self.recorder = Recorder(self.events.level.emit)
         self.state = "idle"
         self.target = None
@@ -854,7 +855,11 @@ class MainWindow(QMainWindow):
         if self.state != "idle":
             return
         dialog = ModelDialog(self.settings, self.downloads, self.apply_model_settings, self, self.release_model)
-        dialog.exec()
+        self.model_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self.model_dialog = None
         self.refresh_controls()
 
     def release_model(self) -> bool:
@@ -878,7 +883,7 @@ class MainWindow(QMainWindow):
         return True
 
     def on_download_progress(self, model_id: str, percent: int):
-        self.download_status.setText(f"正在下载 {get_model(model_id).name}  {percent}%")
+        self.download_status.setText(f"正在{self.downloads.verb} {get_model(model_id).name}  {percent}%")
         self.download_progress.setValue(percent)
         self.download_status.show()
         self.download_progress.show()
@@ -887,14 +892,27 @@ class MainWindow(QMainWindow):
     def on_download_finished(self, model_id: str):
         self.download_status.hide()
         self.download_progress.hide()
-        model = get_model(model_id)
+        model, verb = get_model(model_id), self.downloads.verb
+        current = get_model(self.settings.asr_model)
+        # Nothing could be recorded with the chosen model yet: use the one that just arrived, so a
+        # first download or an imported model pack works without another click.
+        if (
+            model_id != current.id
+            and not models_ready(self.settings.models, model=current)
+            and models_ready(self.settings.model_path(model_id), model=model)
+        ):
+            switched = replace(self.settings, asr_model=model_id)
+            if self.apply_model_settings(switched) and self.model_dialog:
+                self.model_dialog.settings = switched
         if model_id == self.settings.asr_model and self.state == "idle":
             self.status.setText("语音模型已就绪")
             self.hint.setText("现在可以开始录音，也可以导入已有录音。")
         else:
-            self.stats.setText(f"{model.name} 已下载，可在“语音模型”中切换使用。")
+            self.stats.setText(f"{model.name} 已{verb}，可在“语音模型”中切换使用。")
         if not self.isVisible() and self.native:
-            self.tray.showMessage("好好说", f"{model.name} 已下载完成。", QSystemTrayIcon.MessageIcon.Information, 3000)
+            self.tray.showMessage(
+                "好好说", f"{model.name} 已{verb}完成。", QSystemTrayIcon.MessageIcon.Information, 3000
+            )
         self.refresh_controls()
 
     def on_download_failed(self, model_id: str, message: str):
@@ -1080,7 +1098,7 @@ class MainWindow(QMainWindow):
             event.accept()
 
     def shutdown(self):
-        self.downloads.cancel(wait=2)
+        self.downloads.cancel(wait=2, discard=False)  # The unfinished file is resumed next time.
         self.pipeline.release_recognizer()  # Stops a model engine running in its own process.
         self.gate.cancel()
         self.recorder.cancel()

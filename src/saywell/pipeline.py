@@ -9,7 +9,7 @@ from PySide6.QtCore import QObject, Signal
 from .audio import decode_audio
 from .cleanup import ApiCleaner, Cancelled, CleanupError
 from .core import CleanupResult
-from .models import ModelError, download_model, get_model
+from .models import ModelError, discard_partial, download_model, get_model
 from .settings import Settings, read_key
 from .vocabulary import Vocabulary
 
@@ -23,7 +23,7 @@ class Events(QObject):
 
 
 class ModelDownloads(QObject):
-    """Runs one model download at a time, independent of dictation jobs."""
+    """Downloads or imports models one at a time, independent of dictation jobs."""
 
     progress = Signal(str, int)
     finished = Signal(str)
@@ -33,43 +33,64 @@ class ModelDownloads(QObject):
         super().__init__()
         self.active: str | None = None
         self.percent = 0
+        # "下载", or "导入" while copying an offline model pack.
+        self.verb = "下载"
         self.cancel_event: threading.Event | None = None
+        self.discard = True
         self.thread: threading.Thread | None = None
 
-    def start(self, model_id: str, directory: Path) -> bool:
-        if self.active:
-            return False
-        model = get_model(model_id)
-        cancel = threading.Event()
-        self.active, self.percent, self.cancel_event = model.id, 0, cancel
+    def start(self, model_id: str, directory: Path, sources: tuple[Path, ...] = ()) -> bool:
+        return self.start_many([(model_id, directory, sources)])
 
-        def report(value: int, _name: str):
-            if value != self.percent and not cancel.is_set():
-                self.percent = value
-                self.progress.emit(model.id, value)
+    def start_many(self, jobs: list[tuple[str, Path, tuple[Path, ...]]], verb: str = "下载") -> bool:
+        """Fetch each (model id, folder, local sources) in turn; False while another run is busy."""
+        if self.active or not jobs:
+            return False
+        queue = [(get_model(model_id), directory, sources) for model_id, directory, sources in jobs]
+        cancel = threading.Event()
+        self.active, self.percent, self.verb, self.cancel_event = queue[0][0].id, 0, verb, cancel
+        self.discard = True
 
         def run():
-            try:
-                download_model(model, directory, report, cancel)
-            except Cancelled:
-                message = ""
-            except ModelError as exc:
-                message = str(exc)
-            except Exception:
-                message = "模型下载失败，请检查网络或代理后重试。"
-            else:
-                message = None
-            self.active = None
-            if message is None:
-                self.finished.emit(model.id)
-            else:
-                self.failed.emit(model.id, message)
+            for index, (model, directory, sources) in enumerate(queue):
+                self.active, self.percent = model.id, 0
+
+                def report(value: int, _name: str, model_id: str = model.id):
+                    if value != self.percent and not cancel.is_set():
+                        self.percent = value
+                        self.progress.emit(model_id, value)
+
+                try:
+                    download_model(model, directory, report, cancel, sources)
+                except Cancelled:
+                    message = ""
+                    if self.discard:  # Kept when the app quits, so the download continues next time.
+                        try:
+                            discard_partial(model, directory)
+                        except OSError:
+                            pass
+                except ModelError as exc:
+                    message = str(exc)
+                except Exception:
+                    message = "模型下载失败，请检查网络或代理后重试。"
+                else:
+                    message = None
+                if index == len(queue) - 1 or message == "":
+                    self.active = None
+                if message is None:
+                    self.finished.emit(model.id)
+                else:
+                    self.failed.emit(model.id, message)
+                if message == "":
+                    break
 
         self.thread = threading.Thread(target=run, daemon=True)
         self.thread.start()
         return True
 
-    def cancel(self, wait: float = 0):
+    def cancel(self, wait: float = 0, discard: bool = True):
+        """Stop the run; `discard` also deletes the unfinished file instead of keeping it to resume."""
+        self.discard = discard
         if self.cancel_event:
             self.cancel_event.set()
         if wait and self.thread:
