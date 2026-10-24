@@ -1,5 +1,18 @@
 # 验证记录
 
+## 2026-10-24：发布 v0.6.2；国内镜像、断点续传、导入模型包
+
+- 已发布 [v0.6.2](https://github.com/hyt0019/saywell/releases/tag/v0.6.2)（好好说 Saywell 0.6.2）：标签指向 `8bf2b73`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/40105240079) 通过。
+- **问题排查**：有用户反馈模型下载有问题。逐个请求 13 个模型的全部文件，链接、大小和 SHA-256 / Git blob 摘要都与代码一致；本机（经代理）用程序自己的下载代码下载 SenseVoice 145 秒完成并通过校验，测试全部通过。原因判断为国内网络：所有模型都从 huggingface.co 下载，每个模型都要的 silero_vad.onnx 和 Qwen3-ASR 的 llama.cpp 包从 GitHub Releases 下载，二者在国内直连都常失败；下载失败的文件还要从头再下。没有拿到反馈者的具体报错，原因是推断。
+- **镜像和代理顺序**：Hugging Face 文件先连 hf-mirror.com，再连 huggingface.co；GitHub 文件先连 github.com，再依次连 ghfast.top、gh-proxy.com、gh.llkk.cc。连接失败、HTTP 错误立即换下一个地址；传输中断从已存部分续传，同一地址连续 3 次没有进展才换下一个。
+- **从本机（海外出口）实测**：hf-mirror.com 对本机返回 308 转到 huggingface.co，程序跟随后正常下载，因此镜像本身的内容只能在国内网络验证，**尚未在国内直连环境实测**。拦截 github.com 后下载 silero_vad.onnx：ghfast.top 对海外 IP 返回 403，随后 gh-proxy.com 下载成功并通过摘要校验；gh-proxy.com、gh.llkk.cc 用 curl 下载的文件摘要也正确。
+- **导入模型包**：在网盘 App 文件夹上运行导入代码，找到“语音模型/Qwen3-ASR 0.6B”，断网（任何网络请求都会让测试失败）复制 1.0 GB 用时 1.4 秒，全部文件通过摘要校验。
+- **网盘文件夹**：`release/网盘/make_folders.py` 用程序自己的下载代码生成两个文件夹。“好好说 Saywell 0.6.2”1.14 GB：安装包（哈希与上面一致）、安装说明和 Qwen3-ASR；“好好说 Saywell 语音模型合集”9.99 GB：13 个模型各一个文件夹，外加使用说明。生成后逐个模型按摘要完整校验，没有残留的未完成文件。
+- 新增 12 项测试，覆盖镜像顺序、地址不可达时换下一个、中断后带 Range 续传（服务器支持和忽略 Range 两种）、429 / 连不上 / 网络中断三种提示、失败后保留 .part、从模型包复制且复制坏的文件改为下载、清理旧版残留的临时文件、按文件名和大小找出模型包里的模型、导入队列依次执行和取消、手动取消删除未完成文件而退出程序保留、“导入…”按钮，以及当前模型不可用时才自动换用新模型。
+- `scripts\build_installer.ps1` 跑完 280 项测试、通过打包后的 `--smoke` 后生成 `Saywell-Setup-0.6.2.exe`（68.1 MB），SHA-256 为 `887cf5d2d0924616d14405c747f053e348895ba934e5edee8f9ff4426aad568c`；从发布页重新下载的安装包哈希一致。
+- 离屏截图检查了模型窗口顶部的“导入…”按钮、导入中的卡片（“正在导入 42% · 复制时逐个校验”“取消导入”）和底部的连接失败提示。
+- 未在干净环境中完整走一遍安装和导入；未在国内无代理的网络里实测 hf-mirror.com 和下载加速地址；不支持 PAC 自动代理脚本。
+
 ## 2026-10-22：发布 v0.6.1；界面动效
 
 - 已发布 [v0.6.1](https://github.com/hyt0019/saywell/releases/tag/v0.6.1)（好好说 Saywell 0.6.1）：标签指向 `d657afc`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/39794511668) 通过。
