@@ -3,6 +3,7 @@ import json
 import os
 import threading
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -10,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import httpx
 import numpy as np
 import pytest
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from saywell import models, settings as settings_module, ui
@@ -276,6 +278,40 @@ def test_offline_pack_folders_are_found_by_file_names_and_sizes(tmp_path, monkey
     assert models.find_models(tmp_path / "missing") == {}
 
 
+def use_marker_models(monkeypatch):
+    """Treat a folder holding `<model id>.ok` as that model's complete download."""
+
+    def ready(directory, verify=False, model="sensevoice"):
+        return (Path(directory) / f"{model if isinstance(model, str) else model.id}.ok").is_file()
+
+    for module in (models, settings_module, ui):
+        monkeypatch.setattr(module, "models_ready", ready)
+    monkeypatch.setattr("saywell.app.models_ready", ready)
+
+
+def drop_model(folder: Path, model_id: str) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{model_id}.ok").touch()
+    return folder
+
+
+def test_model_folders_put_into_the_download_location_are_used_under_any_name(tmp_path, monkeypatch):
+    use_marker_models(monkeypatch)
+    value = Settings(download_dir=str(tmp_path))
+    assert value.with_found_models() is value
+    pack = tmp_path / "好好说 Saywell 语音模型合集"
+    canary = drop_model(pack / "Canary 180M Flash", "canary")
+    qwen = drop_model(pack / "Qwen3-ASR 0.6B", "qwen3-asr")
+    found = value.with_found_models()
+    assert found.model_paths == {"qwen3-asr": str(qwen), "canary": str(canary)}
+    # SenseVoice, the chosen model, was never downloaded: use the first model found, in catalog order.
+    assert found.asr_model == "qwen3-asr"
+    assert found.with_found_models() is found
+    drop_model(tmp_path, "sensevoice")
+    kept = value.with_found_models()
+    assert kept.asr_model == "sensevoice" and set(kept.model_paths) == {"qwen3-asr", "canary"}
+
+
 @pytest.mark.parametrize("discard", [True, False])
 def test_queued_imports_run_in_turn_and_cancelling_stops_the_rest(qt_app, tmp_path, monkeypatch, discard):
     calls, events = [], []
@@ -453,6 +489,24 @@ def test_model_dialog_imports_the_models_found_in_a_pack(model_dialog, monkeypat
     assert "正在导入 Qwen3-ASR 0.6B" in view.dialog.message.text()
 
 
+def test_model_dialog_picks_up_model_folders_copied_in_while_it_was_inactive(model_dialog, monkeypatch):
+    view = model_dialog
+    use_marker_models(monkeypatch)
+    monkeypatch.setattr(view.dialog, "isActiveWindow", lambda: True)
+    QApplication.sendEvent(view.dialog, QEvent(QEvent.Type.ActivationChange))
+    assert view.applied == []
+    folder = drop_model(view.root / "Qwen3-ASR 0.6B", "qwen3-asr")
+    QApplication.sendEvent(view.dialog, QEvent(QEvent.Type.ActivationChange))
+    assert view.applied[-1].model_paths["qwen3-asr"] == str(folder)
+    assert view.applied[-1].asr_model == "qwen3-asr"  # The pinned SenseVoice folder is empty.
+    assert view.dialog.message.text() == "在下载位置找到 Qwen3-ASR 0.6B，已设为当前模型。"
+    assert view.dialog.cards["qwen3-asr"].property("active")
+    drop_model(view.root / "canary", "canary")
+    QApplication.sendEvent(view.dialog, QEvent(QEvent.Type.ActivationChange))
+    assert view.applied[-1].asr_model == "qwen3-asr"
+    assert view.dialog.message.text() == "在下载位置找到 Canary 180M Flash，可以直接使用。"
+
+
 def test_main_window_switches_to_a_new_model_only_when_the_chosen_one_is_missing(qt_app, monkeypatch, tmp_path):
     from saywell.app import MainWindow
 
@@ -473,6 +527,37 @@ def test_main_window_switches_to_a_new_model_only_when_the_chosen_one_is_missing
         window.on_download_finished("canary")  # A usable model is never replaced.
         assert window.settings.asr_model == "qwen3-asr"
         assert "Canary 180M Flash 已导入" in window.stats.text()
+    finally:
+        window.shutdown()
+        window.close()
+
+
+def test_main_window_uses_model_folders_copied_into_the_download_location(qt_app, monkeypatch, tmp_path):
+    from saywell.app import MainWindow
+
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
+    use_marker_models(monkeypatch)
+    folder = drop_model(tmp_path / "Qwen3-ASR 0.6B", "qwen3-asr")
+    window = MainWindow(Settings(download_dir=str(tmp_path)), native=False)
+    try:
+        assert window.settings.asr_model == "qwen3-asr"  # Found at startup.
+        assert window.settings.model_paths == {"qwen3-asr": str(folder)}
+        assert Settings.load() == window.settings
+        assert "本机识别" in window.model_chip.text()
+    finally:
+        window.shutdown()
+        window.close()
+
+    window = MainWindow(Settings(download_dir=str(tmp_path / "later")), native=False)
+    try:
+        started = []
+        monkeypatch.setattr(window.pipeline, "start", lambda *args: started.append(args[3]))
+        window.process_file("a.wav")
+        assert started == [] and "请先" in window.notice.text()
+        drop_model(tmp_path / "later" / "SenseVoice Small", "sensevoice")
+        window.process_file("a.wav")  # Looks again before asking for a download.
+        assert started == ["a.wav"]
+        assert window.settings.model_paths == {"sensevoice": str(tmp_path / "later" / "SenseVoice Small")}
     finally:
         window.shutdown()
         window.close()

@@ -7,7 +7,7 @@ import time
 from dataclasses import replace
 from datetime import date
 
-from PySide6.QtCore import QLockFile, QTimer, Qt
+from PySide6.QtCore import QEvent, QLockFile, QTimer, Qt
 from PySide6.QtGui import QAction, QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -157,6 +157,7 @@ class MainWindow(QMainWindow):
             QApplication.instance().installNativeEventFilter(self.hotkeys)
             self.hotkeys.events.triggered.connect(self.on_hotkey)
             self.configure_hotkeys()
+        self.find_dropped_models()
         self.refresh_controls()
         self.refresh_overview()
         if native:
@@ -578,6 +579,8 @@ class MainWindow(QMainWindow):
         if self.state != "idle":
             return
         self.from_hotkey = from_hotkey
+        if not models_ready(self.settings.models, model=self.settings.asr_model):
+            self.find_dropped_models()
         model = get_model(self.settings.asr_model)
         if not models_ready(self.settings.models, model=model.id):
             if self.downloads.active == model.id:
@@ -843,6 +846,8 @@ class MainWindow(QMainWindow):
         if self.state != "idle":
             return
         if not models_ready(self.settings.models, model=self.settings.asr_model):
+            self.find_dropped_models()
+        if not models_ready(self.settings.models, model=self.settings.asr_model):
             self.set_notice("请先在“语音模型”中下载当前选择的模型。")
             return
         self.target = None
@@ -861,6 +866,18 @@ class MainWindow(QMainWindow):
         finally:
             self.model_dialog = None
         self.refresh_controls()
+
+    def find_dropped_models(self):
+        """Use model folders copied into the download location by hand, such as from the cloud drive."""
+        found = self.settings.with_found_models()
+        if found != self.settings:
+            self.apply_model_settings(found)
+
+    def changeEvent(self, event):
+        # Back from Explorer, where a model folder may have just been copied in.
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow() and self.state == "idle":
+            self.find_dropped_models()
+        super().changeEvent(event)
 
     def release_model(self) -> bool:
         """Unload the speech model so its files can be deleted; False while it is recognizing."""

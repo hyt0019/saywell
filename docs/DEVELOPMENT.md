@@ -40,7 +40,7 @@ API 地址支持 Base URL（如 `https://api.example.com/v1`）或完整 `/chat/
 
 精选模型在 `models.py` 的 `CATALOG`，扩展模型在 `PLAZA`。每个模型固定 Hugging Face 提交版本并记录每个文件的大小和哈希（LFS 文件用 SHA-256，小文件用 git blob SHA-1），`kind` 对应 `sherpa_onnx.OfflineRecognizer.from_<kind>`，`inputs` 和 `options` 是传给它的文件与参数。
 
-下载：Hugging Face 上的文件先连 hf-mirror.com 再连 huggingface.co，GitHub 上的文件（silero_vad.onnx、llama.cpp 发布包）先连 github.com，再依次加上 `GITHUB_PROXIES` 里的加速地址前缀；内容由固定摘要校验，镜像无法替换。连不上或 HTTP 错误立即换下一个地址，传输中断带 Range 从 `<文件名>.part` 续传，同一地址连续 `RETRIES` 次没有进展才换下一个。手动取消删除 `.part`，退出程序保留，下次接着下。“导入…”用 `find_models` 按文件名和大小找出所选文件夹里的模型，`download_model` 的 `sources` 先从这些文件夹复制（边复制边算摘要），复制坏的文件再联网下载。
+下载：Hugging Face 上的文件先连 hf-mirror.com 再连 huggingface.co，GitHub 上的文件（silero_vad.onnx、llama.cpp 发布包）先连 github.com，再依次加上 `GITHUB_PROXIES` 里的加速地址前缀；内容由固定摘要校验，镜像无法替换。连不上或 HTTP 错误立即换下一个地址，传输中断带 Range 从 `<文件名>.part` 续传，同一地址连续 `RETRIES` 次没有进展才换下一个。手动取消删除 `.part`，退出程序保留，下次接着下。“导入…”用 `find_models` 按文件名和大小找出所选文件夹里的模型，`download_model` 的 `sources` 先从这些文件夹复制（边复制边算摘要），复制坏的文件再联网下载。手动放进下载位置的模型文件夹（任意名字，往下两层以内）由 `Settings.with_found_models` 找出并记进 `model_paths`，原地使用；当前模型不可用时换成找到的第一个。主窗口在启动、窗口激活和录音前发现当前模型缺失时调用它，模型窗口在激活和更改下载位置时调用，扫描只看文件名和大小，几毫秒。
 
 `kind="llama_server"` 的模型（目前是 Qwen3-ASR Q8_0 GGUF）由 `llama.py` 运行：llama.cpp 官方 Windows CPU 发布包作为模型文件之一固定版本下载并校验，首次使用时只把 `llama-server.exe`、DLL 和许可文件解压到模型文件夹的 `llama.cpp/`。程序在 127.0.0.1 的随机端口启动 llama-server，带随机 API Key，进程放进 Windows 作业对象，程序退出或崩溃时一并结束。识别仍走 `LocalRecognizer` 的分段逻辑，每段以 WAV 通过 `/v1/chat/completions` 的 `input_audio` 发送，回答中 `<asr_text>` 之后的部分是识别文字。
 

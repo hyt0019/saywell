@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from .api_config import DEFAULT_API_BASE_URL, chat_completion_url, credential_account, is_deepseek_api
-from .models import ALL_MODELS, DEFAULT_MODEL, get_model, models_ready
+from .models import ALL_MODELS, DEFAULT_MODEL, find_models, get_model, models_ready
 from .shortcuts import DEFAULT_HOTKEY, parse_shortcut
 
 MODEL_IDS = {model.id for model in ALL_MODELS}
@@ -127,6 +127,22 @@ class Settings:
             if model.id not in pinned and models_ready(current, model=model):
                 pinned[model.id] = str(current)
         return replace(self, download_dir=str(directory), model_paths=pinned)
+
+    def with_found_models(self) -> Settings:
+        """Use model folders put into the download location by hand under any name, such as one
+        from the cloud-drive model pack; switch to one when the chosen model is not downloaded."""
+        missing = [model for model in ALL_MODELS if not models_ready(self.model_path(model.id), model=model)]
+        if not missing:
+            return self
+        found = find_models(self.download_root)
+        arrived = [model.id for model in missing if model.id in found]
+        if not arrived:
+            return self
+        pinned = dict(self.model_paths) | {model_id: str(found[model_id]) for model_id in arrived}
+        changed = replace(self, model_paths=pinned)
+        if not models_ready(changed.models, model=changed.asr_model):
+            changed = replace(changed, asr_model=arrived[0])
+        return changed
 
     @classmethod
     def load(cls, path: Path | None = None) -> Settings:

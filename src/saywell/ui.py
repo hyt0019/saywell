@@ -2147,6 +2147,7 @@ class ModelDialog(QDialog):
         self.change_location.clicked.connect(self.choose_location)
         row.addWidget(self.change_location)
         self.open_location = make_button("打开", Glyph.FOLDER, "toolbar")
+        self.open_location.setToolTip("从网盘下载的模型文件夹放进这里，也能直接使用")
         self.open_location.clicked.connect(self.open_folder)
         row.addWidget(self.open_location)
         self.import_button = make_button("导入…", Glyph.IMPORT, "toolbar")
@@ -2346,6 +2347,29 @@ class ModelDialog(QDialog):
                 verb=verb,
             )
 
+    def changeEvent(self, event):
+        # Back from Explorer, where a model folder may have just been copied in.
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self.find_dropped_models()
+        super().changeEvent(event)
+
+    def find_dropped_models(self):
+        """Use model folders copied into the download location by hand, under any folder name."""
+        found = self.settings.with_found_models()
+        # No warning when saving fails: closing it would activate the window and land here again.
+        if found == self.settings or not self.apply(found):
+            return
+        names = "、".join(
+            get_model(model_id).name
+            for model_id, path in found.model_paths.items()
+            if self.settings.model_paths.get(model_id) != path
+        )
+        switched = found.asr_model != self.settings.asr_model
+        self.settings = found
+        self.changed.emit(found)
+        self.message.setText(f"在下载位置找到 {names}，" + ("已设为当前模型。" if switched else "可以直接使用。"))
+        self.refresh()
+
     def other_folders(self, model: AsrModel) -> tuple[Path, ...]:
         """Other models' folders, which may already hold a file this model shares, such as the VAD."""
         return tuple(dict.fromkeys(self.settings.model_path(other.id) for other in ALL_MODELS if other is not model))
@@ -2456,7 +2480,7 @@ class ModelDialog(QDialog):
         except OSError:
             QMessageBox.warning(self, "无法使用此位置", "没有写入权限，请选择其他文件夹。")
             return
-        if self.commit(self.settings.with_download_root(directory)):
+        if self.commit(self.settings.with_download_root(directory).with_found_models()):
             self.message.setText("新下载将保存到此位置，已下载的模型保留在原处。")
 
     def open_folder(self):
