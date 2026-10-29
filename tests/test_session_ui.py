@@ -477,3 +477,22 @@ def test_paste_can_leave_result_on_clipboard(window, monkeypatch):
     timers[0]()
     assert clipboard.text() == "游戏里的话。"
     assert restored == [True]
+
+
+@pytest.mark.parametrize("no_punctuation", [False, True])
+def test_results_are_finished_before_they_are_shown_and_typed(window, monkeypatch, no_punctuation):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    options = []
+
+    def cleaner(*args, **kwargs):
+        options.append(kwargs["no_punctuation"])
+        return SimpleNamespace(clean=lambda text, *rest: CleanupResult(text, "嗯，我用 API 写代码，好的。"))
+
+    monkeypatch.setattr("saywell.pipeline.read_key", lambda *args, **kwargs: "test")
+    monkeypatch.setattr("saywell.pipeline.ApiCleaner", cleaner)
+    job, cancel = window.begin("busy")
+    window.pipeline._run(job, cancel, replace(window.settings, no_punctuation=no_punctuation), "原话", "text")
+    assert options == [no_punctuation]
+    assert window.result.toPlainText() == ("我用API写代码好的" if no_punctuation else "嗯，我用API写代码，好的。")

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
 from .audio import decode_audio
 from .cleanup import ApiCleaner, Cancelled, CleanupError
-from .core import CleanupResult
+from .core import CleanupResult, finish_text
 from .models import ModelError, discard_partial, download_model, get_model
 from .settings import Settings, read_key
 from .vocabulary import Vocabulary
@@ -188,6 +189,7 @@ class Pipeline:
                     settings.api_timeout,
                     base_url=settings.api_base_url,
                     voice_translation=settings.voice_translation,
+                    no_punctuation=settings.no_punctuation,
                 ).clean(text, vocabulary.glossary_for(text), cancel)
             except Cancelled:
                 raise
@@ -203,6 +205,7 @@ class Pipeline:
                 )
             if cancel.is_set():
                 raise Cancelled("已取消。")
+            result = replace(result, text=finish_text(result.text, settings.no_punctuation))
             self.events.completed.emit(
                 job,
                 {

@@ -12,6 +12,46 @@ def single_line_text(text: str) -> str:
     return re.sub(r"[\s\x00-\x1f\x7f-\x9f]+", " ", text).strip()
 
 
+# Chinese characters and Japanese kana. Korean is left alone: it separates words with spaces.
+_HAN = "㐀-䶿一-鿿豈-﫿぀-ヿ"
+# Chinese and full-width punctuation, including the curly quotes and the ellipsis.
+_CJK_MARKS = "　-〿！-／：-＠“”‘’…"
+_MIXED_SPACE = re.compile(
+    rf"(?<=[{_HAN}{_CJK_MARKS}])[ \t]+(?=[A-Za-z0-9#$@])|(?<=[A-Za-z0-9%+#)])[ \t]+(?=[{_HAN}{_CJK_MARKS}])"
+)
+# Taken out for an unpunctuated paragraph. A single dash or tilde stays: it can mean "to" (3～5).
+_MARKS = re.compile(r"\s*(?:——|[，。！？；：、“”‘’（）《》〈〉【】〔〕〖〗「」『』…])+\s*")
+# Fillers said on their own between pauses ("嗯，", "呃……"); a word such as 额度 is never touched.
+_FILLER = re.compile(r"(?:^|(?<=[，。！？；：、…]))\s*(?:嗯|呃|额|唔|诶|欸|哎|啊|哦|噢)+\s*(?:[，。！？；：、…]+|$)")
+
+
+def tighten_mixed_spacing(text: str) -> str:
+    """Drop the spaces around English words and numbers in Chinese text ("用 API 调用" ->
+    "用API调用"). Text without Chinese, or mostly English with a Chinese name in it, keeps them."""
+    han = len(re.findall(f"[{_HAN}]", text))
+    chinese = re.search(f"[{_CJK_MARKS}]", text) or han >= len(re.findall(r"[A-Za-z]+", text))
+    return _MIXED_SPACE.sub("", text) if han and chinese else text
+
+
+def strip_punctuation(text: str) -> str:
+    """One unpunctuated paragraph: drop Chinese punctuation and standalone fillers. A mark between
+    two English words or numbers becomes a space; English punctuation and 3.5 stay."""
+
+    def drop(match: re.Match) -> str:
+        before = match.string[match.start() - 1 : match.start()]
+        after = match.string[match.end() : match.end() + 1]
+        return " " if (before + after).isascii() and before.isalnum() and after.isalnum() else ""
+
+    return _MARKS.sub(drop, _FILLER.sub("", text)).strip()
+
+
+def finish_text(text: str, no_punctuation: bool = False) -> str:
+    """The last step for every result before it is shown and typed. Spacing is decided first,
+    while the punctuation still tells Chinese sentences from English ones."""
+    text = tighten_mixed_spacing(text)
+    return strip_punctuation(text) if no_punctuation else text
+
+
 class Edit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source: str = Field(min_length=1, max_length=4000)

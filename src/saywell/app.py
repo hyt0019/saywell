@@ -33,14 +33,14 @@ from PySide6.QtWidgets import (
 from .api_config import is_deepseek_api
 from .audio import AudioError, Recorder
 from .cleanup import TRANSLATE_LANGUAGES, ApiCleaner, CleanupError
-from .core import CleanupResult, single_line_text
+from .core import CleanupResult, finish_text, single_line_text
 from .dashboard import Overview
 from .history import HistoryStore
 from .models import get_model, models_ready
 from .pipeline import Events, ModelDownloads, Pipeline
 from .session import SessionGate
 from .settings import Settings, data_dir, read_key
-from .shortcuts import DEFAULT_HOTKEY, INSERT_HOTKEY, SOLO_HOLD_MS, parse_shortcut, shortcut_label
+from .shortcuts import DEFAULT_HOTKEY, INSERT_HOTKEY, SOLO_HOLD_MS, SOLO_TAP_MS, parse_shortcut, shortcut_label
 from .startup import StartupError, migrate_legacy_entry, save_settings_with_startup, startup_enabled
 from .stats import StatsStore
 from .ui import (
@@ -105,13 +105,15 @@ class MainWindow(QMainWindow):
         self.quitting = False
         self.native = native
         self.hotkeys = Hotkeys() if native else None
-        # A recording key held on its own (right Ctrl, right Alt, CapsLock): a press only starts
-        # recording after SOLO_HOLD_MS, so quick taps and shortcuts such as right Ctrl+C keep working.
+        # A recording key used on its own (right Ctrl, right Alt, CapsLock): when holding to talk, a
+        # press only starts recording after SOLO_HOLD_MS; in tap mode only a tap shorter than
+        # SOLO_TAP_MS counts. Either way the other use, and shortcuts such as right Ctrl+C, keep working.
         self.solo: SoloKeyHook | None = None
-        self.solo_state = ""  # "pending" while waiting, "chord" if another key came, "active" once started
+        # "pending" while waiting, "chord" if another key came, "active" once started, "held" when
+        # held too long for a tap.
+        self.solo_state = ""
         self.solo_timer = QTimer(self)
         self.solo_timer.setSingleShot(True)
-        self.solo_timer.setInterval(SOLO_HOLD_MS)
         self.solo_timer.timeout.connect(self.solo_long_press)
         self.overlay = RecordingOverlay()
         self.usage = StatsStore() if self.settings.collect_stats else None
@@ -214,7 +216,13 @@ class MainWindow(QMainWindow):
         self.pill.setTextFormat(Qt.TextFormat.RichText)
         status_layout.addWidget(self.pill)
         self.status = label("准备好，慢慢说", "status")
-        self.hint = label("按住快捷键说话，松开后自动整理并输入。停顿和改口都没关系。", "heroHint", wrap=True)
+        self.hint = label(
+            "按住快捷键说话，松开后自动整理并输入。停顿和改口都没关系。"
+            if self.settings.hold_to_talk
+            else "按一下快捷键开始说话，再按一下结束，自动整理并输入。停顿和改口都没关系。",
+            "heroHint",
+            wrap=True,
+        )
         status_layout.addWidget(self.status)
         status_layout.addWidget(self.hint)
         status_layout.addSpacing(6)
@@ -494,9 +502,13 @@ class MainWindow(QMainWindow):
         shortcut = parse_shortcut(name) or parse_shortcut(DEFAULT_HOTKEY)
         if not shortcut.solo:
             return self.hotkeys.register(1, shortcut.modifiers, shortcut.key)
-        # CapsLock is kept from other programs and re-sent on a quick tap, so holding it to
-        # talk does not flip it; the right-hand modifiers pass through untouched.
-        self.solo = SoloKeyHook(shortcut.key, swallow=shortcut.name == "CapsLock")
+        # CapsLock is kept from other programs and re-sent when it was not used to record, so
+        # recording does not flip it; the right-hand modifiers pass through untouched.
+        self.solo = SoloKeyHook(
+            shortcut.key,
+            swallow=shortcut.name == "CapsLock",
+            mask=shortcut.name == "RightAlt" and not self.settings.hold_to_talk,
+        )
         self.solo.events.pressed.connect(self.solo_pressed)
         self.solo.events.released.connect(self.solo_released)
         self.solo.events.chorded.connect(self.solo_chorded)
@@ -525,7 +537,7 @@ class MainWindow(QMainWindow):
 
     def solo_pressed(self):
         self.solo_state = "pending"
-        self.solo_timer.start()
+        self.solo_timer.start(SOLO_HOLD_MS if self.settings.hold_to_talk else SOLO_TAP_MS)
 
     def solo_chorded(self):
         if self.solo_state == "pending":
@@ -535,6 +547,9 @@ class MainWindow(QMainWindow):
     def solo_long_press(self):
         if self.solo_state != "pending" or not self.solo:
             return
+        if not self.settings.hold_to_talk:
+            self.solo_state = "held"  # Too long for a tap: the key keeps its usual job.
+            return
         self.solo_state = "active"
         if self.settings.hotkey == "RightAlt":
             mask_alt_release()
@@ -543,8 +558,12 @@ class MainWindow(QMainWindow):
     def solo_released(self):
         state, self.solo_state = self.solo_state, ""
         self.solo_timer.stop()
-        # A swallowed CapsLock that turned out to be a tap (or part of a shortcut) still toggles.
-        if state in ("pending", "chord") and self.solo and self.solo.swallow:
+        if state == "pending" and not self.settings.hold_to_talk:
+            self.on_hotkey(1)  # A tap starts or stops recording.
+            return
+        # A swallowed CapsLock that was not used to record (a tap when holding to talk, a long
+        # press in tap mode, or part of a shortcut) still toggles.
+        if state in ("pending", "chord", "held") and self.solo and self.solo.swallow:
             tap_key(self.solo.key)
         # Hold-to-talk notices the release in tick() through hotkey_held().
 
@@ -730,7 +749,7 @@ class MainWindow(QMainWindow):
             self.hint.setText("请在目标应用查看文字。可继续按录音快捷键输入下一段。")
             self.refresh_controls()
             if self.from_hotkey:
-                self.feedback("已输入，剪贴板里也有一份" if keep else "已输入", "可以继续按住快捷键说下一段", 1200)
+                self.feedback("已输入，剪贴板里也有一份" if keep else "已输入", "可以继续按快捷键说下一段", 1200)
         except PasteError as exc:
             self.gate.inserted = False
             self.set_notice(str(exc))
@@ -813,7 +832,7 @@ class MainWindow(QMainWindow):
                 cursor = self.result.textCursor()
                 cursor.beginEditBlock()
                 cursor.select(QTextCursor.SelectionType.Document)
-                cursor.insertText(value.text)
+                cursor.insertText(finish_text(value.text, settings.no_punctuation))
                 cursor.endEditBlock()
                 self.status.setText(f"已翻译为{language}")
                 self.toast.show_text(f"已翻译为{language}，Ctrl+Z 可撤销")

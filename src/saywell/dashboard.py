@@ -622,7 +622,7 @@ class Overview(QWidget):
             self.latest_text.setText(shown)
         else:
             self.latest_text.setObjectName("latestEmpty")
-            self.latest_text.setText("按住快捷键说一句话，整理好的文字会出现在这里，并直接输入到光标处。")
+            self.latest_text.setText("用快捷键说一句话，整理好的文字会出现在这里，并直接输入到光标处。")
         self.latest_text.style().unpolish(self.latest_text)
         self.latest_text.style().polish(self.latest_text)
         self.latest_meta.setText(meta)

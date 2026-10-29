@@ -76,7 +76,7 @@ from .models import (
 )
 from .settings import Settings, read_key, save_key
 from .vocabulary import FILE_FILTER, LexiconError, import_lexicon
-from .shortcuts import KEY_NAMES, RECORDING_CHOICES, shortcut_label, shortcut_name, shortcut_problem
+from .shortcuts import KEY_NAMES, RECORDING_CHOICES, shortcut_label, shortcut_name, shortcut_problem, usage_hint
 
 INK = "#1D1D1F"
 MUTED = "#6E6E73"
@@ -1554,7 +1554,7 @@ class HotkeyRecorder(QDialog):
         layout.addWidget(
             label(
                 "例如 Ctrl+Alt+K、Win+Shift+H 或 F8，按 Esc 取消。"
-                "想单独按住右 Ctrl、右 Alt 或 CapsLock 说话，请直接在列表里选。",
+                "想单独用右 Ctrl、右 Alt 或 CapsLock 录音，请直接在列表里选。",
                 "muted",
                 wrap=True,
             )
@@ -1698,13 +1698,17 @@ class SettingsDialog(QDialog):
         self.hotkey.activated.connect(self.choose_hotkey)
         self.hotkey.setMaximumWidth(200)
         hotkey.addWidget(self.hotkey)
-        hotkey.addWidget(
-            label("右 Ctrl、右 Alt、CapsLock 要单独按住约 0.3 秒才开始录音；轻按或和其他键一起按时，仍是原来的功能。", "muted", wrap=True)
-        )
         form.addRow(field_label("录音快捷键"), hotkey)
-        self.hold = Switch("按住快捷键说话，松开结束")
-        self.hold.setChecked(settings.hold_to_talk)
-        form.addRow(field_label("录音方式"), self.hold)
+        mode = QVBoxLayout()
+        mode.setSpacing(6)
+        self.hold = Segmented(("按住说话", "轻按开始/结束"))
+        self.hold.set_current(0 if settings.hold_to_talk else 1, animate=False)
+        self.hold.changed.connect(self.update_usage_hint)
+        mode.addWidget(self.hold)
+        self.usage_hint = label("", "muted", wrap=True)
+        mode.addWidget(self.usage_hint)
+        form.addRow(field_label("录音方式"), mode)
+        self.update_usage_hint()
         form.addRow(field_label("输入方式"), label("直接输入单行文字，支持终端，不自动回车", "muted", wrap=True))
         keep = QVBoxLayout()
         keep.setSpacing(4)
@@ -1718,6 +1722,15 @@ class SettingsDialog(QDialog):
         self.voice_translation = Switch("说完加一句“翻译成英文”，直接输入译文")
         self.voice_translation.setChecked(settings.voice_translation)
         form.addRow(field_label("语音翻译"), self.voice_translation)
+        plain = QVBoxLayout()
+        plain.setSpacing(4)
+        self.no_punctuation = Switch("去掉中文标点和语气词，输出一整段文字")
+        self.no_punctuation.setChecked(settings.no_punctuation)
+        plain.addWidget(self.no_punctuation)
+        plain.addWidget(
+            label("逗号、句号、问号等中文标点和“啊、呢、吧”这类语气词都去掉；英文的标点和数字里的小数点保留。", "muted", wrap=True)
+        )
+        form.addRow(field_label("标点"), plain)
         gpu = QVBoxLayout()
         gpu.setSpacing(4)
         self.gpu = Switch("用显卡运行 Qwen3-ASR，识别更快")
@@ -1837,6 +1850,10 @@ class SettingsDialog(QDialog):
                 self.hotkey.insertItem(self.hotkey.count() - 1, shortcut_label(name), name)
             self.hotkey.setCurrentIndex(self.hotkey.findData(name))
         self.hotkey_choice = name
+        self.update_usage_hint()
+
+    def update_usage_hint(self, *_):
+        self.usage_hint.setText(usage_hint(self.hotkey_choice, self.hold.current() == 0))
 
     def fill_lexicons(self):
         while self.lexicon_rows.count():
@@ -1931,13 +1948,14 @@ class SettingsDialog(QDialog):
                 api_timeout=float(self.timeout.value()),
                 microphone=self.mic.currentData(),
                 hotkey=self.hotkey_choice,
-                hold_to_talk=self.hold.isChecked(),
+                hold_to_talk=self.hold.current() == 0,
                 save_history=self.history.isChecked(),
                 collect_stats=self.collect_stats.isChecked(),
                 start_on_login=self.startup.isChecked(),
                 glossary=words,
                 lexicons=[dict(item) for item in self.lexicons],
                 voice_translation=self.voice_translation.isChecked(),
+                no_punctuation=self.no_punctuation.isChecked(),
                 keep_in_clipboard=self.keep_in_clipboard.isChecked(),
                 gpu_acceleration=self.gpu.isChecked(),
             )

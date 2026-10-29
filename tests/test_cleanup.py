@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from saywell.cleanup import Cancelled, CleanupError, DeepSeekCleaner
-from saywell.core import CleanupPayload, Edit, validate_cleanup
+from saywell.core import CleanupPayload, Edit, finish_text, validate_cleanup
 
 
 def client_response(payload=None, status=200, finish="stop"):
@@ -209,3 +209,40 @@ def test_translate_button_sends_the_text_and_target_language():
     assert "翻译成日语" in system["content"] and json.loads(user["content"]) == {"text": "明天十点开会。"}
     with pytest.raises(CleanupError, match="格式"):
         DeepSeekCleaner("test", transport=capture_transport({"text": ""}, [])).translate("你好", "英语")
+
+
+def test_unpunctuated_text_asks_the_api_to_drop_modal_particles_too():
+    seen = []
+    payload = {"text": "好的我们走。", "edits": [], "warnings": []}
+    DeepSeekCleaner("test", transport=capture_transport(payload, seen), no_punctuation=True).clean("好的我们走吧。")
+    DeepSeekCleaner("test", transport=capture_transport(payload, seen)).clean("好的我们走吧。")
+    assert "没有语气词的一整段文字" in seen[0]["messages"][0]["content"]
+    assert "没有语气词" not in seen[1]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize(
+    ("text", "spaced", "plain"),
+    [
+        (
+            "我用 Visual Studio Code 写代码，打开 GitHub 看看。",
+            "我用Visual Studio Code写代码，打开GitHub看看。",
+            "我用Visual Studio Code写代码打开GitHub看看",
+        ),
+        (
+            "下午 3 点开会，用 C++ 写，完成 100% 再说。",
+            "下午3点开会，用C++写，完成100%再说。",
+            "下午3点开会用C++写完成100%再说",
+        ),
+        ("（API）和《Python 入门》", "（API）和《Python入门》", "API和Python入门"),
+        ("嗯，我觉得可以。好的，呃，额度不够？", "嗯，我觉得可以。好的，呃，额度不够？", "我觉得可以好的额度不够"),
+        ("iPhone，iPad 和 Mac。版本 3.5，3～5 天。", "iPhone，iPad和Mac。版本3.5，3～5天。", "iPhone iPad和Mac版本3.5 3～5天"),
+        ("口号是 Think different. 大家记住。", "口号是Think different. 大家记住。", "口号是Think different. 大家记住"),
+        # Pure English, mostly English with a Chinese name, and Korean keep their spaces.
+        ("Hello world, this is fine.", "Hello world, this is fine.", "Hello world, this is fine."),
+        ("Please send it to 张三 by Friday.", "Please send it to 张三 by Friday.", "Please send it to 张三 by Friday."),
+        ("안녕하세요 API 테스트", "안녕하세요 API 테스트", "안녕하세요 API 테스트"),
+    ],
+)
+def test_results_drop_spaces_around_english_in_chinese_and_can_drop_punctuation(text, spaced, plain):
+    assert finish_text(text) == spaced
+    assert finish_text(text, no_punctuation=True) == plain

@@ -15,10 +15,12 @@ from saywell.shortcuts import (
     MOD_CONTROL,
     MOD_SHIFT,
     MOD_WIN,
+    SOLO_TAP_MS,
     parse_shortcut,
     shortcut_label,
     shortcut_name,
     shortcut_problem,
+    usage_hint,
 )
 from saywell.windows import OWN_INPUT, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, SoloKeyHook
 
@@ -219,3 +221,97 @@ def test_settings_offer_presets_and_a_recorded_shortcut(qt_app, monkeypatch, rec
     dialog.save()
     assert dialog.updated.hotkey == (recorded or "Alt+X")
     dialog.close()
+
+
+def tap_mode(window, name="RightCtrl", swallow=False, key=0xA3):
+    fake_solo(window, name, swallow, key)
+    window.settings = replace(window.settings, hold_to_talk=False)
+
+
+def test_tap_mode_starts_and_stops_with_a_quick_tap(window):
+    tap_mode(window)
+    window.solo_pressed()
+    assert window.solo_timer.isActive() and window.solo_timer.interval() == SOLO_TAP_MS
+    window.solo_released()
+    window.solo_pressed()
+    window.solo_released()
+    assert window.calls == [1, 1] and not window.solo_timer.isActive()
+
+
+@pytest.mark.parametrize("chord", [False, True])
+def test_tap_mode_leaves_long_presses_and_shortcuts_alone(window, chord):
+    tap_mode(window)
+    window.solo_pressed()
+    if chord:
+        window.solo_chorded()
+    else:
+        window.solo_long_press()  # Still down after SOLO_TAP_MS: not a tap.
+    window.solo_released()
+    assert window.calls == [] and window.solo_state == ""
+
+
+def test_tap_mode_capslock_records_on_a_tap_and_still_toggles_when_held(window):
+    tap_mode(window, "CapsLock", swallow=True, key=0x14)
+    window.solo_pressed()
+    window.solo_released()
+    assert window.calls == [1]  # The tap is used to record, so CapsLock stays as it was.
+    window.calls.clear()
+    window.solo_pressed()
+    window.solo_long_press()
+    window.solo_released()
+    assert window.calls == [("tap", 0x14)]
+
+
+@pytest.mark.parametrize(("name", "hold", "mask"), [("RightAlt", False, True), ("RightAlt", True, False), ("RightCtrl", False, False)])
+def test_only_right_alt_in_tap_mode_masks_every_press(window, monkeypatch, name, hold, mask):
+    monkeypatch.setattr(SoloKeyHook, "start", lambda self: True)
+    window.settings = replace(window.settings, hold_to_talk=hold)
+    assert window.activate_hotkey(name)
+    assert window.solo.mask is mask
+    window.suspend_hotkey()
+
+
+def test_masking_hook_hides_only_a_tap_of_right_alt_from_the_menu_bar(qt_app, monkeypatch):
+    masks, now = [], [100.0]
+    monkeypatch.setattr("saywell.windows.mask_alt_release", lambda: masks.append(now[0]))
+    monkeypatch.setattr("saywell.windows.time.monotonic", lambda: now[0])
+    solo = SoloKeyHook(0xA5, mask=True)
+    assert solo.handle(WM_SYSKEYDOWN, 0xA5, 0) is False  # Right Alt still reaches programs.
+    solo.handle(WM_SYSKEYDOWN, 0xA5, 0)  # Key repeat.
+    solo.handle(WM_KEYDOWN, 0xE8, OWN_INPUT)  # Our own keys are not a chord.
+    assert masks == []
+    now[0] += 0.1
+    assert solo.handle(WM_KEYUP, 0xA5, 0) is False
+    assert masks == [100.1]  # Sent while the release is held in the hook.
+    solo.handle(WM_SYSKEYDOWN, 0xA5, 0)
+    now[0] += 0.8
+    solo.handle(WM_KEYUP, 0xA5, 0)  # Held: the menu bar works as usual.
+    solo.handle(WM_SYSKEYDOWN, 0xA5, 0)
+    solo.handle(WM_SYSKEYDOWN, 0x09, 0)  # Alt+Tab.
+    solo.handle(WM_KEYUP, 0xA5, 0)
+    assert masks == [100.1]
+
+
+def test_usage_hint_describes_each_mode():
+    assert usage_hint("RightCtrl", True).startswith("单独按住右 Ctrl 约 0.3 秒开始录音，松开结束")
+    assert usage_hint("CapsLock", False).startswith("单独轻按一下 CapsLock 开始录音，再轻按一下结束")
+    assert usage_hint("Alt+X", True) == "按住 Alt+X 说话，松开结束。"
+    assert usage_hint("F8", False) == "按一下 F8 开始录音，再按一下结束。"
+
+
+def test_settings_choose_tap_mode_and_unpunctuated_text(qt_app, monkeypatch):
+    from saywell.ui import SettingsDialog
+
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
+    dialog = SettingsDialog(Settings())
+    assert dialog.hold.current() == 0 and dialog.usage_hint.text().startswith("单独按住右 Ctrl")
+    dialog.hold.buttons[1].click()
+    assert dialog.usage_hint.text().startswith("单独轻按一下右 Ctrl")
+    assert not dialog.no_punctuation.isChecked()
+    dialog.no_punctuation.setChecked(True)
+    dialog.save()
+    assert dialog.updated.hold_to_talk is False and dialog.updated.no_punctuation is True
+    dialog.close()
+    reopened = SettingsDialog(dialog.updated)
+    assert reopened.hold.current() == 1 and reopened.no_punctuation.isChecked()
+    reopened.close()

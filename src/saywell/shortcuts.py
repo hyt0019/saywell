@@ -22,10 +22,13 @@ MODIFIERS = (
 )
 
 # Held on its own for about SOLO_HOLD_MS before recording starts; a quick tap keeps the key's
-# usual job. Low-level hooks report the right-hand modifiers with their own codes.
+# usual job. In tap mode it is the other way round: a tap shorter than SOLO_TAP_MS starts or
+# stops recording, and holding the key longer keeps its usual job. Low-level hooks report the
+# right-hand modifiers with their own codes.
 SOLO_KEYS = {"RightCtrl": 0xA3, "RightAlt": 0xA5, "CapsLock": 0x14}
 SOLO_LABELS = {"RightCtrl": "右 Ctrl", "RightAlt": "右 Alt", "CapsLock": "CapsLock"}
 SOLO_HOLD_MS = 300
+SOLO_TAP_MS = 500
 
 KEYS = {
     **{chr(code): code for code in range(ord("A"), ord("Z") + 1)},
@@ -86,6 +89,17 @@ def shortcut_name(modifiers, key: str) -> str:
 
 def shortcut_label(name: str) -> str:
     return SOLO_LABELS.get(name, name)
+
+
+def usage_hint(name: str, hold: bool) -> str:
+    """How the recording shortcut is used in the chosen mode, for the settings page."""
+    key = shortcut_label(name)
+    key = (" " if key[0].isascii() else "") + key + (" " if key[-1].isascii() else "")
+    if name in SOLO_KEYS:
+        if hold:
+            return f"单独按住{key}约 0.3 秒开始录音，松开结束；轻按或和其他键一起按时，仍是原来的功能。"
+        return f"单独轻按一下{key}开始录音，再轻按一下结束；按住不放或和其他键一起按时，仍是原来的功能。"
+    return f"按住{key}说话，松开结束。" if hold else f"按一下{key}开始录音，再按一下结束。"
 
 
 def shortcut_problem(name: str) -> str | None:

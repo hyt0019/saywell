@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import ctypes
 import threading
+import time
 from ctypes import wintypes
 from dataclasses import dataclass
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, QTimer, Signal
 
 from .core import single_line_text
-from .shortcuts import INSERT_HOTKEY, MODIFIERS, parse_shortcut
+from .shortcuts import INSERT_HOTKEY, MODIFIERS, SOLO_TAP_MS, parse_shortcut
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 user32.GetForegroundWindow.restype = wintypes.HWND
@@ -228,14 +229,20 @@ class SoloKeyHook:
     The hook runs on its own thread and message loop: Windows waits for every low-level hook
     before delivering each keystroke, so a busy GUI thread would make typing stall everywhere.
     Windows also drops a hook that is slow to answer without telling anyone, so it is put back
-    every 30 seconds. With swallow, the key never reaches other programs (CapsLock would flip)."""
+    every 30 seconds. With swallow, the key never reaches other programs (CapsLock would flip).
+    With mask, a tap of right Alt (released within SOLO_TAP_MS, nothing else pressed) does not open
+    the menu bar: an unassigned key is sent from the hook while it holds the release. Keys sent from
+    inside the hook reach programs ahead of the key being handled, so programs see Alt, the mask
+    key, then the release; the GUI thread would only hear of the tap after the release went out."""
 
-    def __init__(self, key: int, swallow: bool = False):
+    def __init__(self, key: int, swallow: bool = False, mask: bool = False):
         self.key = key
         self.swallow = swallow
+        self.mask = mask
         self.events = SoloKeyEvents()
         self.held = False
         self.chorded = False
+        self.pressed_at = 0.0
         self.thread: threading.Thread | None = None
         self.thread_id = 0
 
@@ -246,10 +253,12 @@ class SoloKeyHook:
         down = message in (WM_KEYDOWN, WM_SYSKEYDOWN)
         if key == self.key:
             if down and not self.held:
-                self.held, self.chorded = True, False
+                self.held, self.chorded, self.pressed_at = True, False, time.monotonic()
                 self.events.pressed.emit()
             elif not down and self.held:
                 self.held = False
+                if self.mask and not self.chorded and time.monotonic() - self.pressed_at < SOLO_TAP_MS / 1000:
+                    mask_alt_release()
                 self.events.released.emit()
             return self.swallow
         if down and self.held and not self.chorded:
