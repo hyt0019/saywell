@@ -1,5 +1,20 @@
 # 验证记录
 
+## 2026-10-31：发布 v0.6.7；更新走腾讯云 COS，官网上线
+
+- 已发布 [v0.6.7](https://github.com/hyt0019/saywell/releases/tag/v0.6.7)（好好说 Saywell 0.6.7）：标签指向 `3ab2388`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/41103938138) 通过。发布附带安装包、`.sha256` 和签名的 `update.json`，同样的文件由 `scripts\publish_cos.py` 传到了腾讯云 COS。
+- **需求**：国内从 GitHub 和加速代理下载更新又慢又不稳；用户买了域名 hyt0019.com，要用 COS 分发并上线官网。
+- **COS**：广州存储桶 `saywell-1328034135`，桶本身私有，策略只允许匿名 GetObject/HeadObject。匿名列目录和匿名上传都返回 403。本机下载 68 MB 安装包约 3 秒，哈希一致。
+- **上传脚本**：`publish_cos.py` 手写的 COS 签名先用临时对象实测（上传、桶内复制、匿名读取、删除），再对 0.6.6 和 0.6.7 各完整运行一次。匿名读回的安装包大小和 `update.json` 字节都与本地一致。
+- **更新通道**：0.6.7 的 `fetch_release` 从 COS 取到版本信息用时 0.42 秒。v0.6.6 标签的代码只查 GitHub，3.4 秒取到 0.6.7；安装包按新的地址顺序从 COS 下载，4.1 秒完成并通过摘要校验。
+- **隔离的线上更新**（补上 v0.6.6 记录里的未测项）：
+  - 0.6.6 安装包用 `/DIR` 静默装到临时文件夹，用单独的数据目录和 F24 快捷键启动。
+  - 把 v0.6.6 代码生成的安装命令交给从 COS 下载的 0.6.7 安装包。0.6.6 进程被结束，9 秒后程序带 `--updated 0.6.7` 重新启动，卸载项登记为 0.6.7，安装记录写着成功、不需要重启。
+  - 之后静默卸载，卸载项、开始菜单快捷方式和程序文件都已清除。开机自启项和正在使用的 `dist` 副本没有变。
+- `scripts\build_installer.ps1` 跑完 359 项测试（新增 1 项：先查 COS 再查 GitHub），通过打包后的 `--smoke`，生成 `Saywell-Setup-0.6.7.exe`（68.2 MB，SHA-256 `ff60ad0abc22e2544d78a494d24223da94704df8dfaa1e219876f1042ff84ed8`），并签出 `update.json`，其中 COS 地址排在 GitHub 前面。
+- **官网**：<https://saywell.hyt0019.com> 放在腾讯云香港服务器上，所以不需要备案。下载按钮指向 COS 上的安装包，`/download` 跳到最新安装包。
+- 未测：在真实界面里点“更新”的整个过程仍只由测试和上面的演练覆盖；网盘 App 文件夹没有重新生成。
+
 ## 2026-10-30：发布 v0.6.6；一键更新
 
 - 已发布 [v0.6.6](https://github.com/hyt0019/saywell/releases/tag/v0.6.6)（好好说 Saywell 0.6.6）：标签指向 `49a0cae`，该提交的 [GitHub Windows checks](https://github.com/hyt0019/saywell/actions/runs/41077988291) 通过。发布附带安装包、`.sha256` 和签名的 `update.json`。
