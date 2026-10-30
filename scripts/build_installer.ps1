@@ -29,6 +29,9 @@ try {
     Set-Content -LiteralPath "release\$name.sha256" -Value "$hash  $name" -Encoding ascii
     Write-Output "Built release\$name"
     Write-Output "SHA256 $hash"
+    # Installed copies learn about the release from this signed file (src\saywell\updates.py).
+    & .\.venv\Scripts\python.exe -X utf8 scripts\sign_update.py
+    if ($LASTEXITCODE -ne 0) { throw 'Signing release\update.json failed.' }
 } finally {
     Pop-Location
 }

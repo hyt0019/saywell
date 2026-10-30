@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -291,6 +292,8 @@ def test_failed_startup_change_keeps_existing_window_settings(window, monkeypatc
     from saywell.startup import StartupError
 
     class Dialog:
+        release_found = SimpleNamespace(connect=lambda slot: None)
+
         def __init__(self, settings, parent):
             self.updated = Settings(start_on_login=True)
 
@@ -507,3 +510,114 @@ def test_results_are_finished_before_they_are_shown_and_typed(
     window.pipeline._run(job, cancel, settings, "原话", "text")
     assert options == [no_punctuation]
     assert window.result.toPlainText() == expected
+
+
+def until(app, condition, seconds: float = 5):
+    deadline = time.monotonic() + seconds
+    while not condition():
+        app.processEvents()
+        assert time.monotonic() < deadline
+
+
+def release(version: str = "99.0"):
+    from saywell.updates import Release
+
+    return Release(
+        version,
+        "修了一些问题。",
+        f"https://github.com/hyt0019/saywell/releases/tag/v{version}",
+        f"Saywell-Setup-{version}.exe",
+        68_000_000,
+        "0" * 64,
+        ("https://example.com/a.exe",),
+    )
+
+
+def test_only_a_newer_release_is_offered(window):
+    window.offer_release(release("0.0.1"))
+    assert window.update_button.isHidden() and window.release is None
+    window.offer_release(release())
+    assert not window.update_button.isHidden() and window.update_button.text().strip() == "更新"
+    assert window.update_button.toolTip() == "有新版本 99.0：修了一些问题。"
+
+
+def test_daily_checks_follow_the_setting(window, monkeypatch):
+    from dataclasses import replace
+
+    window.settings = replace(window.settings, check_updates=False)
+    window.check_for_update()
+    assert not window.checking_update
+
+
+def test_a_copy_not_installed_opens_the_release_page_instead(window, monkeypatch):
+    opened = []
+    monkeypatch.setattr("saywell.app.installed_here", lambda: False)
+    monkeypatch.setattr("saywell.app.QDesktopServices.openUrl", lambda url: opened.append(url.toString()))
+    window.offer_release(release())
+    window.update_button.click()
+    assert opened == [release().page] and not window.updating
+
+
+def test_an_update_downloads_installs_and_quits(window, qt_app, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QMessageBox
+
+    installer = tmp_path / "Saywell-Setup-99.0.exe"
+    started, quit_calls, shown = [], [], []
+    monkeypatch.setattr("saywell.app.installed_here", lambda: True)
+    monkeypatch.setattr("saywell.app.QMessageBox.question", lambda *args: QMessageBox.StandardButton.Yes)
+
+    def download(update, progress, cancel):
+        progress(update.size // 2)
+        return installer
+
+    monkeypatch.setattr("saywell.app.download_release", download)
+    monkeypatch.setattr("saywell.app.start_install", lambda path, version: started.append((path, version)))
+    monkeypatch.setattr(window, "quit_app", lambda: quit_calls.append(True))
+    window.update_button.setText = lambda text, original=window.update_button.setText: (shown.append(text), original(text))
+    window.offer_release(release())
+    window.update_button.click()
+    until(qt_app, lambda: quit_calls)
+    assert started == [(installer, "99.0")]
+    assert "更新中 50%" in shown and shown[-1] == "正在安装…"
+
+
+def test_a_failed_download_keeps_the_offer(window, qt_app, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from saywell.updates import UpdateError
+
+    def download(*args):
+        raise UpdateError("更新下载失败，请检查网络后重试。")
+
+    monkeypatch.setattr("saywell.app.installed_here", lambda: True)
+    monkeypatch.setattr("saywell.app.QMessageBox.question", lambda *args: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr("saywell.app.download_release", download)
+    window.offer_release(release())
+    window.update_button.click()
+    until(qt_app, lambda: not window.updating)
+    assert window.update_button.isEnabled() and window.update_button.text().strip() == "更新"
+    assert "更新下载失败" in window.notice.text()
+
+
+def test_installing_waits_for_the_current_task_and_never_runs_after_shutdown(window, monkeypatch, tmp_path):
+    started = []
+    monkeypatch.setattr("saywell.app.start_install", lambda path, version: started.append(version))
+    monkeypatch.setattr(window, "quit_app", lambda: None)
+    window.state = "busy"
+    window.install_update(tmp_path / "a.exe", "99.0")  # Retried in a second.
+    assert started == []
+    window.state = "idle"
+    window.install_update(tmp_path / "a.exe", "99.0")
+    assert started == ["99.0"]
+    window.shutdown()
+    window.install_update(tmp_path / "a.exe", "99.0")
+    assert started == ["99.0"]
+
+
+def test_the_new_version_reports_how_the_update_went(window):
+    from saywell import __version__
+
+    window.report_update(__version__)
+    assert window.status.text() == f"已更新到 {__version__}"
+    window.report_update("99.0")
+    assert f"更新到 99.0 没有完成，仍是 {__version__}" in window.notice.text()

@@ -703,6 +703,17 @@ def _download_file(
     raise ModelError(download_problem(problem))
 
 
+def download_file(
+    spec: ModelFile, target: Path, report: Callable[[int], None], cancel: Event | None = None
+) -> None:
+    """Fetch one file with the mirrors, resuming and digest check used for model files; used for
+    update installers. A verified copy already at `target` is kept."""
+    if verify_file(target, spec):
+        return
+    with httpx.Client(follow_redirects=True, timeout=httpx.Timeout(60, connect=20)) as client:
+        _download_file(client, spec, target, report, cancel)
+
+
 def download_model(
     model: AsrModel,
     directory: Path,

@@ -320,3 +320,33 @@ def test_settings_choose_tap_mode_and_unpunctuated_text(qt_app, monkeypatch):
     reopened.save()
     assert reopened.updated.no_punctuation is False and reopened.updated.no_english_punctuation is True
     reopened.close()
+
+
+def test_settings_check_for_updates_and_keep_the_choice(qt_app, monkeypatch):
+    import time
+
+    from saywell import __version__
+    from saywell.ui import SettingsDialog
+    from saywell.updates import Release
+
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
+    newer = Release("99.0", "修了一些问题。", "https://example.com", "Saywell-Setup-99.0.exe", 1, "0" * 64, ("https://a",))
+    monkeypatch.setattr("saywell.updates.fetch_release", lambda: newer)
+    found = []
+    dialog = SettingsDialog(Settings())
+    dialog.release_found.connect(found.append)
+    assert dialog.check_updates.isChecked() and dialog.update_status.text.text() == f"当前版本 {__version__}"
+    dialog.check_update_button.click()
+    status = dialog.update_status
+    deadline = time.monotonic() + 5
+    # Also let the result's animations end: Qt crashes later if this unparented dialog is
+    # deleted while they run.
+    while not found or status.text.graphicsEffect() or status.icon.animation.state() == status.icon.animation.State.Running:
+        qt_app.processEvents()
+        assert time.monotonic() < deadline
+    assert status.text.text().startswith("有新版本 99.0：修了一些问题。")
+    assert dialog.check_update_button.isEnabled()
+    dialog.check_updates.setChecked(False)
+    dialog.save()
+    assert dialog.updated.check_updates is False
+    dialog.close()

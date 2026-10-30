@@ -369,6 +369,8 @@ def test_unsaved_imports_and_removed_lexicons_leave_no_files(qt_app, tmp_path, m
     new, _ = import_lexicon(write(tmp_path, "new.txt", "欧阳翊珩\n"))
 
     class Dialog:
+        release_found = SimpleNamespace(connect=lambda slot: None)
+
         def __init__(self, settings, parent):
             self.imported_ids = {new["id"]}
             self.updated = replace(settings, lexicons=[kept, new])

@@ -97,21 +97,32 @@ GPU 加速：`AsrModel.gpu=True` 的模型（Qwen3-ASR）同时带有 llama.cpp 
 一次性准备：`winget install JRSoftware.InnoSetup`（按用户安装即可）；如需命令行发布，再安装 GitHub CLI 并运行 `gh auth login`。
 
 1. 修改 `pyproject.toml` 和 `src/saywell/__init__.py` 中的版本号（两处必须一致），在 `docs/releases/` 写好该版本的发布说明并提交。
-2. 退出正在运行的好好说（打包会覆盖 `dist`），运行 `scripts\build_installer.ps1`。它会跑完测试、构建程序、检查程序目录中没有模型和密钥，然后生成 `release\Saywell-Setup-版本号.exe` 及对应的 `.sha256` 文件。
+2. 退出正在运行的好好说（打包会覆盖 `dist`），运行 `scripts\build_installer.ps1`。它会跑完测试、构建程序、检查程序目录中没有模型和密钥，然后生成 `release\Saywell-Setup-版本号.exe` 及对应的 `.sha256` 文件，再用 `private\update-signing.key` 签出 `release\update.json`（见下面的“更新”）。
 3. 在干净环境（Windows 沙盒或新的 Windows 用户）中安装、完成首次使用流程、再卸载一遍。
 4. 打标签并发布：
 
 ```powershell
 git tag v0.6.1
 git push origin v0.6.1
-gh release create v0.6.1 release\Saywell-Setup-0.6.1.exe release\Saywell-Setup-0.6.1.exe.sha256 --title "好好说 Saywell 0.6.1" --notes-file docs\releases\v0.6.1.md
+gh release create v0.6.1 release\Saywell-Setup-0.6.1.exe release\Saywell-Setup-0.6.1.exe.sha256 release\update.json --title "好好说 Saywell 0.6.1" --notes-file docs\releases\v0.6.1.md
 ```
 
-也可以在 GitHub 网页的 Releases → Draft a new release 中选择标签、填写说明并上传这两个文件。
+也可以在 GitHub 网页的 Releases → Draft a new release 中选择标签、填写说明并上传这三个文件。`update.json` 一定要传：已安装的程序从最新发布的 `update.json` 得知有新版本。
 
 安装包按用户安装到 `%LOCALAPPDATA%\Programs\Saywell`，不需要管理员权限；安装和卸载时只关闭该目录中运行的程序，卸载只移除指向该目录的开机自启项，用户数据保留在 `%LOCALAPPDATA%\Saywell`。
 
 v0.1.0 发布时英文名叫 Better Voice Input。安装脚本保留同一个 AppId，所以新安装包会原地升级旧版本（沿用旧的安装文件夹），并删除旧的 `BetterVoiceInput.exe`、“好好说”快捷方式，把指向该目录的旧开机自启项改成新名字。程序首次启动时把 `%LOCALAPPDATA%\BetterVoiceInput` 改名为 `Saywell` 并修正设置中指向旧文件夹的模型路径（旧版本仍在运行、文件夹被占用时暂时沿用旧文件夹，下次启动再迁移），把凭据管理器里 `better-voice-input` 下的 Key 移到 `saywell`，把旧名字的开机自启项换成指向当前程序的新项。安装向导使用 Inno Setup 官方仓库中社区维护的简体中文翻译（`installer/ChineseSimplified.isl`，对应 Inno Setup 6.7.3）。
+
+## 更新
+
+已安装的程序通过 `updates.py` 自己更新，只用标准库和已有依赖：
+
+- **版本信息**：每个发布附带 `update.json`，内容是 `{"manifest": "<JSON 文本>", "signature": "<十六进制>"}`。manifest 写明版本号、一句话说明（发布说明的第一行）、发布页，以及安装包的文件名、大小、SHA-256 和下载地址。签名覆盖 manifest 文本的原始字节，不需要规范化 JSON。程序按 `MANIFEST_URLS` 的顺序取最新发布的 `update.json`（GitHub `releases/latest/download/`，再加上 `GITHUB_PROXIES` 前缀），第一个签名和字段都合格的为准；都不行时优先报签名或格式不对，其次报服务器的 HTTP 状态，都没回应才说连不上。
+- **签名**：Ed25519，`signing.py` 按 RFC 8032 第 6 节的参考代码写成，没有新增依赖；验签一次约 2.5 毫秒。测试用 RFC 的 3 组向量，开发时还和 OpenSSL 逐字节比对过公钥、签名和验签。公钥是 `updates.PUBLIC_KEY`，私钥在 `private\update-signing.key`（不进 git），由 `scripts\sign_update.py --new-key` 生成一次。**私钥要另外备份**：丢了以后已安装的程序不再接受任何更新，只能让用户手动重装带新公钥的版本；也不要重新生成。
+- **下载**：`download_release` 按 manifest 里的地址顺序，用 `models.download_file`（与模型相同的加速地址、断点续传和摘要校验）下到 `%LOCALAPPDATA%\Saywell\updates`。启动时删掉不比当前版本新的安装包和未完成的下载。
+- **安装**：只有安装版能自己更新：`installed_here` 比较 Inno Setup 卸载项（HKCU，AppId 对应的 `_is1`）里的 `InstallLocation` 和程序所在文件夹；网盘文件夹、`dist` 和源码运行时，“更新”按钮打开发布页。安装时程序启动一个隐藏的 PowerShell：`Start-Process -Wait` 静默运行安装包（`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=…`），结束后不论成败都用 `--updated 版本号` 重新打开程序，然后程序自己退出。安装脚本的 `PrepareToInstall` 会结束安装目录里还在运行的程序；安装失败时 Inno Setup 回滚，旧版本被重新打开后提示没有完成。正在录音、整理、翻译或有对话框开着时，安装等到空闲再开始。安装脚本不需要改：向导最后的“运行好好说”带 `skipifsilent`，静默安装时不会多开一个。
+- **检查时机**：`check_updates` 开启时，启动 20 秒后检查一次，之后每 24 小时一次；有新版本时主窗口顶部显示“更新”，窗口隐藏时托盘提示一次。托盘菜单和设置里的“检查更新”随时手动检查。
+- **以后加腾讯云 COS 或官网**：把 COS 或官网上 `update.json` 的地址加到 `MANIFEST_URLS` 前面（要发一个新版本，之后的程序才会去那里找）；把安装包地址加到 `sign_update.py` 写的 `urls` 前面（只改发版脚本，已安装的程序立刻生效）。内容都由签名和摘要把关，存放的地方不需要可信。
 
 ## 设计原则
 

@@ -6,9 +6,11 @@ import sys
 import time
 from dataclasses import replace
 from datetime import date
+from pathlib import Path
+from threading import Event
 
-from PySide6.QtCore import QEvent, QLockFile, QTimer, Qt
-from PySide6.QtGui import QAction, QKeySequence, QShortcut, QTextCursor
+from PySide6.QtCore import QEvent, QLockFile, QTimer, Qt, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import __version__
 from .api_config import is_deepseek_api
 from .audio import AudioError, Recorder
 from .cleanup import TRANSLATE_LANGUAGES, ApiCleaner, CleanupError
@@ -44,6 +47,7 @@ from .shortcuts import DEFAULT_HOTKEY, INSERT_HOTKEY, SOLO_HOLD_MS, SOLO_TAP_MS,
 from .startup import StartupError, migrate_legacy_entry, save_settings_with_startup, startup_enabled
 from .stats import StatsStore
 from .ui import (
+    ACCENT,
     STYLE,
     Glyph,
     HeroCard,
@@ -64,6 +68,16 @@ from .ui import (
     run_task,
     text_column,
     tray_icon,
+)
+from .updates import (
+    Release,
+    UpdateError,
+    download_release,
+    fetch_release,
+    installed_here,
+    is_newer,
+    remove_old_installers,
+    start_install,
 )
 from .vocabulary import delete_lexicons, warm
 from .windows import (
@@ -121,6 +135,13 @@ class MainWindow(QMainWindow):
         self.balance_time = 0.0
         # Graphics card the speech model last ran on; "CPU" after GPU acceleration fell back, "" if unknown.
         self.device = ""
+        # A newer release found by a check and offered by the 更新 button; `updating` while it
+        # downloads and installs.
+        self.release: Release | None = None
+        self.updating = False
+        self.update_cancel = Event()
+        self.checking_update = False
+        self.announced_release = ""
         self.setWindowTitle("好好说 Saywell")
         self.setWindowIcon(app_icon())
         available = self.screen().availableGeometry().height() if self.screen() else 900
@@ -147,6 +168,9 @@ class MainWindow(QMainWindow):
         show = QAction("打开好好说", self)
         show.triggered.connect(self.reveal)
         menu.addAction(show)
+        check = QAction("检查更新", self)
+        check.triggered.connect(lambda: self.check_for_update(manual=True))
+        menu.addAction(check)
         quit_action = QAction("退出", self)
         quit_action.triggered.connect(self.quit_app)
         menu.addAction(quit_action)
@@ -164,6 +188,12 @@ class MainWindow(QMainWindow):
         self.refresh_overview()
         if native:
             QTimer.singleShot(1500, self.update_balance)
+        self.update_timer = QTimer(self)
+        self.update_timer.setInterval(24 * 60 * 60 * 1000)
+        self.update_timer.timeout.connect(self.check_for_update)
+        if native:
+            remove_old_installers()
+            self.schedule_update_checks()
 
     def _build_ui(self):
         central = QWidget()
@@ -201,6 +231,11 @@ class MainWindow(QMainWindow):
         self.models_button.clicked.connect(self.open_models)
         self.settings_button = make_button("设置", Glyph.SETTINGS, "toolbar")
         self.settings_button.clicked.connect(self.open_settings)
+        # Shown once a check finds a newer version; short, so the header still fits at the minimum width.
+        self.update_button = make_button("", Glyph.DOWNLOAD, "toolbar", ACCENT)
+        self.update_button.clicked.connect(self.start_update)
+        self.update_button.hide()
+        header.addWidget(self.update_button)
         for button in (self.history_button, self.import_button, self.models_button, self.settings_button):
             header.addWidget(button)
         layout.addLayout(header)
@@ -413,6 +448,136 @@ class MainWindow(QMainWindow):
             self.refresh_overview()
 
         run_task(self, work, done)
+
+    def schedule_update_checks(self):
+        """Check a little after the start, so the start is never slowed, and then once a day."""
+        if not self.settings.check_updates:
+            self.update_timer.stop()
+        elif not self.update_timer.isActive():
+            self.update_timer.start()
+            QTimer.singleShot(20_000, self.check_for_update)
+
+    def check_for_update(self, manual: bool = False):
+        """Look for a newer release in the background. A check asked for in the tray menu reports its
+        result there; the daily one speaks up only when it finds something."""
+        from .checks import CheckResult
+
+        if self.checking_update or self.updating or not (manual or self.settings.check_updates):
+            return
+        self.checking_update = True
+
+        def work(_report):
+            try:
+                return fetch_release()
+            except UpdateError as exc:
+                return CheckResult(False, str(exc))
+
+        def done(value):
+            self.checking_update = False
+            if isinstance(value, Release):
+                self.offer_release(value, manual)
+            elif manual and self.native:
+                self.tray.showMessage("好好说", value.message, QSystemTrayIcon.MessageIcon.Warning, 4000)
+
+        run_task(self, work, done)
+
+    def offer_release(self, release: Release, manual: bool = False):
+        if not is_newer(release.version):
+            if manual and self.native:
+                self.tray.showMessage(
+                    "好好说", f"已是最新版本（{__version__}）。", QSystemTrayIcon.MessageIcon.Information, 3000
+                )
+            return
+        self.release = release
+        if not self.updating:
+            self.update_button.setText("更新")
+        self.update_button.setToolTip(f"有新版本 {release.version}：{release.notes}")
+        self.update_button.show()
+        if self.native and (manual or not self.isVisible() and release.version != self.announced_release):
+            self.announced_release = release.version
+            self.tray.showMessage(
+                "好好说有新版本",
+                f"{release.version}：{release.notes}打开主窗口，点顶部的“更新”。",
+                QSystemTrayIcon.MessageIcon.Information,
+                6000,
+            )
+
+    def start_update(self):
+        from .checks import CheckResult
+
+        release = self.release
+        if release is None or self.updating:
+            return
+        if not installed_here():
+            # A copy run from the cloud-drive folder or a build cannot replace itself.
+            QDesktopServices.openUrl(QUrl(release.page))
+            return
+        answer = QMessageBox.question(
+            self,
+            "更新好好说",
+            f"好好说 {release.version} 已发布：{release.notes}\n\n下载约 {release.size / 1_000_000:.0f} MB，"
+            "装好后自动重新打开，设置、模型和词库都会保留。现在更新吗？",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.updating = True
+        self.update_cancel.clear()
+        self.update_button.setEnabled(False)
+        self.update_button.setText("更新中…")
+        shown = [-1]
+
+        def work(report):
+            def progress(received: int):
+                percent = received * 100 // release.size
+                if percent != shown[0]:
+                    shown[0] = percent
+                    report(str(percent))
+
+            try:
+                return download_release(release, progress, self.update_cancel)
+            except UpdateError as exc:
+                return CheckResult(False, str(exc))
+
+        def done(value):
+            if isinstance(value, Path):
+                self.update_button.setText("正在安装…")
+                self.install_update(value, release.version)
+            else:
+                self.update_failed(f"更新没有完成：{value.message}")
+
+        run_task(self, work, done, lambda percent: self.update_button.setText(f"更新中 {percent}%"))
+
+    def update_failed(self, message: str):
+        self.updating = False
+        self.update_button.setEnabled(True)
+        self.update_button.setText("更新")
+        if not self.quitting:
+            self.set_notice(message)
+
+    def install_update(self, installer: Path, version: str):
+        """Let the installer replace the program once nothing is being recorded, typed or edited."""
+        if self.quitting or self.update_cancel.is_set():  # Shut down while waiting.
+            return
+        if self.state != "idle" or self.translating or QApplication.activeModalWidget():
+            QTimer.singleShot(1000, lambda: self.install_update(installer, version))
+            return
+        try:
+            start_install(installer, version)
+        except OSError:
+            self.update_failed("无法启动安装程序，请从发布页下载安装包手动更新。")
+            return
+        self.quit_app()
+
+    def report_update(self, version: str):
+        """Started again by the installer: say whether the new version is now the one running."""
+        if version == __version__:
+            self.status.setText(f"已更新到 {__version__}")
+            self.toast.show_text(f"已更新到 {__version__}")
+        else:
+            self.set_notice(
+                f"更新到 {version} 没有完成，仍是 {__version__}。可以稍后再试，或从发布页下载安装包；"
+                f"安装记录在 {data_dir() / 'update-install.log'}。"
+            )
 
     def record_usage(self, data: dict):
         if self.usage is None:
@@ -1002,6 +1167,7 @@ class MainWindow(QMainWindow):
             self.set_notice(str(exc))
             return
         dialog = SettingsDialog(current, self)
+        dialog.release_found.connect(self.offer_release)
         # Typing a new shortcut, or holding right Ctrl in the dialog, must not start a recording.
         self.suspend_hotkey()
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
@@ -1031,6 +1197,8 @@ class MainWindow(QMainWindow):
                     self.pipeline.release_recognizer()  # Free the card or the CPU copy; reloaded on next use.
                     self.device = ""
                 self.settings = new
+                if self.native:
+                    self.schedule_update_checks()
                 if new.collect_stats != (self.usage is not None):
                     self.usage = StatsStore() if new.collect_stats else None
                 self.configure_hotkeys()
@@ -1135,6 +1303,8 @@ class MainWindow(QMainWindow):
 
     def shutdown(self):
         self.downloads.cancel(wait=2, discard=False)  # The unfinished file is resumed next time.
+        self.update_cancel.set()  # Likewise an update's installer.
+        self.update_timer.stop()
         self.pipeline.release_recognizer()  # Stops a model engine running in its own process.
         self.gate.cancel()
         self.recorder.cancel()
@@ -1157,6 +1327,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true", help="启动后自动退出，用于打包检查")
     parser.add_argument("--background", action="store_true", help="配置就绪时仅在托盘运行")
+    parser.add_argument("--updated", metavar="VERSION", help="安装更新后由安装程序启动时传入，值为要安装的版本")
     args = parser.parse_args()
     if args.smoke:
         # Downloads, the text API and Qwen3-ASR all open httpx clients; a build whose Python
@@ -1201,6 +1372,8 @@ def main() -> int:
     )
     if not args.background or not background_ready:
         window.show()
+    if args.updated:
+        window.report_update(args.updated)
     if args.smoke:
         QTimer.singleShot(1500, window.quit_app)
     code = app.exec()

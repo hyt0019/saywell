@@ -105,6 +105,8 @@ class Settings:
     keep_in_clipboard: bool = False
     # Last language chosen for the 翻译 button on the text page.
     translate_language: str = "英语"
+    # Look for a newer version once a day; only the signed version file is downloaded.
+    check_updates: bool = True
 
     @property
     def download_root(self) -> Path:

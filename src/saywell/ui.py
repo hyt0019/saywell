@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import __version__
 from .api_config import chat_completion_url
 from .icons import draw_icon, icon_pixmap
 from .models import (
@@ -1623,6 +1624,9 @@ class HotkeyRecorder(QDialog):
 
 
 class SettingsDialog(QDialog):
+    # A newer release found by 检查更新; the main window offers to install it.
+    release_found = Signal(object)
+
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
         self.settings = settings
@@ -1761,6 +1765,18 @@ class SettingsDialog(QDialog):
         self.startup = Switch("开机自启动，登录 Windows 后在托盘运行")
         self.startup.setChecked(settings.start_on_login)
         privacy.body.addWidget(self.startup)
+        self.check_updates = Switch("每天自动检查新版本（只读取版本信息，不发送任何数据）")
+        self.check_updates.setChecked(settings.check_updates)
+        privacy.body.addWidget(self.check_updates)
+        update_row = QHBoxLayout()
+        update_row.setSpacing(12)
+        self.check_update_button = check_button("检查更新", Glyph.REFRESH)
+        self.check_update_button.clicked.connect(self.check_update)
+        update_row.addWidget(self.check_update_button, 0, Qt.AlignmentFlag.AlignTop)
+        self.update_status = CheckStatus()
+        self.update_status.text.setText(f"当前版本 {__version__}")
+        update_row.addWidget(self.update_status, 1)
+        privacy.body.addLayout(update_row)
         layout.addWidget(privacy)
 
         words = Section(
@@ -1825,6 +1841,33 @@ class SettingsDialog(QDialog):
             self.stats_cleared = True
             self.clear_stats.setText("已清空")
             self.clear_stats.setEnabled(False)
+
+    def check_update(self):
+        from .checks import CheckResult
+        from .updates import UpdateError, fetch_release, is_newer
+
+        self.check_update_button.setEnabled(False)
+        self.update_status.running("正在检查…")
+
+        def work(_report):
+            try:
+                return fetch_release()
+            except UpdateError as exc:
+                return CheckResult(False, str(exc))
+
+        def finished(result):
+            self.check_update_button.setEnabled(True)
+            if isinstance(result, CheckResult):
+                self.update_status.finish(False, result.message)
+            elif is_newer(result.version):
+                self.update_status.finish(
+                    True, f"有新版本 {result.version}：{result.notes}关闭设置后，点主窗口顶部的“更新”。"
+                )
+                self.release_found.emit(result)
+            else:
+                self.update_status.finish(True, f"已是最新版本（{__version__}）")
+
+        run_task(self, work, finished)
 
     def check_connection(self):
         from .checks import check_api
@@ -1964,6 +2007,7 @@ class SettingsDialog(QDialog):
                 no_english_punctuation=self.no_english_punctuation.isChecked(),
                 keep_in_clipboard=self.keep_in_clipboard.isChecked(),
                 gpu_acceleration=self.gpu.isChecked(),
+                check_updates=self.check_updates.isChecked(),
             )
             self.accept()
         except Exception:
