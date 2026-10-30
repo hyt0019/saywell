@@ -122,6 +122,12 @@ def test_the_first_valid_manifest_wins_and_bad_sources_are_skipped():
     assert release.version == "9.9.0" and seen == ["down.example", "evil.example", "good.example"]
 
 
+def test_cos_is_asked_before_github():
+    assert updates.MANIFEST_URLS[0] == f"{updates.DOWNLOADS}/update.json"
+    github = f"{updates.REPOSITORY}/releases/latest/download/update.json"
+    assert all(url.endswith(github) for url in updates.MANIFEST_URLS[1:])
+
+
 def test_fetch_reports_why_no_manifest_was_found():
     def missing(request):
         if request.url.host == "slow.example":

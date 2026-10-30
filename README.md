@@ -17,7 +17,7 @@
 
 ## 下载安装
 
-1. 打开 [Releases 页面](https://github.com/hyt0019/saywell/releases)，下载最新版本的安装包并运行。
+1. 打开官网 [saywell.hyt0019.com](https://saywell.hyt0019.com)（或 [Releases 页面](https://github.com/hyt0019/saywell/releases)），下载最新版本的安装包并运行。
 2. 如果 Windows 提示“Windows 已保护你的电脑”，这是因为程序暂未购买代码签名证书。点击“更多信息”→“仍要运行”即可。
 
 需要 Windows 10 / 11（64 位）、一个麦克风，以及网络连接（首次下载语音模型和整理文字时使用）。

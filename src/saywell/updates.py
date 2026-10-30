@@ -26,9 +26,11 @@ from .signing import verify
 # Checks update.json; the secret half stays with the maintainer (scripts/sign_update.py).
 PUBLIC_KEY = bytes.fromhex("5e5dea91a30245525a2020a576b51be1b4cea549fbd0ae970fe5079ac643a7ac")
 REPOSITORY = "https://github.com/hyt0019/saywell"
+# Tencent Cloud COS in Guangzhou, fast in mainland China; scripts/publish_cos.py uploads each release.
+DOWNLOADS = "https://saywell-1328034135.cos.ap-guangzhou.myqcloud.com"
 _LATEST = f"{REPOSITORY}/releases/latest/download/update.json"
 # Where update.json of the newest release is looked for, in order.
-MANIFEST_URLS = (_LATEST, *(proxy + _LATEST for proxy in GITHUB_PROXIES))
+MANIFEST_URLS = (f"{DOWNLOADS}/update.json", _LATEST, *(proxy + _LATEST for proxy in GITHUB_PROXIES))
 # Inno Setup's uninstall entry for the installer's AppId names the folder it installed into.
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{8C6A7C72-4900-4CAE-AC30-A85A108AA07F}_is1"
 _VERSION = r"\d+(?:\.\d+){1,3}"

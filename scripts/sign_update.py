@@ -34,7 +34,7 @@ def new_key() -> None:
 
 
 def write_update() -> None:
-    from saywell.updates import PUBLIC_KEY, REPOSITORY, parse_update
+    from saywell.updates import DOWNLOADS, PUBLIC_KEY, REPOSITORY, parse_update
 
     version = re.search(r'^version = "(.+)"', (root / "pyproject.toml").read_text(encoding="utf-8"), re.M)[1]
     name = f"Saywell-Setup-{version}.exe"
@@ -54,7 +54,7 @@ def write_update() -> None:
                 "name": name,
                 "size": installer.stat().st_size,
                 "sha256": digest,
-                "urls": [f"{REPOSITORY}/releases/download/v{version}/{name}"],
+                "urls": [f"{DOWNLOADS}/releases/{name}", f"{REPOSITORY}/releases/download/v{version}/{name}"],
             },
         },
         ensure_ascii=False,
