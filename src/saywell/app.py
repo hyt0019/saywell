@@ -832,7 +832,7 @@ class MainWindow(QMainWindow):
                 cursor = self.result.textCursor()
                 cursor.beginEditBlock()
                 cursor.select(QTextCursor.SelectionType.Document)
-                cursor.insertText(finish_text(value.text, settings.no_punctuation))
+                cursor.insertText(finish_text(value.text, settings.no_punctuation, settings.no_english_punctuation))
                 cursor.endEditBlock()
                 self.status.setText(f"已翻译为{language}")
                 self.toast.show_text(f"已翻译为{language}，Ctrl+Z 可撤销")

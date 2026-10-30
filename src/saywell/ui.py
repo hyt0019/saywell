@@ -1724,11 +1724,16 @@ class SettingsDialog(QDialog):
         form.addRow(field_label("语音翻译"), self.voice_translation)
         plain = QVBoxLayout()
         plain.setSpacing(4)
-        self.no_punctuation = Switch("去掉中文标点和语气词，输出一整段文字")
+        self.no_punctuation = Switch("去掉中文标点和语气词")
         self.no_punctuation.setChecked(settings.no_punctuation)
         plain.addWidget(self.no_punctuation)
+        plain.addWidget(label("逗号、句号、问号等中文标点和“啊、呢、吧”这类语气词都去掉。", "muted", wrap=True))
+        plain.addSpacing(8)
+        self.no_english_punctuation = Switch("去掉英文标点")
+        self.no_english_punctuation.setChecked(settings.no_english_punctuation)
+        plain.addWidget(self.no_english_punctuation)
         plain.addWidget(
-            label("逗号、句号、问号等中文标点和“啊、呢、吧”这类语气词都去掉；英文的标点和数字里的小数点保留。", "muted", wrap=True)
+            label("英文的逗号、句号、问号、引号等去掉；3.5、10:30、网址里的点和冒号保留。", "muted", wrap=True)
         )
         form.addRow(field_label("标点"), plain)
         gpu = QVBoxLayout()
@@ -1956,6 +1961,7 @@ class SettingsDialog(QDialog):
                 lexicons=[dict(item) for item in self.lexicons],
                 voice_translation=self.voice_translation.isChecked(),
                 no_punctuation=self.no_punctuation.isChecked(),
+                no_english_punctuation=self.no_english_punctuation.isChecked(),
                 keep_in_clipboard=self.keep_in_clipboard.isChecked(),
                 gpu_acceleration=self.gpu.isChecked(),
             )

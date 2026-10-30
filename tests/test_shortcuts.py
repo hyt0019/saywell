@@ -307,11 +307,16 @@ def test_settings_choose_tap_mode_and_unpunctuated_text(qt_app, monkeypatch):
     assert dialog.hold.current() == 0 and dialog.usage_hint.text().startswith("单独按住右 Ctrl")
     dialog.hold.buttons[1].click()
     assert dialog.usage_hint.text().startswith("单独轻按一下右 Ctrl")
-    assert not dialog.no_punctuation.isChecked()
+    assert not dialog.no_punctuation.isChecked() and not dialog.no_english_punctuation.isChecked()
     dialog.no_punctuation.setChecked(True)
     dialog.save()
     assert dialog.updated.hold_to_talk is False and dialog.updated.no_punctuation is True
+    assert dialog.updated.no_english_punctuation is False
     dialog.close()
     reopened = SettingsDialog(dialog.updated)
     assert reopened.hold.current() == 1 and reopened.no_punctuation.isChecked()
+    reopened.no_punctuation.setChecked(False)
+    reopened.no_english_punctuation.setChecked(True)
+    reopened.save()
+    assert reopened.updated.no_punctuation is False and reopened.updated.no_english_punctuation is True
     reopened.close()

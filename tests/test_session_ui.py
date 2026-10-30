@@ -479,8 +479,18 @@ def test_paste_can_leave_result_on_clipboard(window, monkeypatch):
     assert restored == [True]
 
 
-@pytest.mark.parametrize("no_punctuation", [False, True])
-def test_results_are_finished_before_they_are_shown_and_typed(window, monkeypatch, no_punctuation):
+@pytest.mark.parametrize(
+    ("no_punctuation", "no_english_punctuation", "expected"),
+    [
+        (False, False, "嗯，我用API写代码，好的。OK, done."),
+        (True, False, "我用API写代码好的OK, done."),
+        (False, True, "嗯，我用API写代码，好的。OK done"),
+        (True, True, "我用API写代码好的OK done"),
+    ],
+)
+def test_results_are_finished_before_they_are_shown_and_typed(
+    window, monkeypatch, no_punctuation, no_english_punctuation, expected
+):
     from dataclasses import replace
     from types import SimpleNamespace
 
@@ -488,11 +498,12 @@ def test_results_are_finished_before_they_are_shown_and_typed(window, monkeypatc
 
     def cleaner(*args, **kwargs):
         options.append(kwargs["no_punctuation"])
-        return SimpleNamespace(clean=lambda text, *rest: CleanupResult(text, "嗯，我用 API 写代码，好的。"))
+        return SimpleNamespace(clean=lambda text, *rest: CleanupResult(text, "嗯，我用 API 写代码，好的。OK, done."))
 
     monkeypatch.setattr("saywell.pipeline.read_key", lambda *args, **kwargs: "test")
     monkeypatch.setattr("saywell.pipeline.ApiCleaner", cleaner)
     job, cancel = window.begin("busy")
-    window.pipeline._run(job, cancel, replace(window.settings, no_punctuation=no_punctuation), "原话", "text")
+    settings = replace(window.settings, no_punctuation=no_punctuation, no_english_punctuation=no_english_punctuation)
+    window.pipeline._run(job, cancel, settings, "原话", "text")
     assert options == [no_punctuation]
-    assert window.result.toPlainText() == ("我用API写代码好的" if no_punctuation else "嗯，我用API写代码，好的。")
+    assert window.result.toPlainText() == expected

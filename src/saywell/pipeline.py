@@ -205,7 +205,10 @@ class Pipeline:
                 )
             if cancel.is_set():
                 raise Cancelled("已取消。")
-            result = replace(result, text=finish_text(result.text, settings.no_punctuation))
+            result = replace(
+                result,
+                text=finish_text(result.text, settings.no_punctuation, settings.no_english_punctuation),
+            )
             self.events.completed.emit(
                 job,
                 {

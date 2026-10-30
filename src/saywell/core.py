@@ -3,6 +3,8 @@ from __future__ import annotations
 import difflib
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
+from math import prod
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,6 +23,8 @@ _MIXED_SPACE = re.compile(
 )
 # Taken out for an unpunctuated paragraph. A single dash or tilde stays: it can mean "to" (3～5).
 _MARKS = re.compile(r"\s*(?:——|[，。！？；：、“”‘’（）《》〈〉【】〔〕〖〗「」『』…])+\s*")
+# English sentence punctuation. Apostrophes, hyphens and parentheses stay: don't, e-mail, f(x).
+_EN_MARKS = re.compile(r'[,.!?;:"]+')
 # Fillers said on their own between pauses ("嗯，", "呃……"); a word such as 额度 is never touched.
 _FILLER = re.compile(r"(?:^|(?<=[，。！？；：、…]))\s*(?:嗯|呃|额|唔|诶|欸|哎|啊|哦|噢)+\s*(?:[，。！？；：、…]+|$)")
 
@@ -45,11 +49,26 @@ def strip_punctuation(text: str) -> str:
     return _MARKS.sub(drop, _FILLER.sub("", text)).strip()
 
 
-def finish_text(text: str, no_punctuation: bool = False) -> str:
+def strip_english_punctuation(text: str) -> str:
+    """Drop English sentence punctuation. A mark with no space on either side stays, so 3.5,
+    1,000, 10:30, https://saywell.app and the inner dots of U.S.A keep their meaning."""
+
+    def drop(match: re.Match) -> str:
+        before = match.string[match.start() - 1 : match.start()]
+        after = match.string[match.end() : match.end() + 1]
+        inside = (before + after).isascii() and before.strip() and after.strip()
+        return match.group() if inside else ""
+
+    return re.sub(r" {2,}", " ", _EN_MARKS.sub(drop, text)).strip()
+
+
+def finish_text(text: str, no_punctuation: bool = False, no_english_punctuation: bool = False) -> str:
     """The last step for every result before it is shown and typed. Spacing is decided first,
-    while the punctuation still tells Chinese sentences from English ones."""
+    while the punctuation still tells Chinese sentences from English ones. A space that stood
+    after an English mark ("different. 大家") goes once the mark does."""
     text = tighten_mixed_spacing(text)
-    return strip_punctuation(text) if no_punctuation else text
+    text = strip_punctuation(text) if no_punctuation else text
+    return tighten_mixed_spacing(strip_english_punctuation(text)) if no_english_punctuation else text
 
 
 class Edit(BaseModel):
@@ -92,7 +111,12 @@ class CleanupResult:
 
 
 _NEGATION = re.compile(r"不要|不能|不必|不用|不是|没有|不会|不想|不需要|不得|不允许|别|未|不")
-_NUMBERS = re.compile(r"\d+(?:[.,]\d+)*|[零〇一二两三四五六七八九十百千万亿]+")
+_DIGITS = dict(zip("零〇一二两三四五六七八九", [0, 0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9], strict=True))
+_UNITS = {"十": 10, "百": 100, "千": 1000, "万": 10000, "亿": 100000000}
+# Arabic numbers (3.5, 1,000, 5万) and spoken Chinese ones, reading 三点五 as a decimal.
+_NUMBERS = re.compile(r"\d+(?:[.,]\d+)*[百千万亿]*|[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二两三四五六七八九]+[万亿]*)?")
+# Without decimals, for the original: 三点五十 may also be the time 3点50.
+_WHOLE_NUMBERS = re.compile(r"\d+(?:[.,]\d+)*[百千万亿]*|[零〇一二两三四五六七八九十百千万亿]+")
 _CORRECTION = re.compile(r"不对|说错|改成|改为|改到|改用|改周|不是.{0,12}是|算了|还是.{0,20}吧")
 _HEDGE = ("可能", "不确定", "没确定", "或者", "大概", "也许", "暂时", "先不用", "不能超过")
 _UNRESOLVED = re.compile(
@@ -104,26 +128,44 @@ def _plain(text: str) -> str:
     return re.sub(r"[\s，。！？、；：,.!?;:‘’“”\"'（）()]+", "", text).lower()
 
 
-def _number(value: str) -> str:
-    """Normalize common spoken Chinese integers, without interpreting dates/units."""
-    if value[0].isdigit():
-        return value.replace(",", "")
-    digits = dict(zip("零〇一二两三四五六七八九", [0, 0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9], strict=True))
-    units = {"十": 10, "百": 100, "千": 1000, "万": 10000, "亿": 100000000}
-    if all(ch in digits for ch in value):
-        return "".join(str(digits[ch]) for ch in value)
+def _chinese_integer(value: str) -> int:
+    """A spoken Chinese integer, including 二零二六 read digit by digit and 两万五 for 25000."""
+    if all(ch in _DIGITS for ch in value):
+        return int("".join(str(_DIGITS[ch]) for ch in value))
     total = section = current = 0
     for ch in value:
-        if ch in digits:
-            current = digits[ch]
-        elif units[ch] < 10000:
-            section += (current or 1) * units[ch]
+        if ch in _DIGITS:
+            current = _DIGITS[ch]
+        elif _UNITS[ch] < 10000:
+            section += (current or 1) * _UNITS[ch]
             current = 0
         else:
-            section = (section + current) * units[ch]
+            section = (section + current) * _UNITS[ch]
             total += section
             section = current = 0
-    return str(total + section + current)
+    # 三千五 is 3500: a last digit right after 百 or a larger unit counts one place lower.
+    if len(value) > 1 and value[-1] in _DIGITS and _UNITS.get(value[-2], 0) >= 100:
+        current *= _UNITS[value[-2]] // 10
+    return total + section + current
+
+
+def _number(value: str) -> str:
+    """The value a number stands for, so 三点五 and 3.5 match, and 五万, 5万 and 50000 do.
+    Something like the version 1.2.3 is compared as written."""
+    if value[0].isdigit():
+        digits = value.rstrip("百千万亿")
+        try:
+            number = Decimal(digits.replace(",", "")) * prod(_UNITS[ch] for ch in value[len(digits) :])
+        except InvalidOperation:
+            return value
+    elif "点" in value:
+        whole, _, fraction = value.partition("点")
+        digits = fraction.rstrip("万亿")
+        number = _chinese_integer(whole) + Decimal("0." + "".join(str(_DIGITS[ch]) for ch in digits))
+        number *= prod(_UNITS[ch] for ch in fraction[len(digits) :])
+    else:
+        number = Decimal(_chinese_integer(value))
+    return format(number.normalize(), "f")
 
 
 def validate_cleanup(original: str, payload: CleanupPayload) -> tuple[str, ...]:
@@ -140,7 +182,7 @@ def validate_cleanup(original: str, payload: CleanupPayload) -> tuple[str, ...]:
         # The checks below compare Chinese wording (negations, hedges, length, rewrites);
         # a translation differs from the original by design, so they would only raise false alarms.
         return tuple(dict.fromkeys(warnings))
-    source_numbers = {_number(x) for x in _NUMBERS.findall(original)}
+    source_numbers = {_number(x) for pattern in (_NUMBERS, _WHOLE_NUMBERS) for x in pattern.findall(original)}
     target_numbers = {_number(x) for x in _NUMBERS.findall(payload.text)}
     if target_numbers - source_numbers:
         warnings.append("整理结果出现了原文中未找到的数字，请核对。")

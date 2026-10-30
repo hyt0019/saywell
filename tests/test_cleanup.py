@@ -103,6 +103,9 @@ def test_transient_failure_retries_once(monkeypatch):
     "source,target,fragment",
     [
         ("预算5000元", "预算6000元。", "数字"),
+        ("快了三点五倍", "快了5.3倍。", "数字"),
+        ("增长了百分之三点五", "增长了35%。", "数字"),
+        ("预算五万块", "预算5千块。", "数字"),
         ("不要删除这个文件", "删除这个文件。", "否定"),
         ("我可能会晚到", "我会晚到。", "可能"),
         ("周三或者周四，还没确定", "周三。", "或者"),
@@ -120,6 +123,17 @@ def test_meaning_changes_require_review(source, target, fragment):
         ("我我我想明天去", "我想明天去。"),
         ("预算五千元", "预算5000元。"),
         ("预算两千五百元", "预算2500元。"),
+        # Spoken numbers written in Arabic digits keep their value.
+        ("快了三点五倍，降到零点八", "快了3.5倍，降到0.8。"),
+        ("增长了百分之十二点五", "增长了12.5%。"),
+        ("预算五万块", "预算5万块。"),
+        ("一共两万五", "一共2.5万。"),
+        ("一共两万五", "一共25000。"),
+        ("一个三千五", "一个3500。"),
+        ("营收一百二十万，市值一点二亿", "营收120万，市值1.2亿。"),
+        ("二零二六年三月五号下午三点半", "2026年3月5号下午3点半。"),
+        ("三点五十出发", "3点50出发。"),
+        ("收到1,000元", "收到1000元。"),
         ("这个非常非常重要", "这个非常非常重要。"),
         ("我不是不想去，是没时间", "我不是不想去，是没时间。"),
         ("他说不对然后重新算了", "他说“不对”，然后重新算了。"),
@@ -246,3 +260,24 @@ def test_unpunctuated_text_asks_the_api_to_drop_modal_particles_too():
 def test_results_drop_spaces_around_english_in_chinese_and_can_drop_punctuation(text, spaced, plain):
     assert finish_text(text) == spaced
     assert finish_text(text, no_punctuation=True) == plain
+
+
+@pytest.mark.parametrize(
+    ("text", "plain"),
+    [
+        ("Hello world, this is fine.", "Hello world this is fine"),
+        ('He said "OK!" and left... Really?', "He said OK and left Really"),
+        ("Version 3.5 costs $1,000 at 10:30, see https://saywell.app.", "Version 3.5 costs $1,000 at 10:30 see https://saywell.app"),
+        ("I don't use e-mail (much); U.S.A. only.", "I don't use e-mail (much) U.S.A only"),
+        # Chinese punctuation is a separate choice and stays.
+        ("口号是 Think different. 大家记住。", "口号是Think different大家记住。"),
+    ],
+)
+def test_english_punctuation_is_dropped_on_its_own(text, plain):
+    assert finish_text(text, no_english_punctuation=True) == plain
+
+
+def test_both_kinds_of_punctuation_can_be_dropped_together():
+    text = "嗯，我们用 GitHub. Sounds good, right? 好的。"
+    assert finish_text(text, no_punctuation=True) == "我们用GitHub. Sounds good, right? 好的"
+    assert finish_text(text, no_punctuation=True, no_english_punctuation=True) == "我们用GitHub Sounds good right好的"

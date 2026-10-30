@@ -98,6 +98,8 @@ class Settings:
     voice_translation: bool = True
     # One unpunctuated paragraph: Chinese punctuation and modal particles such as 啊、呢、吧 go.
     no_punctuation: bool = False
+    # English punctuation, chosen apart from the Chinese: some people leave out only one of them.
+    no_english_punctuation: bool = False
     # Leave each result on the clipboard instead of restoring the previous content, for games
     # and other places where no text box can be opened while speaking.
     keep_in_clipboard: bool = False
