@@ -199,7 +199,7 @@ class AnnouncementDialog(QDialog):
         needed = self.area.widget().layout().totalHeightForWidth(WIDTH)
         chrome = header.sizeHint().height() + footer.sizeHint().height()
         screen = self.screen().availableGeometry().height() if self.screen() else 900
-        self.resize(WIDTH, max(340, min(needed + chrome, 720, screen - 80)))
+        self.resize(WIDTH, max(340, min(needed + chrome, 760, screen - 80)))
 
     def update_now(self):
         self.choice = "update"
