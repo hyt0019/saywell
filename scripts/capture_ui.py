@@ -11,11 +11,14 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFontDatabase
 
+from saywell import __version__
+from saywell.announcement import AnnouncementDialog
 from saywell.app import MainWindow
 from saywell.pipeline import ModelDownloads
 from saywell.settings import Settings
 from saywell.stats import Day, StatsStore
 from saywell.ui import STYLE, ModelDialog, SettingsDialog
+from saywell.updates import shipped_notes
 
 app = QApplication([])
 fonts = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
@@ -95,6 +98,16 @@ dialog.show()
 settle(400)
 dialog.grab().save(str(output / "settings.png"))
 dialog.close()
+summary, highlights = shipped_notes()
+for name, after in (("announcement", False), ("whats-new", True)):
+    notice = AnnouncementDialog(
+        __version__, summary, highlights, changelog="https://saywell.hyt0019.com/changelog.html",
+        date=today.isoformat(), size=68_000_000, after_update=after, parent=window,
+    )
+    notice.show()
+    settle(400)
+    notice.grab().save(str(output / f"{name}.png"))
+    notice.close()
 models = ModelDialog(Settings(), ModelDownloads(), lambda _settings: True, window)
 models.cards["sensevoice"].check_status.finish(True, "“今天下午三点开会” · 识别用时 0.3 秒")
 models.cards["xasr"].check_status.running("正在校验 5 个文件…")

@@ -1861,7 +1861,7 @@ class SettingsDialog(QDialog):
                 self.update_status.finish(False, result.message)
             elif is_newer(result.version):
                 self.update_status.finish(
-                    True, f"有新版本 {result.version}：{result.notes}关闭设置后，点主窗口顶部的“更新”。"
+                    True, f"有新版本 {result.version}：{result.notes}关闭设置后可以查看新内容并更新。"
                 )
                 self.release_found.emit(result)
             else:

@@ -533,6 +533,21 @@ def release(version: str = "99.0"):
     )
 
 
+def answer_announcement(monkeypatch, choice="update", skip=False, shown=None):
+    """Stand in for the user in the announcement, which is modal."""
+    from saywell.announcement import AnnouncementDialog
+
+    def answer(dialog):
+        if shown is not None:
+            shown.append(dialog)
+        if skip:
+            dialog.skip.setChecked(True)
+        dialog.choice = choice
+        return 1
+
+    monkeypatch.setattr(AnnouncementDialog, "exec", answer)
+
+
 def test_only_a_newer_release_is_offered(window):
     window.offer_release(release("0.0.1"))
     assert window.update_button.isHidden() and window.release is None
@@ -553,18 +568,17 @@ def test_a_copy_not_installed_opens_the_release_page_instead(window, monkeypatch
     opened = []
     monkeypatch.setattr("saywell.app.installed_here", lambda: False)
     monkeypatch.setattr("saywell.app.QDesktopServices.openUrl", lambda url: opened.append(url.toString()))
+    answer_announcement(monkeypatch)
     window.offer_release(release())
     window.update_button.click()
     assert opened == [release().page] and not window.updating
 
 
 def test_an_update_downloads_installs_and_quits(window, qt_app, monkeypatch, tmp_path):
-    from PySide6.QtWidgets import QMessageBox
-
     installer = tmp_path / "Saywell-Setup-99.0.exe"
     started, quit_calls, shown = [], [], []
     monkeypatch.setattr("saywell.app.installed_here", lambda: True)
-    monkeypatch.setattr("saywell.app.QMessageBox.question", lambda *args: QMessageBox.StandardButton.Yes)
+    answer_announcement(monkeypatch)
 
     def download(update, progress, cancel):
         progress(update.size // 2)
@@ -582,21 +596,129 @@ def test_an_update_downloads_installs_and_quits(window, qt_app, monkeypatch, tmp
 
 
 def test_a_failed_download_keeps_the_offer(window, qt_app, monkeypatch):
-    from PySide6.QtWidgets import QMessageBox
-
     from saywell.updates import UpdateError
 
     def download(*args):
         raise UpdateError("更新下载失败，请检查网络后重试。")
 
     monkeypatch.setattr("saywell.app.installed_here", lambda: True)
-    monkeypatch.setattr("saywell.app.QMessageBox.question", lambda *args: QMessageBox.StandardButton.Yes)
+    answer_announcement(monkeypatch)
     monkeypatch.setattr("saywell.app.download_release", download)
     window.offer_release(release())
     window.update_button.click()
     until(qt_app, lambda: not window.updating)
     assert window.update_button.isEnabled() and window.update_button.text().strip() == "更新"
     assert "更新下载失败" in window.notice.text()
+
+
+def test_the_update_button_asks_through_the_announcement(window, monkeypatch):
+    shown, started = [], []
+    monkeypatch.setattr(window, "start_update", lambda: started.append(True))
+    answer_announcement(monkeypatch, choice="later", shown=shown)
+    window.offer_release(release())
+    window.update_button.click()
+    assert len(shown) == 1 and started == []
+    answer_announcement(monkeypatch, choice="update")
+    window.update_button.click()
+    assert started == [True]
+
+
+def in_front(window, monkeypatch):
+    monkeypatch.setattr(window, "isVisible", lambda: True)
+    monkeypatch.setattr(window, "isActiveWindow", lambda: True)
+
+
+def test_a_new_release_is_announced_once_the_window_is_in_front(window, monkeypatch):
+    shown = []
+    answer_announcement(monkeypatch, choice="later", shown=shown)
+    window.offer_release(release())
+    window.show_announcement()  # Hidden: it waits.
+    assert shown == [] and window.pending_release is not None
+    in_front(window, monkeypatch)
+    window.state = "busy"
+    window.show_announcement()  # Dictating: still waits.
+    assert shown == []
+    window.state = "idle"
+    window.show_announcement()
+    assert len(shown) == 1 and shown[0].skip is not None and window.pending_release is None
+    window.offer_release(release())  # The daily check finds it again: once a session is enough.
+    window.show_announcement()
+    assert len(shown) == 1
+
+
+def test_this_version_can_stop_announcing_itself(window, monkeypatch):
+    from saywell.settings import Settings
+
+    shown = []
+    in_front(window, monkeypatch)
+    answer_announcement(monkeypatch, choice="later", skip=True, shown=shown)
+    window.offer_release(release())
+    window.show_announcement()
+    assert window.settings.skipped_release == "99.0" and Settings.load().skipped_release == "99.0"
+    window.announced_release = ""  # As at the next start.
+    window.offer_release(release())
+    window.show_announcement()
+    assert len(shown) == 1 and not window.update_button.isHidden()
+    window.offer_release(release("99.1"))  # A newer version still is.
+    window.show_announcement()
+    assert len(shown) == 2
+    window.offer_release(release(), manual=True)  # So is one the user checked for.
+    window.show_announcement()
+    assert len(shown) == 3
+
+
+def test_what_is_new_shows_once_after_an_update(window, monkeypatch):
+    from dataclasses import replace
+
+    from saywell import __version__
+    from saywell.settings import Settings
+
+    Settings().save()  # Saved by an older version, which kept no last_version.
+    window.note_version()
+    assert window.pending_whats_new and Settings.load().last_version == __version__
+    shown = []
+    in_front(window, monkeypatch)
+    answer_announcement(monkeypatch, shown=shown)
+    window.show_announcement()
+    assert len(shown) == 1 and shown[0].skip is None and not window.pending_whats_new
+    window.settings = Settings.load()
+    window.note_version()  # The next start of the same version: nothing new.
+    assert not window.pending_whats_new
+    window.settings = replace(window.settings, last_version="0.1.0")
+    window.note_version()
+    assert window.pending_whats_new
+
+
+def test_a_fresh_install_shows_no_what_is_new_and_writes_no_settings(window):
+    from saywell import __version__
+    from saywell.settings import data_dir
+
+    window.note_version()
+    assert not window.pending_whats_new and window.settings.last_version == __version__
+    assert not (data_dir() / "settings.json").exists()
+
+
+def test_the_announcement_lists_the_highlights_by_section(qt_app):
+    from PySide6.QtWidgets import QLabel
+
+    from saywell.announcement import AnnouncementDialog
+    from saywell.updates import Highlight
+
+    items = (
+        Highlight("新功能", "**更新公告**：有新版本时先看到改了什么。"),
+        Highlight("修复", "修好了 <b>读取</b>。"),
+        Highlight("新功能", "**也可以在托盘里看**，用法相同。"),
+    )
+    dialog = AnnouncementDialog("9.9.0", "这一版加入更新公告。", items, changelog="https://example.com", size=68_000_000)
+    texts = [widget.text() for widget in dialog.findChildren(QLabel)]
+    order = [text for text in texts if text in ("新功能", "改进", "修复")]
+    assert order == ["新功能", "修复"]
+    assert "更新公告" in texts and any("&lt;b&gt;读取&lt;/b&gt;" in text for text in texts)
+    assert any("约 68 MB" in text for text in texts)
+    dialog.update_now()
+    assert dialog.choice == "update" and not dialog.skipped
+    after = AnnouncementDialog("9.9.0", "这一版加入更新公告。", items, changelog="https://example.com", after_update=True)
+    assert after.skip is None and after.choice == "later"
 
 
 def test_installing_waits_for_the_current_task_and_never_runs_after_shutdown(window, monkeypatch, tmp_path):

@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
+from .announcement import AnnouncementDialog
 from .api_config import is_deepseek_api
 from .audio import AudioError, Recorder
 from .cleanup import TRANSLATE_LANGUAGES, ApiCleaner, CleanupError
@@ -72,12 +73,15 @@ from .ui import (
 from .updates import (
     Release,
     UpdateError,
+    changelog_page,
     download_release,
     fetch_release,
     installed_here,
     is_newer,
     remove_old_installers,
+    shipped_notes,
     start_install,
+    whats_new_due,
 )
 from .vocabulary import delete_lexicons, warm
 from .windows import (
@@ -106,6 +110,13 @@ class MainWindow(QMainWindow):
     def __init__(self, settings: Settings | None = None, native: bool = True):
         super().__init__()
         self.settings = settings or Settings.load()
+        # Announcements wait until the window is in front and idle: what is new in this version,
+        # once after an update, then a newer release found by a check.
+        self.pending_whats_new = False
+        self.pending_release: Release | None = None
+        self.announcing = False
+        if native:
+            self.note_version()
         self.gate = SessionGate()
         self.events = Events()
         self.pipeline = Pipeline(self.events)
@@ -178,6 +189,7 @@ class MainWindow(QMainWindow):
         self.tray.activated.connect(
             lambda reason: self.reveal() if reason == QSystemTrayIcon.ActivationReason.Trigger else None
         )
+        self.tray.messageClicked.connect(self.reveal)
         if native:
             self.tray.show()
             QApplication.instance().installNativeEventFilter(self.hotkeys)
@@ -233,7 +245,7 @@ class MainWindow(QMainWindow):
         self.settings_button.clicked.connect(self.open_settings)
         # Shown once a check finds a newer version; short, so the header still fits at the minimum width.
         self.update_button = make_button("", Glyph.DOWNLOAD, "toolbar", ACCENT)
-        self.update_button.clicked.connect(self.start_update)
+        self.update_button.clicked.connect(lambda: self.release and self.announce(self.release))
         self.update_button.hide()
         header.addWidget(self.update_button)
         for button in (self.history_button, self.import_button, self.models_button, self.settings_button):
@@ -493,14 +505,90 @@ class MainWindow(QMainWindow):
             self.update_button.setText("更新")
         self.update_button.setToolTip(f"有新版本 {release.version}：{release.notes}")
         self.update_button.show()
-        if self.native and (manual or not self.isVisible() and release.version != self.announced_release):
-            self.announced_release = release.version
+        if self.updating or not manual and release.version in (self.announced_release, self.settings.skipped_release):
+            return
+        self.announced_release = release.version
+        self.pending_release = release
+        if manual and self.native and not QApplication.activeModalWidget():
+            self.reveal()
+        elif self.native and not self.isVisible():
             self.tray.showMessage(
-                "好好说有新版本",
-                f"{release.version}：{release.notes}打开主窗口，点顶部的“更新”。",
+                f"好好说 {release.version} 已发布",
+                f"{release.notes}打开主窗口看看新内容。",
                 QSystemTrayIcon.MessageIcon.Information,
                 6000,
             )
+        self.announce_soon()
+
+    def note_version(self):
+        """Remember the version that ran; the first start of a newer one shows what is new."""
+        previous = self.settings.last_version
+        if previous == __version__:
+            return
+        existing = (data_dir() / "settings.json").is_file()
+        self.pending_whats_new = whats_new_due(previous, __version__, existing) and bool(shipped_notes()[0])
+        self.settings = replace(self.settings, last_version=__version__)
+        if existing:  # A fresh install keeps no settings file until something is changed.
+            try:
+                self.settings.save()
+            except OSError:
+                pass
+
+    def announce_soon(self):
+        QTimer.singleShot(450, self.show_announcement)
+
+    def show_announcement(self):
+        """Show what is waiting, but only while the window is in front with nothing else going on,
+        so dictation into another program is never interrupted; otherwise the next time it is."""
+        if not (self.pending_whats_new or self.pending_release) or self.announcing or self.quitting:
+            return
+        if not self.isVisible() or not self.isActiveWindow() or self.state != "idle" or QApplication.activeModalWidget():
+            return
+        if self.pending_whats_new:
+            self.pending_whats_new = False
+            summary, highlights = shipped_notes()
+            self.announcing = True
+            try:
+                AnnouncementDialog(
+                    __version__, summary, highlights, changelog=changelog_page(__version__), after_update=True, parent=self
+                ).exec()
+            finally:
+                self.announcing = False
+            if self.pending_release:
+                self.announce_soon()
+            return
+        release, self.pending_release = self.pending_release, None
+        if is_newer(release.version) and not self.updating:
+            self.announce(release)
+
+    def announce(self, release: Release):
+        """The announcement of a newer release, which is also where the update is started."""
+        if self.updating or self.announcing:
+            return
+        self.pending_release = None
+        dialog = AnnouncementDialog(
+            release.version,
+            release.notes,
+            release.highlights,
+            changelog=changelog_page(release.version),
+            date=release.date,
+            size=release.size,
+            installable=installed_here(),
+            parent=self,
+        )
+        self.announcing = True
+        try:
+            dialog.exec()
+        finally:
+            self.announcing = False
+        if dialog.skipped and self.settings.skipped_release != release.version:
+            self.settings = replace(self.settings, skipped_release=release.version)
+            try:
+                self.settings.save()
+            except OSError:
+                self.set_notice("无法写入本地设置，请检查用户目录权限。")
+        if dialog.choice == "update":
+            self.start_update()
 
     def start_update(self):
         from .checks import CheckResult
@@ -511,14 +599,6 @@ class MainWindow(QMainWindow):
         if not installed_here():
             # A copy run from the cloud-drive folder or a build cannot replace itself.
             QDesktopServices.openUrl(QUrl(release.page))
-            return
-        answer = QMessageBox.question(
-            self,
-            "更新好好说",
-            f"好好说 {release.version} 已发布：{release.notes}\n\n下载约 {release.size / 1_000_000:.0f} MB，"
-            "装好后自动重新打开，设置、模型和词库都会保留。现在更新吗？",
-        )
-        if answer != QMessageBox.StandardButton.Yes:
             return
         self.updating = True
         self.update_cancel.clear()
@@ -1061,6 +1141,7 @@ class MainWindow(QMainWindow):
         # Back from Explorer, where a model folder may have just been copied in.
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow() and self.state == "idle":
             self.find_dropped_models()
+            self.announce_soon()
         super().changeEvent(event)
 
     def release_model(self) -> bool:
@@ -1167,7 +1248,7 @@ class MainWindow(QMainWindow):
             self.set_notice(str(exc))
             return
         dialog = SettingsDialog(current, self)
-        dialog.release_found.connect(self.offer_release)
+        dialog.release_found.connect(lambda release: self.offer_release(release, manual=True))
         # Typing a new shortcut, or holding right Ctrl in the dialog, must not start a recording.
         self.suspend_hotkey()
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
@@ -1345,6 +1426,9 @@ def main() -> int:
         if not hook.start():
             raise RuntimeError("The keyboard hook cannot be installed in this build.")
         hook.stop()
+        # What is new after an update comes from the release notes bundled with the program.
+        if not shipped_notes()[0]:
+            raise RuntimeError("This version's release notes are missing from this build.")
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Saywell")
     app.setOrganizationName("Saywell")

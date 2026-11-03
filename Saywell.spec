@@ -16,7 +16,8 @@ a = Analysis(
     ['scripts/run_app.py'],
     pathex=['src'],
     binaries=sherpa_binaries,
-    datas=sherpa_data + collect_data_files('pypinyin') + [('src/saywell/assets', 'saywell/assets')],
+    datas=sherpa_data + collect_data_files('pypinyin') + [('src/saywell/assets', 'saywell/assets'),
+                                                            ('docs/releases', 'saywell/releases')],
     hiddenimports=sherpa_hidden + ['saywell.cli', 'keyring.backends.Windows', 'win32crypt'],
     excludes=['tkinter', 'pytest', 'ruff'],
 )

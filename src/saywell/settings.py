@@ -107,6 +107,10 @@ class Settings:
     translate_language: str = "英语"
     # Look for a newer version once a day; only the signed version file is downloaded.
     check_updates: bool = True
+    # A version whose announcement the user turned off ("这个版本不再提醒"); newer ones still show.
+    skipped_release: str = ""
+    # The version that ran last, so the first start of a newer one shows what is new.
+    last_version: str = ""
 
     @property
     def download_root(self) -> Path:
