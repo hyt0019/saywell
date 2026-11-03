@@ -51,6 +51,18 @@ def _import(p):
     p.lineTo(20, 14)
 
 
+def _export(p):
+    # The import tray, with the arrow leaving it.
+    _lines(p, (12, 14.5), (12, 3.5))
+    _lines(p, (8, 7.5), (12, 3.5), (16, 7.5))
+    p.moveTo(4, 14)
+    p.lineTo(4, 17.5)
+    p.quadTo(4, 20, 6.5, 20)
+    p.lineTo(17.5, 20)
+    p.quadTo(20, 20, 20, 17.5)
+    p.lineTo(20, 14)
+
+
 def _model(p):
     for x, half in ((4.5, 2), (8.25, 5), (12, 8), (15.75, 4.5), (19.5, 1.8)):
         _lines(p, (x, 12 - half), (x, 12 + half))
@@ -201,6 +213,7 @@ PATHS = {
     "mic": _mic,
     "history": _history,
     "import": _import,
+    "export": _export,
     "model": _model,
     "settings": _settings,
     "download": _download,

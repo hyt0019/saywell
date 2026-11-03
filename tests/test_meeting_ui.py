@@ -259,3 +259,97 @@ def test_short_meetings_send_nothing_before_minutes_are_asked_for(window, no_dev
     page = finished_meeting(window, no_devices, monkeypatch, api)
     page.prepare_minutes()
     assert not page.preparing and api.requests == []
+
+
+def test_exporting_saves_the_minutes_and_remembers_the_choices(window, no_devices, monkeypatch, tmp_path):
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QFileDialog
+
+    from saywell.export import file_name
+
+    page = finished_meeting(window, no_devices, monkeypatch, MinutesApi())
+    asked = []
+
+    def choose(parent, caption, suggested, kinds):
+        asked.append(Path(suggested))
+        return str(tmp_path / "纪要"), kinds
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", choose)
+    page.fill_export_menu()
+    assert page.export_menu.actions()[0].text() == "还没有纪要，将只导出会议文字"
+    page.export_meeting("txt")
+    assert asked[0].name == file_name(page.store.info()["title"]) + ".txt"
+    assert "那 PDF 先不做了" in (tmp_path / "纪要.txt").read_text(encoding="utf-8-sig")
+    assert window.settings.meeting_export_dir == str(tmp_path) and page.export_button.text() == "已导出"
+
+    page.write_minutes()
+    assert wait_for(lambda: page.minutes is not None)
+    page.fill_export_menu()
+    actions = {action.text(): action for action in page.export_menu.actions()}
+    assert actions["只要纪要"].isChecked() and not actions["纪要和会议文字"].isChecked()
+    page.export_meeting("md")
+    markdown = (tmp_path / "纪要.md").read_text(encoding="utf-8")
+    assert "发预算明细" in markdown and "会议文字" not in markdown
+    actions["纪要和会议文字"].trigger()
+    assert window.settings.meeting_export_transcript
+    page.export_meeting("md")
+    assert "## 会议文字" in (tmp_path / "纪要.md").read_text(encoding="utf-8")
+    assert asked[-1].parent == tmp_path  # The folder saved to last time.
+
+    def fail(path, blocks):
+        raise PermissionError("open in Word")
+
+    monkeypatch.setattr("saywell.export.save", fail)
+    page.export_meeting("docx")
+    assert "没有保存成功" in window.notice.text()
+
+
+def test_earlier_meetings_open_as_they_were_left_and_can_be_deleted(window, no_devices, monkeypatch):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QDialog, QListWidget
+
+    from saywell.meeting import list_meetings
+    from saywell.ui import Button
+
+    page = finished_meeting(window, no_devices, monkeypatch, MinutesApi())
+    page.template_box.setCurrentIndex(1)  # 项目例会
+    page.write_minutes()
+    assert wait_for(lambda: page.minutes is not None)
+    first = page.store
+    page.template_box.setCurrentIndex(0)
+    page.start()
+    assert not page.history_button.isEnabled()  # Not while recording.
+    page.recorder._publish(Line(3, 4, OTHERS, "第二场会议"))
+    assert wait_for(lambda: page.transcript.lines)
+    page.stop()
+    assert wait_for(lambda: page.state == "done")
+    assert [store.folder for store in list_meetings()] == [page.store.folder, first.folder]  # Newest first.
+
+    page.open_meeting(list_meetings()[1])
+    assert page.store.folder == first.folder and page.state == "done"
+    assert [line.text for line in page.transcript.lines] == ["那 PDF 先不做了，放到下个版本。"]
+    assert page.minutes is not None and page.write_button.text() == "重新生成"
+    assert page.template_box.currentData() == "project" and window.settings.meeting_template == "general"
+    assert page.hero.status.text() == first.info()["title"] and page.history_button.isEnabled()
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+    seen = []
+
+    def use_dialog():
+        try:
+            dialog = QApplication.activeModalWidget()
+            listing = dialog.findChild(QListWidget)
+            seen.append((listing.count(), listing.currentRow()))  # The meeting shown is the one chosen.
+            next(button for button in dialog.findChildren(Button) if button.text() == "删除").click()
+            seen.append(listing.count())
+        finally:
+            for widget in QApplication.topLevelWidgets():
+                if isinstance(widget, QDialog) and widget.isVisible():
+                    widget.reject()
+
+    QTimer.singleShot(50, use_dialog)
+    page.open_meetings()
+    assert seen == [(2, 1), 1]
+    assert not first.folder.exists() and page.store is None and page.state == "idle"
+    assert page.transcript.lines == [] and page.minutes is None and not page.export_button.isEnabled()

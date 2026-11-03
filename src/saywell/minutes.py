@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -448,7 +449,7 @@ def to_markdown(blocks: list[tuple[str, object]]) -> str:
             out.append(f"- {value}")
         elif kind == "todo":
             out.append(f"- [ ] {todo_text(*value)}")
-    return "\n".join(out).strip() + "\n"
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip() + "\n"
 
 
 def to_text(blocks: list[tuple[str, object]]) -> str:

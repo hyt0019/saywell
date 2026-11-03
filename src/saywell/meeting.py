@@ -175,6 +175,17 @@ class MeetingStore:
             return None
 
 
+def list_meetings(root: Path | None = None) -> list[MeetingStore]:
+    """The meetings kept on this computer, newest first."""
+    root = root or meetings_dir()
+    try:
+        folders = [folder for folder in root.iterdir() if (folder / "info.dat").is_file()]
+    except OSError:
+        return []
+    # Folders are named after the start time, so their names sort by it.
+    return [MeetingStore(folder) for folder in sorted(folders, key=lambda folder: folder.name, reverse=True)]
+
+
 # --- Recording ---------------------------------------------------------------------------------
 
 

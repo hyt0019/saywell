@@ -117,6 +117,10 @@ class Settings:
     meeting_microphone: bool = True
     # The template minutes were last written with (minutes.TEMPLATES).
     meeting_template: str = "general"
+    # Exporting a meeting: the folder last saved to, and whether the transcript goes along
+    # with the minutes.
+    meeting_export_dir: str = ""
+    meeting_export_transcript: bool = False
 
     @property
     def download_root(self) -> Path:

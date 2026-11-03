@@ -12,17 +12,24 @@ import threading
 import time
 from dataclasses import replace
 from datetime import datetime
+from pathlib import Path
 
-from PySide6.QtCore import QFileInfo, QObject, QPoint, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPixmap, QTextBlockFormat, QTextCharFormat, QTextCursor
+from PySide6.QtCore import QFileInfo, QObject, QPoint, QRectF, QSize, QStandardPaths, Qt, QTimer, Signal
+from PySide6.QtGui import QActionGroup, QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPixmap, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
+    QDialog,
+    QFileDialog,
     QFileIconProvider,
     QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QMessageBox,
     QSplitter,
     QTextBrowser,
     QTextEdit,
@@ -32,9 +39,20 @@ from PySide6.QtWidgets import (
 
 from .audio import AudioError
 from .capture import AudioApp, audio_apps, loopback_supported
+from .export import FORMATS
 from .icons import draw_icon
-from .meeting import LABELS, ME, OTHERS, ROOM, SKIPPED, Line, MeetingRecorder, MeetingStore, clock
-from .minutes import PREPARE_FROM, TEMPLATES, Minutes, MinutesWriter, minutes_record, outline, to_html, to_text
+from .meeting import LABELS, ME, OTHERS, ROOM, SKIPPED, Line, MeetingRecorder, MeetingStore, clock, list_meetings
+from .minutes import (
+    PREPARE_FROM,
+    TEMPLATES,
+    Minutes,
+    MinutesWriter,
+    minutes_from_record,
+    minutes_record,
+    outline,
+    to_html,
+    to_text,
+)
 from .models import get_model, models_ready
 from .ui import (
     ACCENT,
@@ -50,6 +68,8 @@ from .ui import (
     Switch,
     Tween,
     card,
+    dialog_header,
+    footer_bar,
     label,
     make_button,
     mix,
@@ -58,6 +78,7 @@ from .ui import (
 
 TONES = {"idle": "#AEAEB2", "rec": "#FF3B30", "busy": "#FF9F0A", "done": "#34C759"}
 FAINT = "#8E8E93"
+WAITING = "开始记录后，会议里说的话会实时出现在这里。"
 
 
 def app_picture(path: str, size: int = 32) -> QPixmap | None:
@@ -76,6 +97,23 @@ def duration_text(seconds: float) -> str:
     minutes = max(1, round(seconds / 60))
     hours, minutes = divmod(minutes, 60)
     return f"{hours} 小时 {minutes} 分钟" if hours else f"{minutes} 分钟"
+
+
+def meeting_meta(info: dict) -> str:
+    """How long, how much was said and what was recorded, for the list of meetings."""
+    parts = []
+    if info.get("started"):
+        moment = datetime.fromtimestamp(info["started"])
+        if moment.year != datetime.now().year:
+            parts.append(f"{moment.year} 年")
+    if info.get("duration"):
+        parts.append(duration_text(info["duration"]))
+    elif not info.get("ended"):
+        parts.append("没有正常结束")
+    if info.get("characters") is not None:
+        parts.append(f"{info['characters']:,} 字")
+    parts.append(info.get("app") or "麦克风")
+    return " · ".join(parts)
 
 
 def app_note(app: AudioApp) -> str:
@@ -284,6 +322,18 @@ class TranscriptView(QTextEdit):
         self.labels = labels
         self.setPlaceholderText(placeholder)
 
+    def load(self, labels: bool, lines: list[Line], placeholder: str = "") -> None:
+        """A saved meeting, all at once (adding its lines one by one would be slow)."""
+        self.reset(labels, placeholder)
+        self.lines = sorted(lines, key=lambda line: (line.start, line.end))
+        self.headed = [False] * len(self.lines)
+        cursor = QTextCursor(self.document())
+        for index in range(len(self.lines)):
+            if index:
+                cursor.insertBlock()
+            self._write(cursor, index)
+        self.verticalScrollBar().setValue(0)
+
     def characters(self) -> int:
         return sum(len(line.text) for line in self.lines)
 
@@ -416,6 +466,38 @@ class MinutesView(QTextBrowser):
         ))
 
 
+class StayOpenMenu(QMenu):
+    """A menu whose check boxes can be ticked without it closing."""
+
+    def mouseReleaseEvent(self, event):
+        action = self.activeAction()
+        if action is not None and action.isCheckable() and action.isEnabled():
+            action.trigger()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class MeetingRow(QWidget):
+    """One meeting in the list: its title, below it how long and how much, and whether it has
+    minutes."""
+
+    def __init__(self, info: dict, minutes: bool):
+        super().__init__()
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # Clicks select the row.
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 9, 14, 9)
+        layout.setSpacing(10)
+        column = QVBoxLayout()
+        column.setSpacing(3)
+        title = label(info.get("title") or "会议")
+        title.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {INK};")
+        column.addWidget(title)
+        column.addWidget(label(meeting_meta(info), "caption"))
+        layout.addLayout(column, 1)
+        if minutes:
+            layout.addWidget(label("已有纪要", "tag"), 0, Qt.AlignmentFlag.AlignVCenter)
+
+
 class MeetingEvents(QObject):
     """Brings the recorder's callbacks, made on its threads, to the interface thread."""
 
@@ -514,6 +596,7 @@ class MeetingPage(QWidget):
         self.parts: dict = {}  # Those notes, for the meeting in self.store (saved as parts.dat).
         self.stopping = threading.Event()  # Set on quitting, to stop writing notes.
         self.next_prepare = 0.0
+        self.opened = ""  # The title of a meeting opened from the list (not just recorded).
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
@@ -526,7 +609,7 @@ class MeetingPage(QWidget):
         self.count = label("0 字", "count")
         head.addWidget(self.count)
         self.transcript = TranscriptView()
-        self.transcript.reset(True, "开始记录后，会议里说的话会实时出现在这里。")
+        self.transcript.reset(True, WAITING)
         column.addWidget(self.transcript, 1)
         splitter.addWidget(frame)
         frame, column, head = card_column("会议纪要", True)
@@ -542,9 +625,20 @@ class MeetingPage(QWidget):
         layout.addWidget(splitter, 1)
         actions = QHBoxLayout()
         actions.setSpacing(8)
+        self.history_button = make_button("全部会议", Glyph.HISTORY, "ghost")
+        self.history_button.setToolTip("打开以前记录的会议")
+        self.history_button.clicked.connect(self.open_meetings)
+        actions.addWidget(self.history_button)
         self.copy_button = make_button("复制全文", Glyph.COPY, "ghost")
         self.copy_button.clicked.connect(self.copy_all)
         actions.addWidget(self.copy_button)
+        self.export_button = make_button("导出", Glyph.EXPORT, "ghost")
+        self.export_button.set_trailing(Glyph.CHEVRON_DOWN)
+        self.export_button.setToolTip("把纪要和会议文字存成 Word、PDF、Markdown 或纯文本文件")
+        self.export_menu = StayOpenMenu(self.export_button)
+        self.export_menu.aboutToShow.connect(self.fill_export_menu)
+        self.export_button.setMenu(self.export_menu)
+        actions.addWidget(self.export_button)
         actions.addStretch()
         self.copy_minutes_button = make_button("复制纪要", Glyph.COPY, "ghost")
         self.copy_minutes_button.clicked.connect(self.copy_minutes)
@@ -678,6 +772,7 @@ class MeetingPage(QWidget):
             return
         recorder.start()
         self.recorder = recorder
+        self.opened = ""
         self.ended = self.duration = 0.0
         self.silent_notice = ""
         self.parts = {}
@@ -827,11 +922,13 @@ class MeetingPage(QWidget):
         else:
             if self.state == "done":
                 hero.set_pill("done", "已结束")
-                hero.status.setText("会议记好了")
-                hero.hint.setText(
-                    f"共 {duration_text(self.duration)}，{self.transcript.characters():,} 字。"
-                    "文字已加密保存在本机。"
-                )
+                size = f"共 {duration_text(self.duration)}，{self.transcript.characters():,} 字。"
+                if self.opened:
+                    hero.status.setText(self.opened)
+                    hero.hint.setText(size + "可以重新生成纪要，或导出成文件。")
+                else:
+                    hero.status.setText("会议记好了")
+                    hero.hint.setText(size + "文字已加密保存在本机。")
             else:
                 hero.set_pill("idle", "未开始")
                 hero.status.setText("记录一场会议")
@@ -964,6 +1061,8 @@ class MeetingPage(QWidget):
         self.write_button.setText("生成中…" if busy else ("重新生成" if self.minutes else "生成纪要"))
         self.template_box.setEnabled(not busy)
         self.copy_minutes_button.setEnabled(self.minutes is not None)
+        self.export_button.setEnabled(bool(self.transcript.lines) and self.store is not None)
+        self.history_button.setEnabled(not self.recording and not busy)
         if busy:
             return
         minutes = self.minutes
@@ -986,3 +1085,180 @@ class MeetingPage(QWidget):
         if text:
             QApplication.clipboard().setText(text)
             self.copy_button.flash("已复制")
+
+    # Saving as a file
+
+    def fill_export_menu(self):
+        """What goes in the file (minutes alone, or with the transcript), then the formats."""
+        menu = self.export_menu
+        menu.clear()
+        if self.minutes is None:
+            menu.addAction("还没有纪要，将只导出会议文字").setEnabled(False)
+        else:
+            menu.addAction("内容").setEnabled(False)
+            group = QActionGroup(menu)
+            for text, transcript in (("只要纪要", False), ("纪要和会议文字", True)):
+                action = menu.addAction(text)
+                action.setCheckable(True)
+                action.setChecked(self.main.settings.meeting_export_transcript == transcript)
+                action.setActionGroup(group)
+                action.triggered.connect(
+                    lambda _checked=False, transcript=transcript: self._save(meeting_export_transcript=transcript)
+                )
+        menu.addSeparator()
+        menu.addAction("导出为").setEnabled(False)
+        for kind, (name, _filter) in FORMATS.items():
+            action = menu.addAction(f"{name}	.{kind}")
+            action.triggered.connect(lambda _checked=False, kind=kind: self.export_meeting(kind))
+
+    def export_meeting(self, kind: str):
+        """The minutes, with the transcript if asked for (or alone, before there are minutes)."""
+        if self.store is None or not self.transcript.lines:
+            return
+        from .export import document_blocks, file_name, save
+
+        settings = self.main.settings
+        info = self.store.info()
+        if self.recorder is not None:
+            info.pop("duration", None)
+        folder = settings.meeting_export_dir
+        if not folder or not Path(folder).is_dir():
+            folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+        suggested = Path(folder) / f"{file_name(info.get('title') or '会议')}.{kind}"
+        chosen, _ = QFileDialog.getSaveFileName(self, "导出会议", str(suggested), FORMATS[kind][1])
+        if not chosen:
+            return
+        path = Path(chosen)
+        if path.suffix.lower() != f".{kind}":
+            path = path.with_name(f"{path.name}.{kind}")
+        transcript = settings.meeting_export_transcript or self.minutes is None
+        blocks = document_blocks(info, self.minutes, list(self.transcript.lines), self.transcript.labels, transcript)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            save(path, blocks)
+        except OSError:
+            self.main.set_notice("文件没有保存成功。如果同名文件正在 Word 或其他程序里打开，请先关掉它，或换个位置再试。")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._save(meeting_export_dir=str(path.parent))
+        self.main.set_notice("")
+        self.export_button.flash("已导出")
+
+    # Earlier meetings
+
+    def open_meetings(self):
+        if self.recording or self.writing is not None:
+            return
+        stores = list_meetings()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("全部会议 · 好好说")
+        dialog.resize(600, 520)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(dialog_header("全部会议", "会议文字和纪要加密保存在本机，只有当前 Windows 用户能打开。"))
+        body = QVBoxLayout()
+        body.setContentsMargins(30, 6, 30, 22)
+        listing = QListWidget()
+        listing.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        listing.setStyleSheet("QListWidget::item { padding: 0; }")  # MeetingRow has its own.
+        for store in stores:
+            row = MeetingRow(store.info(), (store.folder / "minutes.dat").is_file())
+            item = QListWidgetItem()
+            item.setSizeHint(row.sizeHint())
+            listing.addItem(item)
+            listing.setItemWidget(item, row)
+        shown = next((i for i, store in enumerate(stores) if self.store and store.folder == self.store.folder), 0)
+        if stores:
+            listing.setCurrentRow(shown)
+        empty = label("还没有记录过会议。", "muted")
+        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        body.addWidget(listing, 1)
+        body.addWidget(empty, 1)
+        layout.addLayout(body, 1)
+        footer, actions = footer_bar()
+        delete_button = make_button("删除", Glyph.DELETE, "danger")
+        open_button = make_button("打开", None, "primary")
+        actions.addWidget(delete_button)
+        actions.addStretch()
+        actions.addWidget(open_button)
+        layout.addWidget(footer)
+
+        def update():
+            listing.setVisible(bool(stores))
+            empty.setVisible(not stores)
+            delete_button.setEnabled(listing.currentRow() >= 0)
+            open_button.setEnabled(listing.currentRow() >= 0)
+
+        def open_chosen():
+            index = listing.currentRow()
+            if 0 <= index < len(stores):
+                dialog.accept()
+                self.open_meeting(stores[index])
+
+        def delete_chosen():
+            index = listing.currentRow()
+            if not 0 <= index < len(stores):
+                return
+            title = stores[index].info().get("title") or "这场会议"
+            answer = QMessageBox.question(
+                dialog, "删除会议", f"删除“{title}”？\n\n会议文字和纪要都会从本机删除，无法恢复。"
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            if not self.delete_meeting(stores[index]):
+                QMessageBox.warning(dialog, "未能删除", "会议文件正在使用或没有权限，请稍后重试。")
+                return
+            stores.pop(index)
+            listing.takeItem(index)
+            update()
+
+        listing.currentRowChanged.connect(lambda _row: update())
+        listing.itemDoubleClicked.connect(lambda _item: open_chosen())
+        open_button.clicked.connect(open_chosen)
+        delete_button.clicked.connect(delete_chosen)
+        update()
+        dialog.exec()
+
+    def open_meeting(self, store: MeetingStore):
+        """A meeting from the list, as it was left: its transcript, minutes and notes."""
+        if self.recording or self.writing is not None:
+            return
+        info = store.info()
+        lines = store.lines()
+        self.store = store
+        self.opened = info.get("title") or "会议"
+        self.transcript.load(bool(info.get("labels")), lines, "这场会议没有记下文字。")
+        self.duration = info.get("duration") or (lines[-1].end if lines else 0.0)
+        parts = store.load("parts")
+        self.parts = parts if isinstance(parts, dict) else {}
+        minutes = minutes_from_record(store.load("minutes"))
+        index = next((i for i, t in enumerate(TEMPLATES) if minutes and t.id == minutes.template), None)
+        if index is not None:
+            # The meeting's own template for writing it again; the remembered choice stays.
+            self.template_box.blockSignals(True)
+            self.template_box.setCurrentIndex(index)
+            self.template_box.blockSignals(False)
+        self.state = "done"
+        self.main.set_notice("")
+        self.show_minutes(minutes)
+        self.refresh()
+
+    def delete_meeting(self, store: MeetingStore) -> bool:
+        import shutil
+
+        try:
+            shutil.rmtree(store.folder)
+        except OSError:
+            return False
+        if self.store is not None and self.store.folder == store.folder:
+            self.store = None
+            self.parts = {}
+            self.opened = ""
+            self.state = "idle"
+            self.duration = 0.0
+            self.transcript.reset(True, WAITING)
+            self.show_minutes(None)
+            self.refresh()
+        return True

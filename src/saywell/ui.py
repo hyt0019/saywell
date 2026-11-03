@@ -184,6 +184,7 @@ class Glyph:
     SETTINGS = "settings"
     HISTORY = "history"
     IMPORT = "import"
+    EXPORT = "export"
     MODEL = "model"
     DOWNLOAD = "download"
     COPY = "copy"

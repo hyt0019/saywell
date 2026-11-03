@@ -158,3 +158,13 @@ def test_room_noise_the_vad_took_for_speech_is_not_recognized(tmp_path):
     faint = track((1, 2, 0.002), total=5)  # -54 dB: the room after the speakers stopped.
     run = Recording(tmp_path, recognize).play({ROOM: faint + track((3, 3.7, 0.3), total=5)})
     assert [line.text for line in run.lines] == [WORDS[0.3]] and len(heard) == 1
+
+
+def test_meetings_are_listed_newest_first(tmp_path):
+    from saywell.meeting import list_meetings
+
+    assert list_meetings(tmp_path / "none") == []
+    older = MeetingStore.create({"started": 1_700_000_000.0}, root=tmp_path)
+    newer = MeetingStore.create({"started": 1_700_090_000.0}, root=tmp_path)
+    (tmp_path / "not-a-meeting").mkdir()
+    assert [store.folder for store in list_meetings(tmp_path)] == [newer.folder, older.folder]
