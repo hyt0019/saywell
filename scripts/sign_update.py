@@ -8,6 +8,7 @@ src/saywell/updates.py and only then download the installer it names. Keep a cop
 key somewhere safe outside this folder: without it no installed copy accepts another update."""
 
 import argparse
+import datetime
 import hashlib
 import json
 import re
@@ -34,13 +35,14 @@ def new_key() -> None:
 
 
 def write_update() -> None:
-    from saywell.updates import DOWNLOADS, PUBLIC_KEY, REPOSITORY, parse_update
+    from saywell.updates import DOWNLOADS, PUBLIC_KEY, REPOSITORY, parse_update, release_highlights, release_summary
 
     version = re.search(r'^version = "(.+)"', (root / "pyproject.toml").read_text(encoding="utf-8"), re.M)[1]
     name = f"Saywell-Setup-{version}.exe"
     installer = root / "release" / name
-    # The first line of the release notes is a one-sentence summary of the version.
-    notes = (root / "docs" / "releases" / f"v{version}.md").read_text(encoding="utf-8").strip().splitlines()[0]
+    # The notes' first line sums up the version; the bullets under 新功能, 改进 and 修复 are what
+    # the announcement lists, so write them as short, self-contained points.
+    notes = (root / "docs" / "releases" / f"v{version}.md").read_text(encoding="utf-8")
     secret = bytes.fromhex(KEY.read_text(encoding="ascii").strip())
     if public_key(secret) != PUBLIC_KEY:
         raise SystemExit(f"{KEY} does not match PUBLIC_KEY in src/saywell/updates.py.")
@@ -48,8 +50,10 @@ def write_update() -> None:
     manifest = json.dumps(
         {
             "version": version,
-            "notes": notes,
+            "notes": release_summary(notes),
             "page": f"{REPOSITORY}/releases/tag/v{version}",
+            "date": datetime.date.today().isoformat(),
+            "highlights": [{"section": item.section, "text": item.text} for item in release_highlights(notes)],
             "installer": {
                 "name": name,
                 "size": installer.stat().st_size,

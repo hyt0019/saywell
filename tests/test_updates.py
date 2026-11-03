@@ -6,7 +6,20 @@ import httpx
 import pytest
 
 from saywell import signing, updates
-from saywell.updates import Release, UpdateError, download_release, fetch_release, is_newer, parse_update
+from saywell.updates import (
+    Highlight,
+    Release,
+    UpdateError,
+    download_release,
+    fetch_release,
+    is_newer,
+    parse_update,
+    release_highlights,
+    release_summary,
+    shipped_notes,
+    split_highlight,
+    whats_new_due,
+)
 
 # RFC 8032, section 7.1, tests 1-3: secret key, public key, message, signature.
 RFC_VECTORS = [
@@ -94,11 +107,90 @@ def test_a_signed_manifest_describes_the_release():
         signed(manifest(installer={**manifest()["installer"], "size": "11"})),
         signed(manifest(page="javascript:alert(1)")),
         signed(manifest(version="latest")),
+        signed(manifest(date="11月3日")),
+        signed(manifest(highlights={"section": "新功能", "text": "a"})),
+        signed(manifest(highlights=[{"section": "已知限制", "text": "a"}])),
+        signed(manifest(highlights=[{"section": "新功能", "text": ""}])),
+        signed(manifest(highlights=[{"section": "新功能", "text": "长" * 501}])),
+        signed(manifest(highlights=[{"section": "新功能"}])),
+        signed(manifest(highlights=[{"section": "修复", "text": "a"}] * 21)),
     ],
 )
 def test_unsigned_or_malformed_manifests_are_refused(data):
     with pytest.raises(UpdateError):
         parse_update(data)
+
+
+def test_a_manifest_carries_the_announcement():
+    items = [{"section": "新功能", "text": "**公告**：有新版本时先看看改了什么。"}, {"section": "修复", "text": "修了一个问题。"}]
+    release = parse_update(signed(manifest(date="2026-11-03", highlights=items)))
+    assert release.date == "2026-11-03"
+    assert release.highlights == (Highlight("新功能", items[0]["text"]), Highlight("修复", "修了一个问题。"))
+    # Manifests from before 0.6.8 have neither; their announcement is the summary alone.
+    assert parse_update(signed(manifest())).highlights == ()
+
+
+NOTES = """这一版加入更新公告，顺便修了 [一个问题](https://example.com)。
+
+## 下载
+
+- 系统要求：Windows 10 / 11（64 位）。
+
+## 修复
+
+- 修好了 `update.json` 的读取。
+
+## 新功能
+
+- **更新公告**：有新版本时先看到改了什么。
+  - 可以勾选“这个版本不再提醒”。
+- **也可以在托盘里看**，用法相同。
+
+## 已知限制
+
+- 还没有别的。
+"""
+
+
+def test_highlights_come_from_the_new_improved_and_fixed_sections():
+    assert release_summary(NOTES) == "这一版加入更新公告，顺便修了 一个问题。"
+    assert release_highlights(NOTES) == (
+        Highlight("新功能", "**更新公告**：有新版本时先看到改了什么。"),
+        Highlight("新功能", "**也可以在托盘里看**，用法相同。"),
+        Highlight("修复", "修好了 update.json 的读取。"),
+    )
+    assert split_highlight("**更新公告**：有新版本时先看到改了什么。") == ("更新公告", "有新版本时先看到改了什么。")
+    assert split_highlight("**也可以在托盘里看**，用法相同。") == ("", "**也可以在托盘里看**，用法相同。")
+    assert split_highlight("修好了读取。") == ("", "修好了读取。")
+
+
+def test_every_release_note_makes_a_valid_announcement():
+    for path in (Path(__file__).resolve().parents[1] / "docs" / "releases").glob("v*.md"):
+        notes = path.read_text(encoding="utf-8")
+        items = [{"section": item.section, "text": item.text} for item in release_highlights(notes)]
+        version = path.stem[1:]
+        assert parse_update(signed(manifest(version, notes=release_summary(notes), highlights=items))).version == version
+
+
+def test_the_program_ships_its_own_release_notes():
+    summary, highlights = shipped_notes()
+    assert summary and all(item.text for item in highlights)
+    assert shipped_notes("0.0.1") == ("", ())
+
+
+@pytest.mark.parametrize(
+    ("previous", "current", "existing", "due"),
+    [
+        ("0.6.8", "0.6.9", True, True),
+        ("0.6.9", "0.6.9", True, False),
+        ("0.7.0", "0.6.9", True, False),  # Went back to an older version.
+        ("", "0.6.9", True, True),  # Settings saved by 0.6.7 or older: an update.
+        ("", "0.6.9", False, False),  # A fresh install.
+        ("garbage", "0.6.9", True, False),
+    ],
+)
+def test_what_is_new_shows_once_after_an_update(previous, current, existing, due):
+    assert whats_new_due(previous, current, existing) is due
 
 
 def test_versions_compare_by_number():
