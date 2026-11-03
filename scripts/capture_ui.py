@@ -88,6 +88,33 @@ settle(400)
 window.grab().save(str(output / "main-recording.png"))
 window.state = "idle"
 window.refresh_controls()
+# The 会议 page mid-meeting, with made-up lines.
+from saywell.capture import AudioApp  # noqa: E402
+from saywell.meeting import ME, OTHERS, Line  # noqa: E402
+
+meeting = window.meeting
+meeting.ready = lambda: (True, "")
+meeting.app = AudioApp("腾讯会议", "wemeetapp.exe", "", (1,), True, True, False)
+window.show_page(2)
+meeting.state = "recording"
+meeting.transcript.reset(True)
+for line in (
+    Line(3, 9, OTHERS, "好，那我们开始吧。今天主要过一下下个版本的排期，还有预算的事情。"),
+    Line(10, 16, OTHERS, "上周说的几个需求，设计稿已经出来了，大家应该都看过了。"),
+    Line(18, 24, ME, "我这边看过了，整体没问题。导出 PDF 那块可以先放到下一个版本。"),
+    Line(30, 37, OTHERS, "可以。那这个版本就先做 TXT 和 Word 两种格式。"),
+    Line(38, 44, OTHERS, "预算这边，市场部说最多还能批两万，需要我们周三之前给一个明细。"),
+    Line(46, 49, ME, "好的，明细我周二下班前发出来。"),
+):
+    meeting.on_line(line)
+meeting.refresh()
+meeting.hero.set_pill("rec", "记录中&nbsp;&nbsp;12:05")
+window.meeting_changed(True)
+settle(400)
+window.grab().save(str(output / "meeting.png"))
+meeting.state = "idle"
+window.meeting_changed(False)
+window.show_page(1)
 window.set_notice("请核对“王五”的识别结果。原文有“不是＋数字”的表达，请核对预算。")
 window.resize(800, 620)
 settle(400)

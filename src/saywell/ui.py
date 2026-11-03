@@ -340,6 +340,11 @@ class Button(QPushButton):
             self.setObjectName(kind)
         self.icon_name = icon
         self.icon_color = icon_color
+        # An image in place of the line icon (an app's own icon), a chevron after the text for
+        # buttons that open a menu, and a small dot beside the text (a meeting still recording).
+        self.picture: QPixmap | None = None
+        self.trailing: str | None = None
+        self.badge = ""
         self.keyboard_focus = False
         self.restore: tuple[str, str | None] | None = None
         self.hover = Tween(self)
@@ -365,6 +370,20 @@ class Button(QPushButton):
         super().setText(text)
         self.updateGeometry()
 
+    def set_picture(self, picture: QPixmap | None):
+        self.picture = picture
+        self.updateGeometry()
+        self.update()
+
+    def set_trailing(self, glyph: str | None):
+        self.trailing = glyph
+        self.updateGeometry()
+        self.update()
+
+    def set_badge(self, color: str):
+        self.badge = color
+        self.update()
+
     def flash(self, text: str, icon: str = "check", milliseconds: int = 1400):
         """Show a brief confirmation in place of the label, then restore it."""
         if self.restore is None:
@@ -389,8 +408,10 @@ class Button(QPushButton):
     def sizeHint(self) -> QSize:
         text = self.text().strip()
         width = QFontMetrics(self.label_font()).horizontalAdvance(text) if text else 0
-        if self.icon_name:
+        if self.icon_name or self.picture:
             width += 16 + (6 if text else 0)
+        if self.trailing:
+            width += 12 + 5
         padding = self.look.padding if text else (self.look.height - 16) // 2
         return QSize(int(width + padding * 2), self.look.height)
 
@@ -459,9 +480,14 @@ class Button(QPushButton):
         text = self.text().strip()
         font = self.label_font()
         width = QFontMetrics(font).horizontalAdvance(text) if text else 0
-        content = width + (16 + (6 if text else 0) if self.icon_name else 0)
+        content = width + (16 + (6 if text else 0) if self.icon_name or self.picture else 0)
+        content += 12 + 5 if self.trailing else 0
         x = (self.width() - content) / 2
-        if self.icon_name:
+        if self.picture:
+            target = QRectF(x, (self.height() - 16) / 2, 16, 16)
+            painter.drawPixmap(target, self.picture, QRectF(self.picture.rect()))
+            x += 16 + 6
+        elif self.icon_name:
             tint = mix(QColor(self.icon_color), color, checked) if self.icon_color else color
             draw_icon(painter, self.icon_name, QRectF(x, (self.height() - 16) / 2, 16, 16), tint)
             x += 16 + 6
@@ -469,6 +495,12 @@ class Button(QPushButton):
             painter.setFont(font)
             painter.setPen(color)
             painter.drawText(QRectF(x, 0, width + 2, self.height()), Qt.AlignmentFlag.AlignVCenter, text)
+        if self.badge:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(self.badge))
+            painter.drawEllipse(QRectF(x + width + 3, self.height() / 2 - 8, 6, 6))
+        if self.trailing:
+            draw_icon(painter, self.trailing, QRectF(x + width + 5, (self.height() - 12) / 2, 12, 12), MUTED)
 
 
 def make_button(text: str, glyph: str | None = None, kind: str | None = None, icon_color: str | None = None):

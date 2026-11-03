@@ -136,3 +136,25 @@ def test_store_reads_lines_in_time_order_and_skips_damaged_ones(tmp_path):
     assert [line.text for line in store.lines()] == ["先说的", "后说的"]
     again = MeetingStore.create({"started": 1_700_000_000.0}, root=tmp_path)
     assert again.folder != store.folder  # Same second: a second folder, not a shared one.
+
+
+def test_trouble_while_listening_ends_the_meeting_instead_of_hanging(tmp_path, monkeypatch):
+    def broken(self, source):
+        raise ValueError("bad chunk")
+
+    monkeypatch.setattr(MeetingRecorder, "_drain", broken)
+    run = Recording(tmp_path).play({ROOM: track((1, 2, 0.3), total=3)})
+    assert run.recorder.finished
+    assert "已停止记录" in run.problems[-1]
+
+
+def test_room_noise_the_vad_took_for_speech_is_not_recognized(tmp_path):
+    heard = []
+
+    def recognize(clip):
+        heard.append(clip.size)
+        return recognize_level(clip)
+
+    faint = track((1, 2, 0.002), total=5)  # -54 dB: the room after the speakers stopped.
+    run = Recording(tmp_path, recognize).play({ROOM: faint + track((3, 3.7, 0.3), total=5)})
+    assert [line.text for line in run.lines] == [WORDS[0.3]] and len(heard) == 1

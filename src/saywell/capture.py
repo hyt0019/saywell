@@ -174,7 +174,9 @@ def describe(path: str) -> str:
 # --- Windows plumbing -------------------------------------------------------------------------
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True) if sys.platform == "win32" else None
-ole32 = ctypes.OleDLL("ole32") if sys.platform == "win32" else None
+# WinDLL, not OleDLL: OleDLL raises on every failing HRESULT, and CoInitializeEx answering that
+# the thread already runs COM in another mode (Qt's main thread) is not a failure here.
+ole32 = ctypes.WinDLL("ole32") if sys.platform == "win32" else None
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 TH32CS_SNAPPROCESS = 0x2
@@ -266,6 +268,7 @@ if kernel32 is not None:
     ole32.CoInitializeEx.argtypes = [c_void_p, wintypes.DWORD]
     ole32.CoUninitialize.restype = None
     ole32.CoCreateInstance.argtypes = [POINTER(GUID), c_void_p, wintypes.DWORD, POINTER(GUID), POINTER(c_void_p)]
+    ole32.CoCreateInstance.restype = ctypes.HRESULT
 
 
 def method(pointer: c_void_p, index: int, *argtypes, restype=ctypes.HRESULT):

@@ -148,6 +148,32 @@ def test_audio_apps_lists_without_saywell_itself():
 
 
 @windows
+def test_audio_apps_work_on_a_thread_that_already_runs_com():
+    """Qt's main thread is a single-threaded COM apartment before the picker ever lists apps."""
+    import ctypes
+    import threading
+
+    from saywell.capture import audio_sessions
+
+    result = {}
+
+    def run():
+        ole32 = ctypes.WinDLL("ole32")
+        ole32.CoInitializeEx(None, 2)  # COINIT_APARTMENTTHREADED
+        try:
+            result["sessions"] = audio_sessions()
+        except Exception as error:
+            result["error"] = error
+        finally:
+            ole32.CoUninitialize()
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join(10)
+    assert "error" not in result and isinstance(result.get("sessions"), dict)
+
+
+@windows
 def test_process_running_notices_an_exit():
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:

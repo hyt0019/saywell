@@ -40,6 +40,7 @@ from .cleanup import TRANSLATE_LANGUAGES, ApiCleaner, CleanupError
 from .core import CleanupResult, finish_text, single_line_text
 from .dashboard import Overview
 from .history import HistoryStore
+from .meeting_ui import MeetingPage
 from .models import get_model, models_ready
 from .pipeline import Events, ModelDownloads, Pipeline
 from .session import SessionGate
@@ -49,6 +50,7 @@ from .startup import StartupError, migrate_legacy_entry, save_settings_with_star
 from .stats import StatsStore
 from .ui import (
     ACCENT,
+    RECORD,
     STYLE,
     Glyph,
     HeroCard,
@@ -97,6 +99,22 @@ from .windows import (
 )
 
 IDLE_STATS = "音频只在本机识别，录音不落盘；整理时仅发送文字至所选 API。"
+
+
+class FittedStack(QStackedWidget):
+    """A stack as tall as the page it shows, not as its tallest page."""
+
+    def __init__(self):
+        super().__init__()
+        self.currentChanged.connect(lambda _index: self.updateGeometry())
+
+    def sizeHint(self):
+        current = self.currentWidget()
+        return current.sizeHint() if current else super().sizeHint()
+
+    def minimumSizeHint(self):
+        current = self.currentWidget()
+        return current.minimumSizeHint() if current else super().minimumSizeHint()
 
 
 class MainWindow(QMainWindow):
@@ -230,7 +248,7 @@ class MainWindow(QMainWindow):
         brand.addWidget(label("保留你的意思，整理你的表达。", "muted"))
         header.addLayout(brand)
         header.addStretch()
-        self.page_switch = Segmented(("概览", "文字"))
+        self.page_switch = Segmented(("概览", "文字", "会议"))
         self.page_group, self.page_buttons = self.page_switch.group, self.page_switch.buttons
         self.page_switch.changed.connect(self.show_page)
         header.addWidget(self.page_switch)
@@ -248,7 +266,9 @@ class MainWindow(QMainWindow):
         self.update_button.clicked.connect(lambda: self.release and self.announce(self.release))
         self.update_button.hide()
         header.addWidget(self.update_button)
-        for button in (self.history_button, self.import_button, self.models_button, self.settings_button):
+        self.toolbar = (self.history_button, self.import_button, self.models_button, self.settings_button)
+        for button in self.toolbar:
+            button.full_text = button.text()
             header.addWidget(button)
         layout.addLayout(header)
 
@@ -311,7 +331,10 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.cancel_button, 0, Qt.AlignmentFlag.AlignHCenter)
         controls.addStretch()
         recording.addLayout(controls)
-        layout.addWidget(hero)
+        # The 会议 page shows its own card here instead.
+        self.hero_stack = FittedStack()
+        self.hero_stack.addWidget(hero)
+        layout.addWidget(self.hero_stack)
 
         self.notice = QLabel()
         self.notice.setObjectName("notice")
@@ -387,6 +410,10 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.copy_button)
         actions.addWidget(self.insert_button)
         text_layout.addLayout(actions)
+        self.meeting = MeetingPage(self)
+        self.meeting.recording_changed.connect(self.meeting_changed)
+        self.pages.addWidget(self.meeting)
+        self.hero_stack.addWidget(self.meeting.hero)
         self.toast = Toast(central)
         self.show_page(0)
 
@@ -414,10 +441,22 @@ class MainWindow(QMainWindow):
         changed = self.pages.currentIndex() != index
         self.pages.setCurrentIndex(index)
         self.page_switch.set_current(index)
+        hero = 1 if index == 2 else 0
+        if self.hero_stack.currentIndex() != hero:
+            self.hero_stack.setCurrentIndex(hero)
+            if self.isVisible():
+                fade_in(self.hero_stack.currentWidget(), 200)
         if changed and self.isVisible():
             fade_in(self.pages.currentWidget(), 200)
         if index == 1:
             self.original.setFocus()
+        if index == 2 and self.native:
+            self.meeting.remember_app()
+
+    def meeting_changed(self, recording: bool):
+        """A meeting being recorded shows on its tab and in the tray, whatever page is open."""
+        self.page_buttons[2].set_badge(RECORD if recording else "")
+        self.tray.setToolTip("好好说 Saywell · 正在记录会议" if recording else "好好说 Saywell · 语音输入")
 
     def refresh_overview(self):
         try:
@@ -1137,6 +1176,15 @@ class MainWindow(QMainWindow):
         if found != self.settings:
             self.apply_model_settings(found)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Narrow windows: the toolbar keeps its icons and says the rest in tooltips, so the header
+        # with its three tabs still fits.
+        compact = self.width() < 1010
+        for button in getattr(self, "toolbar", ()):
+            button.setText("" if compact else button.full_text)
+            button.setToolTip(button.full_text if compact else "")
+
     def changeEvent(self, event):
         # Back from Explorer, where a model folder may have just been copied in.
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow() and self.state == "idle":
@@ -1383,6 +1431,7 @@ class MainWindow(QMainWindow):
             event.accept()
 
     def shutdown(self):
+        self.meeting.shutdown()  # Before the model goes: the meeting may be using it.
         self.downloads.cancel(wait=2, discard=False)  # The unfinished file is resumed next time.
         self.update_cancel.set()  # Likewise an update's installer.
         self.update_timer.stop()
@@ -1399,6 +1448,18 @@ class MainWindow(QMainWindow):
             QApplication.instance().removeNativeEventFilter(self.hotkeys)
 
     def quit_app(self):
+        if self.meeting.recording:
+            self.reveal()
+            self.show_page(2)
+            answer = QMessageBox.question(
+                self,
+                "会议还在记录",
+                "退出后会停止记录。已经出现的文字都保存着，还没来得及识别的几句会丢掉。",
+                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         self.quitting = True
         self.shutdown()
         QApplication.instance().quit()

@@ -111,6 +111,10 @@ class Settings:
     skipped_release: str = ""
     # The version that ran last, so the first start of a newer one shows what is new.
     last_version: str = ""
+    # Meetings: the app last recorded (its executable; "-" for the microphone alone) and
+    # whether the user's own microphone is recorded too.
+    meeting_app: str = ""
+    meeting_microphone: bool = True
 
     @property
     def download_root(self) -> Path:

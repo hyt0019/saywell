@@ -43,6 +43,10 @@ SLOW_BACKLOG = 60 * SAMPLE_RATE
 # user talking over them, which must never be lost, so the recognized text decides.
 ECHO = 0.6
 ECHO_MARGIN = 2.0
+# A microphone "utterance" whose loudest 100 ms stays below this is room noise the VAD took for
+# speech, on which a model makes up words; speech, even quiet, is 20 dB and more above it. Not
+# applied to an app, whose level follows its volume slider.
+QUIET = -50.0
 
 
 @dataclass(frozen=True)
@@ -75,6 +79,15 @@ def repeated(mine: str, theirs: str) -> float:
         return 0.0
     blocks = SequenceMatcher(None, mine, theirs, autojunk=False).get_matching_blocks()
     return sum(block.size for block in blocks if block.size >= 2) / len(mine)
+
+
+def peak_level(samples: np.ndarray) -> float:
+    """The loudest 100 ms, in dB below full scale."""
+    frame = SAMPLE_RATE // 10
+    if samples.size < frame:
+        return float(20 * np.log10(np.sqrt(np.mean(np.square(samples, dtype=np.float64))) + 1e-9)) if samples.size else -200.0
+    frames = samples[: samples.size // frame * frame].reshape(-1, frame)
+    return float(20 * np.log10(np.sqrt(np.mean(np.square(frames, dtype=np.float64), axis=1)).max() + 1e-9))
 
 
 # --- Storage -----------------------------------------------------------------------------------
@@ -165,6 +178,8 @@ class Source:
     capture: object = None  # capture.MicAudio or capture.AppAudio
     chunks: queue.SimpleQueue = field(default_factory=queue.SimpleQueue)
     level: float = 0.0
+    # Any sound at all so far; an app muted in the volume mixer records as silence.
+    heard: bool = False
     # For an app: its executable, to find it again after it was restarted, and whether it is gone.
     exe: str = ""
     gone: bool = False
@@ -282,27 +297,39 @@ class MeetingRecorder:
     def level(self, who: str) -> float:
         return max((source.level for source in self.sources if source.who == who), default=0.0)
 
+    def heard(self, who: str) -> bool:
+        return any(source.heard for source in self.sources if source.who == who)
+
     # Listening
 
     def _listen(self) -> None:
         watched = time.monotonic()
-        while True:
-            stopping = self.stopping.is_set()
+        try:
+            while True:
+                stopping = self.stopping.is_set()
+                for source in self.sources:
+                    self._drain(source)
+                if stopping:
+                    break
+                if time.monotonic() - watched > 3:
+                    watched = time.monotonic()
+                    try:
+                        self._watch_apps()
+                    except Exception:
+                        pass  # Only a convenience; the meeting goes on without it.
+                time.sleep(0.02)
             for source in self.sources:
-                self._drain(source)
-            if stopping:
-                break
-            if time.monotonic() - watched > 3:
-                watched = time.monotonic()
-                self._watch_apps()
-            time.sleep(0.02)
-        for source in self.sources:
-            for found in source.stream.finish():
-                self._heard(source, *found)
-            source.settled = source.stream.total
-        self.listened.set()
-        with self.condition:
-            self.condition.notify_all()
+                for found in source.stream.finish():
+                    self._heard(source, *found)
+                source.settled = source.stream.total
+        except Exception:
+            # Never leave the recognizer waiting: stop, and keep what was already recognized.
+            self.on_problem("处理声音时出错，已停止记录。已经记下的文字都保留着。")
+            self.stop()
+        finally:
+            self.listened.set()
+            with self.condition:
+                self.condition.notify_all()
 
     def _drain(self, source: Source) -> None:
         loudest = 0.0
@@ -322,8 +349,11 @@ class MeetingRecorder:
         source.settled = source.stream.settled
         # Shown as a meter: jumps up, falls back gently.
         source.level = max(min(1.0, loudest * 8), source.level * 0.7)
+        source.heard = source.heard or loudest > 1e-4
 
     def _heard(self, source: Source, start: int, end: int, clip: np.ndarray) -> None:
+        if source.who in (ME, ROOM) and peak_level(clip) < QUIET:
+            return
         with self.condition:
             heapq.heappush(self.waiting, Waiting(start, next(self.order), end, source.who, clip))
             self.waiting_samples += clip.size
@@ -347,7 +377,9 @@ class MeetingRecorder:
         process on the same timeline."""
         from .capture import AppAudio, app_root, process_running, processes
 
-        apps = [source for source in self.sources if source.exe]
+        apps = [source for source in self.sources if source.exe and source.capture is not None]
+        if not apps:
+            return
         dead = [source for source in apps if not process_running(source.capture.pid)]
         if not dead:
             return
@@ -409,9 +441,8 @@ class MeetingRecorder:
                     self._publish(line)
             with self.condition:
                 self._compare_mine()
-        if not self.abandoned:
-            with self.condition:
-                self._compare_mine(final=True)
+        with self.condition:
+            self._compare_mine(final=True)
         self.finished = True
         self.on_finished()
 
