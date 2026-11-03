@@ -97,6 +97,16 @@ def test_timeline_fills_silence_where_a_source_paused():
     assert timeline.count == int(1.2 * SAMPLE_RATE)
 
 
+def test_timeline_skips_long_gaps_when_it_can():
+    received, skipped = [], []
+    timeline = Timeline(received.append, started=0.0, skip=skipped.append)
+    timeline.deliver(np.ones(1600, dtype=np.float32), now=0.1)
+    timeline.deliver(np.ones(1600, dtype=np.float32), now=60.0)  # The computer slept for a minute.
+    assert [chunk.size for chunk in received] == [1600, 1600]
+    assert skipped == [60 * SAMPLE_RATE - 3200]
+    assert timeline.count == 60 * SAMPLE_RATE
+
+
 def test_timeline_ignores_small_delivery_jitter():
     received = []
     timeline = Timeline(received.append, started=0.0)
@@ -155,7 +165,7 @@ def test_app_audio_runs_in_step_with_the_clock():
         pytest.skip("process loopback needs Windows 10 2004")
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     received = []
-    capture = AppAudio(child.pid, received.append)
+    capture = AppAudio(child.pid, Timeline(received.append))
     try:
         try:
             capture.start()

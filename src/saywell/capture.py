@@ -427,22 +427,32 @@ def audio_apps() -> list[AudioApp]:
 class Timeline:
     """Keeps a source in step with the clock: when a source delivers nothing for a while (an app
     that is silent, a stalled device), the gap is filled with silence so that a moment in the
-    stream is a moment in the meeting, the same for every source."""
+    stream is a moment in the meeting, the same for every source. A gap longer than LONG (the
+    computer slept, a device hung) is handed to `skip` as a count of samples, if given, rather
+    than as minutes of zeros. A capture that replaces another (the app was restarted) takes over
+    its timeline and carries on from where it stopped."""
 
     GAP = 0.3
+    LONG = 3.0
 
-    def __init__(self, sink: Sink, started: float | None = None):
+    def __init__(self, sink: Sink, started: float | None = None, skip: Callable[[int], None] | None = None):
         self.sink = sink
+        self.skip = skip
         self.started = time.monotonic() if started is None else started
         self.count = 0
+        self.lock = threading.Lock()
 
     def deliver(self, samples: np.ndarray, now: float | None = None) -> None:
-        now = time.monotonic() if now is None else now
-        missing = int((now - self.started) * SAMPLE_RATE) - self.count - samples.size
-        if missing > self.GAP * SAMPLE_RATE:
-            self._send(np.zeros(missing, dtype=np.float32))
-        if samples.size:
-            self._send(samples)
+        with self.lock:
+            now = time.monotonic() if now is None else now
+            missing = int((now - self.started) * SAMPLE_RATE) - self.count - samples.size
+            if missing > self.LONG * SAMPLE_RATE and self.skip:
+                self.count += missing
+                self.skip(missing)
+            elif missing > self.GAP * SAMPLE_RATE:
+                self._send(np.zeros(missing, dtype=np.float32))
+            if samples.size:
+                self._send(samples)
 
     def _send(self, samples: np.ndarray) -> None:
         self.count += samples.size
@@ -477,9 +487,9 @@ class StreamResampler:
 class MicAudio:
     """The microphone, delivered in step with the clock."""
 
-    def __init__(self, sink: Sink, device: int | None = None, started: float | None = None):
+    def __init__(self, timeline: Timeline, device: int | None = None):
         self.device = device
-        self.timeline = Timeline(sink, started)
+        self.timeline = timeline
         self.stream = None
         self.resample: StreamResampler | None = None
         self.failed = ""
@@ -598,9 +608,9 @@ class AppAudio:
     """What one app (a process tree) plays, through process loopback, delivered in step with the
     clock. Windows converts it to 16 kHz mono for us."""
 
-    def __init__(self, pid: int, sink: Sink, started: float | None = None):
+    def __init__(self, pid: int, timeline: Timeline):
         self.pid = pid
-        self.timeline = Timeline(sink, started)
+        self.timeline = timeline
         self.thread: threading.Thread | None = None
         self.ready = threading.Event()
         self.stopping = threading.Event()

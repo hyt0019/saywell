@@ -119,6 +119,34 @@ class Pipeline:
         if current is not None and hasattr(current, "close"):
             current.close()
 
+    def _load(self, settings: Settings, loading=None) -> bool:
+        """Have the model in settings loaded, replacing another one; True if it had to be loaded.
+        Call with the lock held."""
+        model = get_model(settings.asr_model)
+        gpu = settings.gpu_acceleration and model.gpu
+        current = self.recognizer
+        if (
+            current is not None
+            and current.directory == settings.models
+            and getattr(current, "model", model.id) == model.id
+            and getattr(current, "gpu", False) == gpu
+        ):
+            return False
+        from .asr import LocalRecognizer
+
+        self._close_recognizer()  # Release the previous model before loading.
+        if loading:
+            loading(model.name)
+        self.recognizer = LocalRecognizer(settings.models, model.id, gpu)
+        return True
+
+    def recognize_clip(self, settings: Settings, clip, vocabulary=None) -> str:
+        """One utterance of a meeting, with the same model as dictation: whichever needs it first
+        loads it, and they take turns."""
+        with self.lock:
+            self._load(settings)
+            return self.recognizer.recognize(clip, vocabulary)
+
     def start(self, job: int, cancel: threading.Event, settings: Settings, source, kind: str):
         snapshot = Settings(**vars(settings))
         # Thread.args would retain the recording until the later API call finishes.
@@ -150,20 +178,7 @@ class Pipeline:
                     with self.lock:
                         if cancel.is_set():
                             raise Cancelled("已取消。")
-                        model = get_model(settings.asr_model)
-                        gpu = settings.gpu_acceleration and model.gpu
-                        current = self.recognizer
-                        if (
-                            current is None
-                            or current.directory != settings.models
-                            or getattr(current, "model", model.id) != model.id
-                            or getattr(current, "gpu", False) != gpu
-                        ):
-                            from .asr import LocalRecognizer
-
-                            self._close_recognizer()  # Release the previous model before loading.
-                            self.events.stage.emit(job, f"正在加载 {model.name}…")
-                            self.recognizer = LocalRecognizer(settings.models, model.id, gpu)
+                        if self._load(settings, lambda name: self.events.stage.emit(job, f"正在加载 {name}…")):
                             # Tell the user once, on the load where GPU acceleration fell back to the CPU.
                             gpu_problem = getattr(self.recognizer, "gpu_problem", "")
                             self.events.stage.emit(job, "正在本地识别…")
