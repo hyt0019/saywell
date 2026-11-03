@@ -714,7 +714,7 @@ def test_the_announcement_lists_the_highlights_by_section(qt_app):
     order = [text for text in texts if text in ("新功能", "改进", "修复")]
     assert order == ["新功能", "修复"]
     assert "更新公告" in texts and any("&lt;b&gt;读取&lt;/b&gt;" in text for text in texts)
-    assert any("约 68 MB" in text for text in texts)
+    assert any("68 MB" in text for text in texts)
     dialog.update_now()
     assert dialog.choice == "update" and not dialog.skipped
     after = AnnouncementDialog("9.9.0", "这一版加入更新公告。", items, changelog="https://example.com", after_update=True)

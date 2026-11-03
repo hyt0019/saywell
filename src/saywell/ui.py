@@ -5,6 +5,7 @@ import os
 import shutil
 import threading
 from collections import deque
+from itertools import pairwise
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
     QObject,
+    QPointF,
     QPropertyAnimation,
     QRectF,
     QSize,
@@ -32,6 +34,7 @@ from PySide6.QtGui import (
     QConicalGradient,
     QLinearGradient,
     QPainter,
+    QPainterPath,
     QPen,
     QPixmap,
 )
@@ -1292,6 +1295,98 @@ class Switch(QCheckBox):
         painter.setFont(self.font())
         painter.drawText(
             QRectF(track.right() + 12, 0, self.width() - track.right() - 12, self.height()),
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            self.text(),
+        )
+
+
+class CheckBox(QCheckBox):
+    """A small square checkbox in the macOS manner: white with a grey edge, filling blue as a white
+    tick draws itself when checked. For options too minor for a switch."""
+
+    BORDER = "#C7C7CC"
+    BORDER_HOVER = "#A1A1A6"
+    TICK = ((4.0, 8.4), (6.8, 11.1), (12.2, 5.3))
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.keyboard_focus = False
+        self.fill = Tween(self, float(self.isChecked()), 160)
+        self.tick = Tween(self, float(self.isChecked()), 240)
+        self.hover = Tween(self)
+        self.toggled.connect(self._toggled)
+
+    def _toggled(self, on: bool):
+        animate = self.isVisible()
+        self.fill.to(float(on), animate=animate)
+        # The tick draws in after the fill; unchecking simply takes it away.
+        self.tick.to(float(on), 240 if on else 120, animate=animate)
+
+    def label_font(self) -> QFont:
+        font = QFont(self.font())
+        font.setPixelSize(13)
+        return font
+
+    def sizeHint(self):
+        metrics = QFontMetrics(self.label_font())
+        return QSize(18 + 8 + metrics.horizontalAdvance(self.text()) + 2, max(24, metrics.height() + 6))
+
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
+
+    def enterEvent(self, event):
+        self.hover.to(1.0, 140)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hover.to(0.0, 260)
+        super().leaveEvent(event)
+
+    def focusInEvent(self, event):
+        self.keyboard_focus = event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason)
+        super().focusInEvent(event)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self.isEnabled():
+            painter.setOpacity(0.5)
+        box = QRectF(1.5, (self.height() - 16) / 2, 16, 16)
+        fill = max(0.0, min(1.0, self.fill.value))
+        hover = self.hover.value if self.isEnabled() else 0.0
+        edge = mix(QColor(self.BORDER), QColor(self.BORDER_HOVER), hover)
+        accent = mix(QColor(ACCENT), QColor("#1A80EC"), hover)
+        painter.setPen(QPen(mix(edge, accent, fill), 1))
+        painter.setBrush(mix(QColor("#FFFFFF"), accent, fill))
+        painter.drawRoundedRect(box, 4.5, 4.5)
+        if self.tick.value > 0.01:
+            # Drawn stroke by stroke as far as the animation has got.
+            left = sum(math.dist(a, b) for a, b in pairwise(self.TICK)) * min(1.0, self.tick.value)
+            path = QPainterPath(box.topLeft() + QPointF(*self.TICK[0]))
+            for a, b in pairwise(self.TICK):
+                length = math.dist(a, b)
+                share = min(1.0, left / length)
+                path.lineTo(box.topLeft() + QPointF(a[0] + (b[0] - a[0]) * share, a[1] + (b[1] - a[1]) * share))
+                left -= length
+                if left <= 0:
+                    break
+            pen = QPen(QColor("#FFFFFF"), 1.8)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+        if self.hasFocus() and self.keyboard_focus:
+            ring = QColor(ACCENT)
+            ring.setAlphaF(0.55)
+            painter.setPen(QPen(ring, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(box.adjusted(-3, -3, 3, 3), 7, 7)
+        painter.setPen(QColor("#3A3A3C"))
+        painter.setFont(self.label_font())
+        painter.drawText(
+            QRectF(box.right() + 8, 0, self.width() - box.right() - 8, self.height()),
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
             self.text(),
         )
