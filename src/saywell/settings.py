@@ -115,6 +115,8 @@ class Settings:
     # whether the user's own microphone is recorded too.
     meeting_app: str = ""
     meeting_microphone: bool = True
+    # The template minutes were last written with (minutes.TEMPLATES).
+    meeting_template: str = "general"
 
     @property
     def download_root(self) -> Path:

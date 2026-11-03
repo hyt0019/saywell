@@ -7,6 +7,8 @@ meter for each source and the round start button. The page below it holds the li
 from __future__ import annotations
 
 import bisect
+import html
+import threading
 import time
 from dataclasses import replace
 from datetime import datetime
@@ -21,6 +23,8 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QSplitter,
+    QTextBrowser,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -30,8 +34,27 @@ from .audio import AudioError
 from .capture import AudioApp, audio_apps, loopback_supported
 from .icons import draw_icon
 from .meeting import LABELS, ME, OTHERS, ROOM, SKIPPED, Line, MeetingRecorder, MeetingStore, clock
+from .minutes import PREPARE_FROM, TEMPLATES, Minutes, MinutesWriter, minutes_record, outline, to_html, to_text
 from .models import get_model, models_ready
-from .ui import ACCENT, INK, MUTED, Glyph, HeroCard, LevelBars, MicButton, Switch, Tween, card, label, make_button, mix
+from .ui import (
+    ACCENT,
+    DISABLED,
+    INK,
+    MUTED,
+    ComboBox,
+    Glyph,
+    HeroCard,
+    LevelBars,
+    MicButton,
+    Spinner,
+    Switch,
+    Tween,
+    card,
+    label,
+    make_button,
+    mix,
+    run_task,
+)
 
 TONES = {"idle": "#AEAEB2", "rec": "#FF3B30", "busy": "#FF9F0A", "done": "#34C759"}
 FAINT = "#8E8E93"
@@ -346,6 +369,53 @@ class TranscriptView(QTextEdit):
 # --- The page -----------------------------------------------------------------------------------
 
 
+def card_column(title: str, accent: bool) -> tuple[QFrame, QVBoxLayout, QHBoxLayout]:
+    """A white card with a titled header row, as on the text page; returns the card, its column
+    and the header row (for whatever goes on the right of the title)."""
+    frame = card(accent)
+    column = QVBoxLayout(frame)
+    column.setContentsMargins(8, 16, 8, 6)
+    column.setSpacing(8)
+    head = QHBoxLayout()
+    head.setContentsMargins(14, 0, 12, 0)
+    head.setSpacing(9)
+    dot = QLabel()
+    dot.setFixedSize(9, 9)
+    dot.setStyleSheet(f"background: {ACCENT if accent else DISABLED}; border-radius: 4px;")
+    head.addWidget(dot)
+    head.addWidget(label(title, "cardTitle"))
+    head.addStretch()
+    column.addLayout(head)
+    return frame, column, head
+
+
+class MinutesView(QTextBrowser):
+    """The minutes as a document: read-only, selectable, links off."""
+
+    EMPTY = (
+        "开会途中或会议结束后，选一个模板，点“生成纪要”。",
+        "纪要只根据会议文字来写，没听清、没说定的地方会列进“待确认”。生成时会把会议文字发送给所选 API；"
+        "会议超过一小时后，已经说完的部分会每隔约 15 分钟先发去整理，结束时生成得更快。",
+    )
+    WRITING = ("正在根据会议文字生成纪要，一般要十几秒，会议很长时会久一些。", "可以继续记录，不影响识别。")
+
+    def __init__(self):
+        super().__init__()
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setOpenLinks(False)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.setStyleSheet("QTextBrowser { background: transparent; border: none; padding: 0 10px 10px 14px;"
+                           " font-size: 14px; selection-background-color: #CCE0FA; }")
+        self.empty(self.EMPTY)
+
+    def empty(self, paragraphs: tuple[str, ...]):
+        """Grey explanatory text in place of the minutes."""
+        self.setHtml("".join(
+            f"<p style='color:{MUTED}; margin:0 0 10px 0; line-height:150%'>{html.escape(text)}</p>"
+            for text in paragraphs
+        ))
+
+
 class MeetingEvents(QObject):
     """Brings the recorder's callbacks, made on its threads, to the interface thread."""
 
@@ -438,37 +508,60 @@ class MeetingPage(QWidget):
         self.duration = 0.0
         self.silent_notice = ""
         self.supported = loopback_supported()
+        self.minutes: Minutes | None = None
+        self.writing: threading.Event | None = None  # Set to cancel the minutes being written.
+        self.preparing = False  # Notes on a long meeting's finished parts are being written.
+        self.parts: dict = {}  # Those notes, for the meeting in self.store (saved as parts.dat).
+        self.stopping = threading.Event()  # Set on quitting, to stop writing notes.
+        self.next_prepare = 0.0
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
-        frame = card()
-        column = QVBoxLayout(frame)
-        column.setContentsMargins(8, 16, 8, 6)
-        column.setSpacing(8)
-        head = QHBoxLayout()
-        head.setContentsMargins(14, 0, 12, 0)
-        head.setSpacing(9)
-        dot = QLabel()
-        dot.setFixedSize(9, 9)
-        dot.setStyleSheet(f"background: {ACCENT}; border-radius: 4px;")
-        head.addWidget(dot)
-        head.addWidget(label("会议文字", "cardTitle"))
-        head.addStretch()
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(16)
+        splitter.setChildrenCollapsible(False)
+        frame, column, head = card_column("会议文字", False)
         self.progress = label("", "caption")
         head.addWidget(self.progress)
         self.count = label("0 字", "count")
         head.addWidget(self.count)
-        column.addLayout(head)
         self.transcript = TranscriptView()
         self.transcript.reset(True, "开始记录后，会议里说的话会实时出现在这里。")
         column.addWidget(self.transcript, 1)
-        layout.addWidget(frame, 1)
+        splitter.addWidget(frame)
+        frame, column, head = card_column("会议纪要", True)
+        self.spinner = Spinner(14)
+        self.spinner.hide()
+        head.addWidget(self.spinner)
+        self.minutes_status = label("", "caption")
+        head.addWidget(self.minutes_status)
+        self.minutes_view = MinutesView()
+        column.addWidget(self.minutes_view, 1)
+        splitter.addWidget(frame)
+        splitter.setSizes([560, 460])
+        layout.addWidget(splitter, 1)
         actions = QHBoxLayout()
         actions.setSpacing(8)
         self.copy_button = make_button("复制全文", Glyph.COPY, "ghost")
         self.copy_button.clicked.connect(self.copy_all)
         actions.addWidget(self.copy_button)
         actions.addStretch()
+        self.copy_minutes_button = make_button("复制纪要", Glyph.COPY, "ghost")
+        self.copy_minutes_button.clicked.connect(self.copy_minutes)
+        actions.addWidget(self.copy_minutes_button)
+        self.template_box = ComboBox()
+        for template in TEMPLATES:
+            self.template_box.addItem(template.name, template.id)
+        chosen = next((i for i, t in enumerate(TEMPLATES) if t.id == main.settings.meeting_template), 0)
+        self.template_box.setCurrentIndex(chosen)
+        self.template_box.setToolTip("纪要的写法：通用会议、项目例会、客户沟通、讨论决策或课堂讲座")
+        self.template_box.currentIndexChanged.connect(
+            lambda _index: self._save(meeting_template=self.template_box.currentData())
+        )
+        actions.addWidget(self.template_box)
+        self.write_button = make_button("生成纪要", Glyph.EDIT, "primary")
+        self.write_button.clicked.connect(self.write_minutes)
+        actions.addWidget(self.write_button)
         layout.addLayout(actions)
 
         self.hero.app_chip.clicked.connect(self.pick_app)
@@ -587,6 +680,9 @@ class MeetingPage(QWidget):
         self.recorder = recorder
         self.ended = self.duration = 0.0
         self.silent_notice = ""
+        self.parts = {}
+        self.next_prepare = time.monotonic() + 60
+        self.show_minutes(None)
         self.state = "recording"
         window.set_notice("")
         self.transcript.reset(labels, "正在听。有人说话时，文字会在几秒内出现在这里。")
@@ -642,6 +738,9 @@ class MeetingPage(QWidget):
 
     def shutdown(self):
         """Quitting: stop now; lines already heard are on disk, speech still waiting is dropped."""
+        self.stopping.set()
+        if self.writing is not None:
+            self.writing.set()
         if self.recorder is not None:
             self.ended = self.ended or time.time()
             recorder = self.recorder
@@ -665,6 +764,9 @@ class MeetingPage(QWidget):
             self.hero.set_pill("rec", f"记录中&nbsp;&nbsp;{clock(recorder.elapsed)}")
         backlog = recorder.backlog
         self.progress.setText(f"识别中，还有 {round(backlog)} 秒的话" if backlog >= 15 else "")
+        if self.state == "recording" and time.monotonic() >= self.next_prepare:
+            self.next_prepare = time.monotonic() + 60
+            self.prepare_minutes()
         # Windows records an app after its volume-mixer slider: muted there, it records nothing.
         if self.app and self.state == "recording":
             silent = recorder.elapsed > 40 and not recorder.heard(OTHERS)
@@ -682,6 +784,7 @@ class MeetingPage(QWidget):
         characters = self.transcript.characters()
         self.count.setText(f"{characters:,} 字")
         self.copy_button.setEnabled(bool(self.transcript.lines))
+        self.refresh_minutes()
 
     def refresh(self):
         hero = self.hero
@@ -739,6 +842,144 @@ class MeetingPage(QWidget):
                 else:
                     hero.hint.setText("录下麦克风听到的声音，适合线下会议。不保存录音；开始前请告知参会人。")
         self.refresh_count()
+
+    # Minutes
+
+    def write_minutes(self):
+        """Minutes of what has been said so far, with the chosen template, on a worker thread."""
+        if self.writing is not None or self.store is None or not self.transcript.lines:
+            return
+        from .cleanup import CleanupError
+
+        lines = list(self.transcript.lines)
+        labels = self.transcript.labels
+        template = self.template_box.currentData()
+        store, cache = self.store, self.parts
+        try:
+            writer = self._writer(cache, lines)
+        except CleanupError as error:
+            self.main.set_notice(str(error))
+            return
+        cancel = self.writing = threading.Event()
+
+        def work(report):
+            try:
+                return writer.write(lines, template, labels, cancel, report)
+            except Exception as error:  # Shown in the notice; MinutesError says what to do.
+                return error
+
+        def done(result):
+            self.writing = None
+            self.spinner.stop()
+            self.spinner.hide()
+            if not isinstance(result, Exception):
+                self.main.record_minutes_usage(result.usage)
+                try:
+                    store.save("parts", cache)
+                    store.save("minutes", minutes_record(result))
+                except OSError:
+                    pass
+            if cancel.is_set() or store is not self.store:
+                self.refresh_minutes()
+                return
+            if isinstance(result, Exception):
+                self.main.set_notice(str(result) if isinstance(result, CleanupError) else "纪要没有生成，请稍后重试。")
+                self.show_minutes(self.minutes)
+            else:
+                self.show_minutes(result)
+
+        self.main.set_notice("")
+        self.spinner.show()
+        self.spinner.start()
+        self.minutes_status.setText("正在生成纪要…")
+        if self.minutes is None:
+            self.minutes_view.empty(MinutesView.WRITING)
+        run_task(self, work, done, lambda text: self.writing is cancel and self.minutes_status.setText(text))
+        self.refresh_minutes()
+
+    def _writer(self, cache: dict, lines: list[Line]) -> MinutesWriter:
+        from .cleanup import ApiCleaner
+        from .settings import read_key
+        from .vocabulary import Vocabulary
+
+        settings = self.main.settings
+        client = ApiCleaner(
+            read_key(api_base_url=settings.api_base_url), settings.model, max(settings.api_timeout, 180),
+            base_url=settings.api_base_url,
+        )
+        glossary = Vocabulary.for_settings(settings).glossary_for(" ".join(line.text for line in lines[-200:]))
+        return MinutesWriter(client, cache, glossary)
+
+    def prepare_minutes(self):
+        """Every minute of a long meeting: note the parts already finished, in the background."""
+        if self.preparing or self.writing is not None or self.store is None:
+            return
+        if self.transcript.characters() < PREPARE_FROM:
+            return
+        from .cleanup import CleanupError
+
+        lines = list(self.transcript.lines)
+        labels = self.transcript.labels
+        store, cache = self.store, self.parts
+        try:
+            writer = self._writer(cache, lines)
+        except CleanupError:
+            return
+        if not writer.client.key:
+            return
+        self.preparing = True
+
+        def work(_report):
+            try:
+                return writer.prepare(lines, labels, self.stopping)
+            except Exception:  # Tried again in a minute; the minutes button says what is wrong.
+                return {}
+
+        def done(usage):
+            self.preparing = False
+            if usage:
+                self.main.record_minutes_usage(usage)
+                try:
+                    store.save("parts", cache)
+                except OSError:
+                    pass
+
+        run_task(self, work, done)
+
+    def show_minutes(self, minutes: Minutes | None):
+        self.minutes = minutes
+        if minutes is None:
+            self.minutes_view.empty(MinutesView.EMPTY)
+        else:
+            info = self.store.info() if self.store else {}
+            if self.recorder is not None:
+                info.pop("duration", None)  # Still going: the length so far says little.
+            blocks = [block for block in outline(minutes, info) if block[0] != "title"]
+            self.minutes_view.setHtml(to_html(blocks))
+        self.refresh_minutes()
+
+    def refresh_minutes(self):
+        busy = self.writing is not None
+        self.write_button.setEnabled(not busy and bool(self.transcript.lines) and self.store is not None)
+        self.write_button.setText("生成中…" if busy else ("重新生成" if self.minutes else "生成纪要"))
+        self.template_box.setEnabled(not busy)
+        self.copy_minutes_button.setEnabled(self.minutes is not None)
+        if busy:
+            return
+        minutes = self.minutes
+        if minutes is None:
+            self.minutes_status.setText("")
+        elif minutes.lines < len(self.transcript.lines):
+            self.minutes_status.setText(f"截至 {clock(minutes.through)} · 之后的话还没写进去")
+        else:
+            self.minutes_status.setText(f"截至 {clock(minutes.through)}" if self.recording else "整场会议")
+
+    def copy_minutes(self):
+        if self.minutes is None:
+            return
+        info = self.store.info() if self.store else {}
+        QApplication.clipboard().setText(to_text(outline(self.minutes, info)))
+        self.copy_minutes_button.flash("已复制")
 
     def copy_all(self):
         text = self.transcript.plain_text()

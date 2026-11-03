@@ -112,8 +112,9 @@ def meetings_dir() -> Path:
 
 
 class MeetingStore:
-    """One meeting's folder: info.dat (title, times, sources) and transcript.dat, one encrypted
-    line per recognized utterance, appended as the meeting goes."""
+    """One meeting's folder: info.dat (title, times, sources), transcript.dat with one encrypted
+    line per recognized utterance, appended as the meeting goes, and minutes.dat and parts.dat
+    once minutes are written. Everything is encrypted for the current Windows user."""
 
     def __init__(self, folder: Path):
         self.folder = folder
@@ -155,16 +156,23 @@ class MeetingStore:
         return sorted(lines, key=lambda line: line.start)
 
     def save_info(self, info: dict) -> None:
-        with self.lock:
-            temp = self.folder / "info.tmp"
-            temp.write_text(seal(info), encoding="ascii")
-            temp.replace(self.folder / "info.dat")
+        self.save("info", info)
 
     def info(self) -> dict:
+        return self.load("info") or {}
+
+    def save(self, name: str, value) -> None:
+        """Keep `value` (anything JSON can hold) encrypted as <name>.dat: minutes, cached notes."""
+        with self.lock:
+            temp = self.folder / f"{name}.tmp"
+            temp.write_text(seal(value), encoding="ascii")
+            temp.replace(self.folder / f"{name}.dat")
+
+    def load(self, name: str):
         try:
-            return unseal((self.folder / "info.dat").read_text(encoding="ascii"))
+            return unseal((self.folder / f"{name}.dat").read_text(encoding="ascii"))
         except Exception:
-            return {}
+            return None
 
 
 # --- Recording ---------------------------------------------------------------------------------

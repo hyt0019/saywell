@@ -710,6 +710,17 @@ class MainWindow(QMainWindow):
         except OSError:
             pass
 
+    def record_minutes_usage(self, usage: dict):
+        """Meeting minutes count as one API request in the statistics."""
+        if self.usage is None or not usage:
+            return
+        self.usage.record_request(usage, self.settings.api_base_url, self.settings.model)
+        try:
+            self.usage.save()
+        except OSError:
+            pass
+        self.refresh_overview()
+
     def refresh_controls(self):
         if not hasattr(self, "insert_button"):  # Still building the window.
             return
