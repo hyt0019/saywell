@@ -54,26 +54,28 @@ from .ui import (
     STYLE,
     Glyph,
     HeroCard,
+    KeyHint,
     LevelBars,
     MicButton,
     ModelDialog,
     RecordingOverlay,
-    KeyHint,
-    TabBar,
-    vrule,
     SettingsDialog,
+    TabBar,
     Toast,
     app_icon,
-    load_fonts,
     dialog_header,
     fade_in,
     footer_bar,
     glyph_label,
+    hrule,
     label,
+    load_fonts,
     make_button,
+    pill_text,
     run_task,
     text_column,
     tray_icon,
+    vrule,
 )
 from .updates import (
     Release,
@@ -426,6 +428,7 @@ class MainWindow(QMainWindow):
         self.toast = Toast(central)
         self.show_page(0)
 
+        layout.addWidget(hrule())
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
         bottom.addWidget(glyph_label(Glyph.LOCK, "#958C7F", 13))
@@ -441,7 +444,7 @@ class MainWindow(QMainWindow):
         self.download_progress.setFixedWidth(140)
         self.download_progress.hide()
         bottom.addWidget(self.download_progress)
-        self.download_button = make_button("下载语音模型", Glyph.DOWNLOAD, "primary")
+        self.download_button = make_button("下载语音模型", Glyph.DOWNLOAD, "footer")
         self.download_button.clicked.connect(self.open_models)
         bottom.addWidget(self.download_button)
         layout.addLayout(bottom)
@@ -774,7 +777,7 @@ class MainWindow(QMainWindow):
             tone, text = self.PILLS[self.state]
         else:
             tone, text = ("done", "已整理") if self.result.toPlainText().strip() else ("idle", "就绪")
-        self.pill.setText(f"<span style='color:{self.TONES[tone]}'>●</span>&nbsp;&nbsp;{text}")
+        self.pill.setText(pill_text(self.TONES[tone], text, tone == "rec"))
         self.pill.setProperty("tone", tone)
         bottom = 1 if self.state == "recording" else 0
         if self.hero_bottom.currentIndex() != bottom:

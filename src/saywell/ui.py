@@ -115,9 +115,9 @@ QLabel#title { font-family: 'Saywell Serif'; font-weight: 700; color: #192457; f
 QLabel#muted { color: #776F63; font-size: 13px; }
 QLabel#caption { color: #958C7F; font-size: 12px; }
 QLabel#section { font-family: 'Saywell Serif'; font-weight: 700; color: #192457; font-size: 16px; }
-QLabel#cardTitle { font-family: 'Saywell Serif'; font-weight: 700; color: #192457; font-size: 16px; }
+QLabel#cardTitle { font-family: 'Saywell Serif'; font-weight: 700; color: #192457; font-size: 17px; }
 QLabel#fieldLabel { color: #47413A; font-size: 13px; }
-QLabel#count { background: #F2ECE2; color: #776F63; border-radius: 9px; padding: 2px 9px; font-size: 12px; }
+QLabel#count { color: #958C7F; font-size: 12px; }
 QLabel#tag { color: #776F63; border: 1px solid #E5DCCD; border-radius: 9px; padding: 1px 8px; font-size: 12px; }
 QLabel#tagActive { background: #192457; color: #FFFCF7; border-radius: 9px; padding: 2px 9px; font-size: 12px; }
 QLabel#tagGpu { color: #3C488E; border: 1px solid #C3C8E4; border-radius: 9px; padding: 1px 8px; font-size: 12px; }
@@ -135,6 +135,7 @@ QLabel#heroMeta { color: #776F63; font-size: 13px; }
 QLabel#keycap { background: #FBF7F0; color: #47413A; border: 1px solid #DCD3C4; border-bottom: 2px solid #D0C5B3;
                 border-radius: 6px; padding: 0px 7px; font-size: 12px; }
 QFrame#vrule { background: #E2D9CA; min-width: 1px; max-width: 1px; border: none; }
+QFrame#hrule { background: #E8E0D3; min-height: 1px; max-height: 1px; border: none; }
 
 QFrame#card { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 18px; }
 QFrame#card[accent="true"] { border: 1px solid #D3D7EB; }
@@ -339,6 +340,7 @@ BUTTON_LOOKS = {
     "ghost": ButtonLook(CLEAR_COLOR, "#EEE7DB", "#E2D9CA", "#47413A", height=34, padding=12),
     "danger": ButtonLook(CLEAR_COLOR, "#FBEAE5", "#F6D9D0", "#B94534", height=34, padding=12),
     "link": ButtonLook(CLEAR_COLOR, "#ECEDF5", "#DFE2F1", "#3C488E", height=28, padding=9, size=13),
+    "footer": ButtonLook(CLEAR_COLOR, "#ECEDF5", "#DFE2F1", "#3C488E", height=30, padding=10, size=13, bold=True),
     "chip": ButtonLook("#FFFCF7", "#F8F4ED", "#EEE7DB", "#47413A", "#E5DCCD", 30, 13, 13,
                        checked_background=INK, checked_text="#FFFCF7"),
     "check": ButtonLook("#FFFCF7", "#FFFCF7", "#F3F3F8", INK, "#E2D9CA", 30, 13, 13, hover_border=ACCENT),
@@ -871,6 +873,19 @@ class KeyHint(QWidget):
 
     def text(self) -> str:
         return f"{self.key.text()} {self.action.text()}"
+
+
+def pill_text(color: str, text: str, live: bool = False) -> str:
+    """The small status line above a hero's heading, as rich text: a dot, then the words."""
+    words = f"<span style='color:{color}; font-weight:600'>{text}</span>" if live else text
+    return f"<span style='color:{color}'>●</span>&nbsp;&nbsp;{words}"
+
+
+def hrule() -> QFrame:
+    """A hairline across, between parts of a page."""
+    line = QFrame()
+    line.setObjectName("hrule")
+    return line
 
 
 def vrule(height: int = 14) -> QFrame:
@@ -1665,10 +1680,6 @@ def text_column(title: str, hint: str, accent: bool = False) -> tuple[QWidget, Q
     row = QHBoxLayout()
     row.setContentsMargins(14, 0, 12, 0)
     row.setSpacing(9)
-    dot = QLabel()
-    dot.setFixedSize(9, 9)
-    dot.setStyleSheet(f"background: {ACCENT if accent else DISABLED}; border-radius: 4px;")
-    row.addWidget(dot)
     row.addWidget(label(title, "cardTitle"))
     row.addStretch()
     count = label("0 字", "count")

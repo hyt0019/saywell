@@ -109,7 +109,9 @@ from .ui import (
     label,
     make_button,
     mix,
+    pill_text,
     run_task,
+    vrule,
 )
 
 TONES = {"idle": "#B5AC9F", "rec": "#E5654F", "busy": "#E0A040", "done": "#5A9E6F"}
@@ -722,7 +724,7 @@ class TranscriptView(GuardedEdit):
 
 
 def card_column(title: str, accent: bool) -> tuple[QFrame, QVBoxLayout, QHBoxLayout]:
-    """A white card with a titled header row, as on the text page; returns the card, its column
+    """A card with a titled header row, as on the text page; returns the card, its column
     and the header row (for whatever goes on the right of the title)."""
     frame = card(accent)
     column = QVBoxLayout(frame)
@@ -731,10 +733,6 @@ def card_column(title: str, accent: bool) -> tuple[QFrame, QVBoxLayout, QHBoxLay
     head = QHBoxLayout()
     head.setContentsMargins(14, 0, 12, 0)
     head.setSpacing(9)
-    dot = QLabel()
-    dot.setFixedSize(9, 9)
-    dot.setStyleSheet(f"background: {ACCENT if accent else DISABLED}; border-radius: 4px;")
-    head.addWidget(dot)
     head.addWidget(label(title, "cardTitle"))
     head.addStretch()
     column.addLayout(head)
@@ -1635,7 +1633,7 @@ class MeetingHero(HeroCard):
         layout.addLayout(controls)
 
     def set_pill(self, tone: str, text: str):
-        self.pill.setText(f"<span style='color:{TONES[tone]}'>●</span>&nbsp;&nbsp;{text}")
+        self.pill.setText(pill_text(TONES[tone], text, tone == "rec"))
 
 
 class MeetingPage(QWidget):
@@ -1700,9 +1698,11 @@ class MeetingPage(QWidget):
         self.history_button.setToolTip("打开以前记录的会议")
         self.history_button.clicked.connect(self.open_meetings)
         actions.addWidget(self.history_button)
+        actions.addWidget(vrule(), 0, Qt.AlignmentFlag.AlignVCenter)
         self.copy_button = make_button("复制全文", Glyph.COPY, "ghost")
         self.copy_button.clicked.connect(self.copy_all)
         actions.addWidget(self.copy_button)
+        actions.addWidget(vrule(), 0, Qt.AlignmentFlag.AlignVCenter)
         self.export_button = make_button("导出", Glyph.EXPORT, "ghost")
         self.export_button.set_trailing(Glyph.CHEVRON_DOWN)
         self.export_button.setToolTip("把纪要和会议文字存成 Word、PDF、Markdown 或纯文本文件")
