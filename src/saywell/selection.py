@@ -50,6 +50,7 @@ VALUE_IS_READ_ONLY = 5
 
 # More than a popup should hold; longer selections are cut here and the popup says so.
 MAX_CHARS = 4000
+NEWLINE = chr(10)
 # How far up from the focused control to look for the text that holds the selection (a link
 # inside a page, a cell inside a document).
 ANCESTORS = 3
@@ -90,6 +91,10 @@ class Selection:
     editable: bool | None = None
     cut: bool = False  # Longer than MAX_CHARS; only the start is kept.
     via: str = "uia"  # Or "clipboard".
+    # A password field or a password manager: not read, and not to be copied either.
+    blocked: bool = False
+    # All of the selection on screen, when the program says.
+    area: tuple[int, int, int, int] | None = None
 
 
 def window_class(window: int) -> str:
@@ -158,41 +163,49 @@ def _pattern(element: c_void_p, pattern: int, iid: GUID) -> c_void_p:
     return found
 
 
-def _last_rect(text_range: c_void_p) -> tuple[int, int, int, int] | None:
+Rect = tuple[int, int, int, int]
+
+
+def _rects(text_range: c_void_p) -> list[Rect]:
+    """Where the range's lines are on screen, as (left, top, right, bottom)."""
     array = c_void_p()
     try:
         method(text_range, BOUNDING_RECTANGLES, POINTER(c_void_p))(byref(array))
     except OSError:
-        return None
+        return []
     if not array:
-        return None
+        return []
     try:
         upper = c_long()
         if oleaut32.SafeArrayGetUBound(array, 1, byref(upper)) != 0 or upper.value < 3:
-            return None
+            return []
         data = c_void_p()
         if oleaut32.SafeArrayAccessData(array, byref(data)) != 0:
-            return None
+            return []
         try:
             values = ctypes.cast(data, POINTER(c_double))
-            # (left, top, width, height) per line; the last line is where the selection ends.
-            start = (upper.value + 1) // 4 * 4 - 4
-            left, top, width, height = (values[start + index] for index in range(4))
+            count = (upper.value + 1) // 4 * 4
+            lines = [tuple(values[start + index] for index in range(4)) for start in range(0, count, 4)]
         finally:
             oleaut32.SafeArrayUnaccessData(array)
-        if width <= 0 or height <= 0:
-            return None
-        return round(left), round(top), round(left + width), round(top + height)
+        # (left, top, width, height) per line.
+        return [(round(x), round(y), round(x + w), round(y + h)) for x, y, w, h in lines if w > 0 and h > 0]
     finally:
         oleaut32.SafeArrayDestroy(array)
 
 
-def _selected_text(pattern: c_void_p) -> tuple[str, tuple[int, int, int, int] | None]:
+def union(rects: list[Rect]) -> Rect | None:
+    if not rects:
+        return None
+    return min(r[0] for r in rects), min(r[1] for r in rects), max(r[2] for r in rects), max(r[3] for r in rects)
+
+
+def _selected_text(pattern: c_void_p) -> tuple[str, list[Rect]]:
     ranges = c_void_p()
     method(pattern, GET_SELECTION, POINTER(c_void_p))(byref(ranges))
     if not ranges:
-        return "", None
-    parts, rect = [], None
+        return "", []
+    parts, rects = [], []
     try:
         count = _int(ranges, ARRAY_LENGTH)
         for index in range(min(count, 50)):
@@ -206,12 +219,12 @@ def _selected_text(pattern: c_void_p) -> tuple[str, tuple[int, int, int, int] | 
                 value = _bstr(text)
                 if value.strip():
                     parts.append(value)
-                    rect = _last_rect(text_range) or rect
+                    rects += _rects(text_range)
             finally:
                 release(text_range)
     finally:
         release(ranges)
-    return "\n".join(parts), rect
+    return NEWLINE.join(parts), rects
 
 
 def _editable(element: c_void_p) -> bool | None:
@@ -248,39 +261,41 @@ class Automation:
         self.walker = self.client = c_void_p()
 
     def read(self) -> Selection | None:
-        """The selection in the focused control, or None when there is none to read (nothing
-        selected, a password field, a control that does not offer its text)."""
+        """The selection in the focused control. Its text is empty when nothing is selected or
+        the control does not offer its text (then Ctrl+C may), and it is `blocked` in a password
+        field. None when another program is not in front."""
         window, owner, exe = foreground()
         if not window or owner == os.getpid():
             return None
+        nothing = Selection("", exe, owner, window, blocked=exe in NEVER)
         element = c_void_p()
         try:
             method(self.client, GET_FOCUSED_ELEMENT, POINTER(c_void_p))(byref(element))
         except OSError:
-            return None
+            return nothing
         if not element:
-            return None
+            return nothing
         try:
-            if _int(element, IS_PASSWORD):
-                return None
             pid = _int(element, PROCESS_ID)
             if pid == os.getpid():
                 return None
             exe = executable(pid) or exe
-            if exe in NEVER:
-                return None
+            if _int(element, IS_PASSWORD) or exe in NEVER:
+                return Selection("", exe, pid, window, blocked=True)
+            nothing = Selection("", exe, pid, window)
             current, steps = element, 0
             while current and steps <= ANCESTORS:
                 pattern = _pattern(current, TEXT_PATTERN, IID_IUIAutomationTextPattern)
                 if pattern:
                     try:
-                        text, rect = _selected_text(pattern)
+                        text, rects = _selected_text(pattern)
                     finally:
                         release(pattern)
                     text, cut = clip(text)
                     if not text:
-                        return None
-                    return Selection(text, exe, pid, window, rect, _editable(current), cut)
+                        return nothing
+                    last = rects[-1] if rects else None
+                    return Selection(text, exe, pid, window, last, _editable(current), cut, area=union(rects))
                 parent = c_void_p()
                 try:
                     method(self.walker, PARENT_ELEMENT, c_void_p, POINTER(c_void_p))(current, byref(parent))
@@ -291,9 +306,9 @@ class Automation:
                 current, steps = parent, steps + 1
             if current and current is not element:
                 release(current)
-            return None
+            return nothing
         except OSError:
-            return None
+            return nothing
         finally:
             release(element)
 

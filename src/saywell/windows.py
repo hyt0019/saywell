@@ -315,14 +315,16 @@ class PasteError(RuntimeError):
     pass
 
 
-def paste_text(text: str, target: InputTarget, clipboard, restore_callback=None, keep_result: bool = False) -> None:
+def paste_text(text: str, target: InputTarget, clipboard, restore_callback=None, keep_result: bool = False,
+               single_line: bool = True) -> None:
     """Paste once, with a focus check immediately before the Win32 input call.
 
-    keep_result leaves the pasted text on the clipboard instead of restoring the previous content."""
+    keep_result leaves the pasted text on the clipboard instead of restoring the previous content.
+    single_line (dictation) joins the lines; a translation replacing a selection keeps them."""
     from PySide6.QtCore import QMimeData
 
     # Apply at the final boundary too: edits and older history can contain newlines.
-    text = single_line_text(text)
+    text = single_line_text(text) if single_line else text.strip()
     if not text:
         raise PasteError("没有可输入的文字。")
     if not user32.IsWindow(target.window) or not same_input_field(current_target(), target):

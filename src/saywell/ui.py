@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import shutil
 import threading
 from collections import deque
@@ -81,6 +82,8 @@ from .models import (
 from .settings import Settings, read_key, save_key
 from .vocabulary import FILE_FILTER, LexiconError, import_lexicon
 from .shortcuts import KEY_NAMES, RECORDING_CHOICES, shortcut_label, shortcut_name, shortcut_problem, usage_hint
+from .translation import LANGUAGES as TRANSLATION_LANGUAGES
+from .translation import STYLES as TRANSLATION_STYLES
 
 INK = "#1D1D1F"
 MUTED = "#6E6E73"
@@ -1666,6 +1669,8 @@ def footer_bar() -> tuple[QFrame, QHBoxLayout]:
 
 
 CUSTOM_HOTKEY = "custom"
+SELECTION_TRIGGERS = ("icon", "direct", "hotkey")
+SELECTION_HOTKEYS = ("Alt+T", "Ctrl+Alt+T", "Ctrl+Alt+D", "F9")
 
 
 class HotkeyRecorder(QDialog):
@@ -1877,6 +1882,88 @@ class SettingsDialog(QDialog):
         form.addRow(field_label("GPU 加速"), gpu)
         layout.addWidget(recording)
 
+        translating = Section(
+            "划词翻译",
+            "在其他程序里选中文字就能翻译。读取选中的文字在本机完成，只有要翻译的文字会发送到上面的 API。",
+            Glyph.TRANSLATE,
+        )
+        self.selection_on = Switch("开启划词翻译")
+        self.selection_on.setChecked(settings.selection_translate)
+        translating.body.addWidget(self.selection_on)
+        self.selection_options = QWidget()
+        form = QFormLayout(self.selection_options)
+        form.setContentsMargins(0, 6, 0, 0)
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(12)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        trigger = QVBoxLayout()
+        trigger.setSpacing(6)
+        self.selection_trigger = Segmented(("显示翻译按钮", "选中即翻译", "只用快捷键"))
+        self.selection_trigger.set_current(SELECTION_TRIGGERS.index(settings.selection_trigger), animate=False)
+        self.selection_trigger.changed.connect(self.update_selection_hint)
+        trigger.addWidget(self.selection_trigger, 0, Qt.AlignmentFlag.AlignLeft)
+        self.selection_hint = label("", "muted", wrap=True)
+        trigger.addWidget(self.selection_hint)
+        form.addRow(field_label("触发方式"), trigger)
+        keys = QVBoxLayout()
+        keys.setSpacing(4)
+        self.selection_hotkey = ComboBox()
+        for name in SELECTION_HOTKEYS:
+            self.selection_hotkey.addItem(name, name)
+        if settings.selection_hotkey not in SELECTION_HOTKEYS:
+            self.selection_hotkey.addItem(settings.selection_hotkey, settings.selection_hotkey)
+        self.selection_hotkey.addItem("自定义…", CUSTOM_HOTKEY)
+        self.selection_hotkey.setCurrentIndex(max(0, self.selection_hotkey.findData(settings.selection_hotkey)))
+        self.selection_hotkey_choice = settings.selection_hotkey
+        self.selection_hotkey.activated.connect(self.choose_selection_hotkey)
+        self.selection_hotkey.setMaximumWidth(200)
+        keys.addWidget(self.selection_hotkey)
+        keys.addWidget(label(
+            "选中文字后按一下，任何触发方式下都能用。读不到文字的程序会用 Ctrl+C 复制一次，剪贴板随后恢复；终端里不会这样做。",
+            "muted", wrap=True,
+        ))
+        form.addRow(field_label("快捷键"), keys)
+        way = QVBoxLayout()
+        way.setSpacing(4)
+        direction = QHBoxLayout()
+        direction.setSpacing(8)
+        self.selection_native = ComboBox()
+        self.selection_foreign = ComboBox()
+        for box, value in ((self.selection_native, settings.selection_native), (self.selection_foreign, settings.selection_foreign)):
+            for name in TRANSLATION_LANGUAGES:
+                box.addItem(name, name)
+            box.setCurrentIndex(max(0, box.findData(value)))
+            box.setMaximumWidth(130)
+        direction.addWidget(self.selection_native)
+        direction.addWidget(label("译成", "fieldLabel"))
+        direction.addWidget(self.selection_foreign)
+        direction.addStretch()
+        way.addLayout(direction)
+        self.selection_back = label("", "muted", wrap=True)
+        way.addWidget(self.selection_back)
+        self.selection_native.currentIndexChanged.connect(self.update_selection_hint)
+        form.addRow(field_label("翻译方向"), way)
+        style = QVBoxLayout()
+        style.setSpacing(6)
+        self.selection_style = Segmented(tuple(name for name, _rule in TRANSLATION_STYLES.values()))
+        self.selection_style.set_current(list(TRANSLATION_STYLES).index(settings.selection_style), animate=False)
+        style.addWidget(self.selection_style, 0, Qt.AlignmentFlag.AlignLeft)
+        style.addWidget(label("自然：地道通顺；正式：适合邮件和文档；直译：贴近原文，方便对照学习。", "muted", wrap=True))
+        form.addRow(field_label("译文风格"), style)
+        excluded = QVBoxLayout()
+        excluded.setSpacing(4)
+        self.selection_excluded = QLineEdit(", ".join(settings.selection_excluded))
+        self.selection_excluded.setPlaceholderText("程序文件名，用逗号分开，如 WeChat.exe")
+        excluded.addWidget(self.selection_excluded)
+        excluded.addWidget(label("在这些程序里不弹出翻译按钮，也不响应快捷键。密码框和常见的密码管理器总是不读取。", "muted", wrap=True))
+        form.addRow(field_label("不翻译的程序"), excluded)
+        translating.body.addWidget(self.selection_options)
+        self.selection_on.toggled.connect(self.selection_options.setEnabled)
+        self.selection_options.setEnabled(settings.selection_translate)
+        self.update_selection_hint()
+        layout.addWidget(translating)
+
         privacy = Section("隐私与启动", "录音只在内存中处理，识别后立即释放，不保存录音文件。", Glyph.LOCK)
         self.history = Switch("保留最近 5 条文字（本机加密，最长 7 天）")
         self.history.setChecked(settings.save_history)
@@ -2028,6 +2115,28 @@ class SettingsDialog(QDialog):
         self.hotkey_choice = name
         self.update_usage_hint()
 
+    def choose_selection_hotkey(self, index: int):
+        name = self.selection_hotkey.itemData(index)
+        if name == CUSTOM_HOTKEY:
+            name = HotkeyRecorder.ask(self)
+            if not name:
+                self.selection_hotkey.setCurrentIndex(self.selection_hotkey.findData(self.selection_hotkey_choice))
+                return
+            if self.selection_hotkey.findData(name) < 0:
+                self.selection_hotkey.insertItem(self.selection_hotkey.count() - 1, name, name)
+            self.selection_hotkey.setCurrentIndex(self.selection_hotkey.findData(name))
+        self.selection_hotkey_choice = name
+
+    def update_selection_hint(self, *_):
+        hints = (
+            "用鼠标选中文字后，旁边出现一个小按钮，点一下才翻译。",
+            "用鼠标选中文字后马上翻译。每次选中都会把文字发送到 API。",
+            "不留意鼠标，只在按快捷键时翻译选中的文字。",
+        )
+        self.selection_hint.setText(hints[max(0, self.selection_trigger.current())])
+        native = self.selection_native.currentData()
+        self.selection_back.setText(f"选中的是{native}时译成右边的语言，其他语言都译成{native}。弹窗里可以临时换一种。")
+
     def update_usage_hint(self, *_):
         self.usage_hint.setText(usage_hint(self.hotkey_choice, self.hold.current() == 0))
 
@@ -2114,6 +2223,18 @@ class SettingsDialog(QDialog):
         ):
             QMessageBox.warning(self, "检查 API Key", "已更换 API 地址，请填写该服务对应的密钥。")
             return
+        selection_hotkey = self.selection_hotkey_choice
+        if self.selection_on.isChecked() and selection_hotkey == self.hotkey_choice:
+            QMessageBox.warning(self, "检查快捷键", "划词翻译的快捷键和录音快捷键相同，请换一个。")
+            return
+        if self.selection_native.currentData() == self.selection_foreign.currentData():
+            QMessageBox.warning(self, "检查翻译方向", "两种语言相同，请换一种要译成的语言。")
+            return
+        excluded = []
+        for name in re.split(r"[,，;；\s]+", self.selection_excluded.text()):
+            name = name.strip().lower()
+            if name:
+                excluded.append(name if name.endswith(".exe") else name + ".exe")
         try:
             if self.key.text().strip():
                 save_key(self.key.text(), api_base_url=base_url)
@@ -2136,6 +2257,13 @@ class SettingsDialog(QDialog):
                 keep_in_clipboard=self.keep_in_clipboard.isChecked(),
                 gpu_acceleration=self.gpu.isChecked(),
                 check_updates=self.check_updates.isChecked(),
+                selection_translate=self.selection_on.isChecked(),
+                selection_trigger=SELECTION_TRIGGERS[self.selection_trigger.current()],
+                selection_hotkey=selection_hotkey,
+                selection_native=self.selection_native.currentData(),
+                selection_foreign=self.selection_foreign.currentData(),
+                selection_style=list(TRANSLATION_STYLES)[self.selection_style.current()],
+                selection_excluded=list(dict.fromkeys(excluded))[:100],
             )
             self.accept()
         except Exception:

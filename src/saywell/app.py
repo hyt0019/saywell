@@ -148,6 +148,7 @@ class MainWindow(QMainWindow):
         self.quitting = False
         self.native = native
         self.hotkeys = Hotkeys() if native else None
+        self.selection = None  # Selection translation, with the hotkeys (native only).
         # A recording key used on its own (right Ctrl, right Alt, CapsLock): when holding to talk, a
         # press only starts recording after SOLO_HOLD_MS; in tap mode only a tap shorter than
         # SOLO_TAP_MS counts. Either way the other use, and shortcuts such as right Ctrl+C, keep working.
@@ -212,6 +213,9 @@ class MainWindow(QMainWindow):
             self.tray.show()
             QApplication.instance().installNativeEventFilter(self.hotkeys)
             self.hotkeys.events.triggered.connect(self.on_hotkey)
+            from .translation_ui import SelectionTranslate
+
+            self.selection = SelectionTranslate(self)
             self.configure_hotkeys()
         self.find_dropped_models()
         self.refresh_controls()
@@ -712,6 +716,10 @@ class MainWindow(QMainWindow):
 
     def record_minutes_usage(self, usage: dict):
         """Meeting minutes count as one API request in the statistics."""
+        self.record_api_usage(usage)
+
+    def record_api_usage(self, usage: dict):
+        """One API request (minutes, a selection translated) in the statistics."""
         if self.usage is None or not usage:
             return
         self.usage.record_request(usage, self.settings.api_base_url, self.settings.model)
@@ -790,6 +798,10 @@ class MainWindow(QMainWindow):
             self.set_notice("录音快捷键被其他程序占用，请在设置中更换。仍可点击开始录音。")
         if not self.hotkeys.register(2, 0x0001, ord("V")):
             self.set_notice(f"{INSERT_HOTKEY} 被其他程序占用，请使用复制结果或输入按钮。")
+        if self.selection is not None:
+            problem = self.selection.configure()
+            if problem:
+                self.set_notice(problem)
 
     def activate_hotkey(self, name: str) -> bool:
         """Listen for the recording shortcut name instead of the current one."""
@@ -874,6 +886,10 @@ class MainWindow(QMainWindow):
                 self.attempt_insert(self.gate.generation, target)
         elif identifier == 3:
             self.cancel()
+        elif self.selection is not None and identifier == self.selection.HOTKEY:
+            self.selection.hotkey()
+        elif self.selection is not None and identifier == self.selection.ESCAPE:
+            self.selection.escape()
 
     def begin(self, kind: str):
         job, cancel = self.gate.begin()
@@ -1453,6 +1469,8 @@ class MainWindow(QMainWindow):
         self.overlay.dismiss_timer.stop()
         self.overlay.close()
         self.tray.hide()
+        if self.selection is not None:
+            self.selection.shutdown()
         if self.hotkeys:
             self.suspend_hotkey()
             self.hotkeys.close()
