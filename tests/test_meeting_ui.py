@@ -64,7 +64,28 @@ def test_transcript_puts_late_lines_in_order_with_turn_headings(qt_app):
     assert blocks[0].startswith("其他参会人") and blocks[0].endswith("大家好")
     assert blocks[1].startswith("我") and blocks[2].startswith("其他参会人")  # A new turn after mine.
     assert blocks[3].startswith("其他参会人   01:20")  # More than a minute on: a heading again.
-    assert view.plain_text().splitlines()[1] == "[00:04] 我：好的"
+    assert view.plain_text().split("\n\n")[1] == "[00:04] 我：好的"
+
+
+def test_transcript_runs_one_speaker_on_in_a_paragraph(qt_app):
+    view = TranscriptView()
+    view.reset(True)
+    view.add(Line(1, 3, OTHERS, "我觉得这个方案的问题在于，"))
+    first = view.document().firstBlock()  # It grows in place: what is there is not rewritten.
+    view.add(Line(7, 9, OTHERS, "它没有考虑老用户。"))
+    view.add(Line(10, 11, OTHERS, "Beta"))
+    view.add(Line(12, 13, OTHERS, "test 先做。"))
+    assert view.document().blockCount() == 1 and view.document().firstBlock() == first
+    assert first.text() == "其他参会人   00:01 我觉得这个方案的问题在于，它没有考虑老用户。Beta test 先做。"
+    view.add(Line(30, 31, OTHERS, "下一件事。"))  # After a long silence: a new paragraph.
+    view.add(Line(5, 6, ME, "嗯。"))  # Late, in the middle: the paragraph it lands in splits.
+    assert [view.document().findBlockByNumber(index).text().split(" ")[0] for index in range(4)] == [
+        "其他参会人", "我", "其他参会人", "其他参会人"
+    ]
+    assert view.document().findBlockByNumber(2).text().endswith("00:07 它没有考虑老用户。Beta test 先做。")
+    again = TranscriptView()
+    again.load(True, list(view.lines))
+    assert again.toPlainText() == view.toPlainText()
 
 
 def test_transcript_without_labels_and_with_a_dropped_stretch(qt_app):
@@ -75,7 +96,7 @@ def test_transcript_without_labels_and_with_a_dropped_stretch(qt_app):
     view.add(Line(70, 72, ROOM, "继续"))
     text = view.toPlainText()
     assert "其他参会人" not in text and "约 60 秒没来得及识别" in text
-    assert view.plain_text() == "[00:01] 开始\n[01:10] 继续"
+    assert view.plain_text() == "[00:01] 开始\n\n[01:10] 继续"
     assert view.characters() == 4
 
 

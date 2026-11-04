@@ -1,7 +1,7 @@
 """Saving a meeting as a file: its minutes, its transcript, or both, as TXT, Markdown, Word or PDF.
 
-Everything starts from the same blocks (minutes.outline plus the transcript lines), so the formats
-say the same thing. Word files are written by hand (a .docx is a zip of a few XML parts) and PDFs
+Everything starts from the same blocks (minutes.outline plus the transcript's paragraphs, as the
+page shows them), so the formats say the same thing. Word files are written by hand (a .docx is a zip of a few XML parts) and PDFs
 with Qt, so neither needs a new dependency.
 """
 
@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from .meeting import LABELS, SKIPPED, Line, clock
+from .meeting import LABELS, Line, clock, paragraphs
 from .minutes import Minutes, outline, to_markdown, to_text, todo_text
 
 FORMATS = {
@@ -41,12 +41,9 @@ def document_blocks(
         transcript = True
     if transcript and lines:
         blocks.append(("heading", "会议文字"))
-        for line in lines:
-            if line.who == SKIPPED:
-                text = f"（约 {max(1, round(line.end - line.start))} 秒没来得及识别）"
-                blocks.append(("line", (clock(line.start), "", text)))
-            else:
-                blocks.append(("line", (clock(line.start), LABELS.get(line.who, "") if labels else "", line.text)))
+        for paragraph in paragraphs(sorted(lines, key=lambda line: (line.start, line.end)), labels):
+            who = LABELS.get(paragraph.who, "") if labels else ""
+            blocks.append(("line", (clock(paragraph.start), who, paragraph.text)))
     return blocks
 
 
@@ -79,10 +76,11 @@ def transcript_text(blocks: list[tuple[str, object]], kind: str) -> str:
             continue
         when, who, text = value
         if kind == "md":
-            rows.append(f"**{when}{' ' + who if who else ''}**　{text}\n")
+            rows.append(f"**{when}{' ' + who if who else ''}**　{text}")
         else:
             rows.append(f"[{when}] {who}：{text}" if who else f"[{when}] {text}")
-    return "\n".join(rows)
+    # Paragraphs run long: a blank line between them, in either format.
+    return "\n\n".join(rows) + "\n" if rows else ""
 
 
 # --- Word -------------------------------------------------------------------------------------
@@ -139,7 +137,7 @@ STYLES = (
     )
     + style("ListItem", "List Paragraph", "", '<w:ind w:left="360" w:hanging="240"/>')
     + style("Points", "Chapter Points", '<w:color w:val="3A3A3C"/>', '<w:spacing w:after="140"/>')
-    + style("Line", "Transcript", "", '<w:spacing w:after="60"/>')
+    + style("Line", "Transcript", "", '<w:spacing w:after="160"/>')
     + "</w:styles>"
 )
 

@@ -64,15 +64,33 @@ def test_repeated_measures_how_much_of_a_line_echoes_the_others():
     assert repeated("好的", "") == 0.0
 
 
+def test_paragraphs_hold_one_speaker_until_a_silence_or_a_minute():
+    from saywell.meeting import Paragraph, paragraphs
+
+    lines = [
+        Line(1, 3, OTHERS, "第一句，"), Line(5, 8, OTHERS, "接着说。"), Line(9, 10, ME, "好。"),
+        Line(11, 12, OTHERS, "那就"), Line(13, 14, OTHERS, "OK"), Line(15, 16, OTHERS, "app 了。"),
+        Line(30, 31, OTHERS, "过了很久。"), Line(32, 40, SKIPPED, ""), Line(41, 100, OTHERS, "很长"),
+        Line(102, 103, OTHERS, "一分钟后。"),
+    ]
+    assert paragraphs(lines, True) == [
+        Paragraph(1, OTHERS, "第一句，接着说。"), Paragraph(9, ME, "好。"), Paragraph(11, OTHERS, "那就OK app 了。"),
+        Paragraph(30, OTHERS, "过了很久。"), Paragraph(32, SKIPPED, "（约 8 秒没来得及识别）"),
+        Paragraph(41, OTHERS, "很长"), Paragraph(102, OTHERS, "一分钟后。"),
+    ]
+    # In a room everyone is one voice.
+    assert paragraphs(lines[:3], False) == [Paragraph(1, OTHERS, "第一句，接着说。好。")]
+
+
 def test_clock():
     assert clock(65) == "01:05" and clock(3725) == "1:02:05" and clock(-3) == "00:00"
 
 
 def test_lines_come_in_with_times_and_are_saved(tmp_path):
-    run = Recording(tmp_path).play({ROOM: track((1, 3, 0.3), (4, 5, 0.5), total=7)})
+    run = Recording(tmp_path).play({ROOM: track((1, 3, 0.3), (7, 8, 0.5), total=10)})
     assert [(line.start, line.end, line.who, line.text) for line in run.lines] == [
         (1.0, 3.0, ROOM, WORDS[0.3]),
-        (4.0, 5.0, ROOM, WORDS[0.5]),
+        (7.0, 8.0, ROOM, WORDS[0.5]),
     ]
     assert run.store.lines() == run.lines
     assert run.store.info()["title"] == "周会"
@@ -80,11 +98,24 @@ def test_lines_come_in_with_times_and_are_saved(tmp_path):
     assert all("预算" not in path.read_text(encoding="ascii") for path in run.store.folder.iterdir())
 
 
+def test_a_pause_to_think_does_not_cut_a_line_in_two(tmp_path):
+    run = Recording(tmp_path).play({ROOM: track((1, 3, 0.3), (4.5, 5, 0.3), total=8)})
+    assert [(line.start, line.end, line.text) for line in run.lines] == [(1.0, 5.0, WORDS[0.3])]
+
+
 def test_the_microphone_hearing_the_speakers_is_dropped_and_the_user_kept(tmp_path):
     others = track((1, 3, 0.3), total=8)
-    mine = track((1.15, 3.15, 0.3), (5, 6, 0.4), total=8)  # Echo of the meeting, then the user.
+    # Echo of the meeting, then the user soon after: not joined, so the echo goes and the user stays.
+    mine = track((1.15, 3.15, 0.3), (5, 6, 0.4), total=8)
     run = Recording(tmp_path).play({ME: mine, OTHERS: others})
     assert [(line.who, line.text) for line in run.lines] == [(OTHERS, WORDS[0.3]), (ME, WORDS[0.4])]
+
+
+def test_my_own_words_with_a_pause_in_them_are_one_line_while_the_app_is_quiet(tmp_path):
+    others = track((1, 3, 0.3), total=12)
+    mine = track((5, 6, 0.4), (7, 7.5, 0.4), total=12)
+    run = Recording(tmp_path).play({ME: mine, OTHERS: others})
+    assert [(line.who, line.start, line.end) for line in run.lines] == [(OTHERS, 1.0, 3.0), (ME, 5.0, 7.5)]
 
 
 def test_a_line_of_mine_waits_for_the_others_still_speaking(tmp_path):
@@ -105,7 +136,7 @@ def test_falling_far_behind_drops_the_oldest_speech(tmp_path, monkeypatch):
         return recognize_level(clip)
 
     run = Recording(tmp_path, slow)
-    sources = {ROOM: track((1, 2, 0.3), (3, 4, 0.4), (5, 6, 0.5), (7, 8, 0.5), total=10)}
+    sources = {ROOM: track((1, 2, 0.3), (5.5, 6.5, 0.4), (10, 11, 0.5), (14.5, 15.5, 0.5), total=17)}
     player = threading.Thread(target=run.play, args=(sources,))
     player.start()
     time.sleep(0.5)
@@ -120,7 +151,7 @@ def test_recognition_that_keeps_failing_stops_the_meeting(tmp_path):
     def broken(clip):
         raise RuntimeError("引擎没有响应")
 
-    run = Recording(tmp_path, broken).play({ROOM: track((1, 2, 0.3), (3, 4, 0.3), (5, 6, 0.3), total=8)})
+    run = Recording(tmp_path, broken).play({ROOM: track((1, 2, 0.3), (5.5, 6.5, 0.3), (10, 11, 0.3), total=13)})
     assert run.lines == []
     assert run.problems[0] == "识别出错：引擎没有响应"
     assert "已停止记录" in run.problems[-1]

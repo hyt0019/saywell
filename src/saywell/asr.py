@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import os
 import re
 from pathlib import Path
@@ -27,6 +28,12 @@ PAD = 2400
 # at its quietest moment, where cutting costs the recognizer least.
 SEGMENT_LIMIT = 25 * SAMPLE_RATE
 FRAME = SAMPLE_RATE // 50
+# The VAD cuts at every pause of half a second, but a pause of a few seconds is as often someone
+# thinking mid-sentence as the end of one. Recognized apart, every piece would end in a full stop;
+# so pieces with no longer pause between them are recognized together, each pause in the clip cut
+# down to PAUSE so that the model punctuates by meaning rather than by how long the silence was.
+JOIN = 3 * SAMPLE_RATE
+PAUSE = SAMPLE_RATE * 4 // 5
 
 
 def vad_config(directory: Path) -> sherpa_onnx.VadModelConfig:
@@ -61,6 +68,40 @@ def split_long(samples: np.ndarray, start: int, end: int, limit: int = SEGMENT_L
         start = cut
     pieces.append((start, end))
     return pieces
+
+
+def join_close(
+    pieces: list[tuple[int, int]], join: int = JOIN, limit: int = SEGMENT_LIMIT, pause: int = PAUSE
+) -> list[list[tuple[int, int]]]:
+    """The pieces in groups to recognize as one: each pause within a group at most `join`, and
+    the group no longer than limit once its pauses are cut down to `pause`."""
+    groups: list[list[tuple[int, int]]] = []
+    length = 0
+    for start, end in pieces:
+        if groups:
+            gap = start - groups[-1][-1][1]
+            grown = length + min(gap, pause) + end - start
+            if gap <= join and grown <= limit:
+                groups[-1].append((start, end))
+                length = grown
+                continue
+        groups.append([(start, end)])
+        length = end - start
+    return groups
+
+
+def shorten_pauses(clip: np.ndarray, pieces: list[tuple[int, int]], pause: int = PAUSE) -> np.ndarray:
+    """The clip with each pause between pieces (given as indices into it) cut down to `pause`,
+    keeping its two ends, where the sounds before and after it fade."""
+    parts, position = [], 0
+    for (_, end), (start, _) in itertools.pairwise(pieces):
+        if start - end > pause:
+            parts.append(clip[position : end + pause // 2])
+            position = start - pause // 2
+    if not parts:
+        return clip
+    parts.append(clip[position:])
+    return np.concatenate(parts)
 
 
 def tidy_spacing(text: str) -> str:
@@ -153,18 +194,21 @@ class LocalRecognizer:
             item = vad.front
             segments.append((item.start, item.start + len(item.samples)))
             vad.pop()
-        segments = [piece for start, end in segments for piece in split_long(samples, start, end)]
+        pieces = [piece for start, end in segments for piece in split_long(samples, start, end)]
+        groups = join_close(pieces)
         texts = []
-        for index, (start, end) in enumerate(segments):
+        for index, group in enumerate(groups):
             if cancel and cancel.is_set():
                 raise Cancelled("已取消识别。")
-            # Add context without ever overlapping adjacent recognized segments; pieces of one
+            # Add context without ever overlapping adjacent recognized groups; pieces of one
             # split stretch meet at the cut and get none across it.
-            previous = segments[index - 1][1] if index else 0
-            following = segments[index + 1][0] if index + 1 < len(segments) else samples.size
+            start, end = group[0][0], group[-1][1]
+            previous = groups[index - 1][-1][1] if index else 0
+            following = groups[index + 1][0][0] if index + 1 < len(groups) else samples.size
             left = max(0, start - PAD, (previous + start) // 2)
             right = min(samples.size, end + PAD, (following + end) // 2)
-            text = self.recognize(samples[left:right], vocabulary, cancel)
+            clip = shorten_pauses(samples[left:right], [(low - left, high - left) for low, high in group])
+            text = self.recognize(clip, vocabulary, cancel)
             if text:
                 texts.append(text)
                 if partial:
@@ -186,14 +230,16 @@ def join_segments(texts: list[str]) -> str:
 
 class SpeechStream:
     """The live counterpart of transcribe's cutting, for audio that keeps arriving: feed it chunks
-    and get back each utterance once it has ended, as (start, end, clip), with start and end
-    counted in samples from the first chunk and the clip padded the way transcribe pads. Only the
-    last `keep` samples are held, for padding and for comparing sources."""
+    and get back what was said once it has ended, as (start, end, clip), with start and end
+    counted in samples from the first chunk and the clip made the way transcribe makes it: speech
+    with no pause longer than JOIN in it comes as one, its pauses shortened and both ends padded.
+    Only the last `keep` samples are held, for padding and for comparing sources."""
 
-    # How long the end of an utterance waits for what follows, to pad it without running into the
-    # next one: a start the VAD has not confirmed yet lies at most min_speech_duration plus a
-    # couple of windows back, so after this much quiet the full padding is safe.
-    HOLD = 8800
+    # Speech up to this long comes as one: less than for a recording, so that the transcript does
+    # not fall far behind someone who talks on and on.
+    LIMIT = 20 * SAMPLE_RATE
+    # What `judge` may say of a piece of speech: leave it out, or hand it out on its own.
+    DROP, ALONE = "drop", "alone"
 
     def __init__(self, directory: Path, keep: int = 120 * SAMPLE_RATE):
         self.config = config = vad_config(directory)
@@ -206,8 +252,13 @@ class SpeechStream:
         self.total = 0  # Samples received.
         self.fed = 0  # Samples the VAD has heard; it decides as of here, however much is waiting.
         self.waiting = np.empty(0, dtype=np.float32)  # Less than a VAD window, not yet given to it.
-        self.previous_end = 0
-        self.held: tuple[int, int, np.ndarray] | None = None
+        self.previous_end = 0  # Where the last utterance the VAD found ends.
+        self.released = 0  # Where the speech in the last clip handed out ends.
+        self.group: list[tuple[int, int]] = []  # Pieces of speech gathered to hand out as one.
+        self.length = 0  # Their length with the pauses shortened.
+        self.alone = False  # The group is a piece that must not be joined.
+        # Called with each piece's start and end before it is gathered; returns DROP, ALONE or "".
+        self.judge: Callable[[int, int], str] | None = None
 
     def feed(self, samples: np.ndarray) -> list[tuple[int, int, np.ndarray]]:
         samples = np.asarray(samples, dtype=np.float32)
@@ -221,7 +272,7 @@ class SpeechStream:
         for start in range(0, whole, self.window):
             self.vad.accept_waveform(waiting[start : start + self.window])
             self.fed += self.window
-            if self.held or not self.vad.empty():
+            if self.group or not self.vad.empty():
                 found += self._collect()
         self.waiting = waiting[whole:].copy()
         return found
@@ -239,7 +290,7 @@ class SpeechStream:
         here, and counting goes on after the gap with a fresh VAD instead of minutes of zeros."""
         found = self.finish()
         self.total += count
-        self.base = self.fed = self.first = self.previous_end = self.total
+        self.base = self.fed = self.first = self.previous_end = self.released = self.total
         self.chunks.clear()
         self.vad = sherpa_onnx.VoiceActivityDetector(self.config, buffer_size_in_seconds=180)
         return found
@@ -253,8 +304,8 @@ class SpeechStream:
         """Everything said before this sample has been handed out. While someone speaks that is
         only up to the last utterance; in a pause, up to what the VAD heard, less the speech it
         may not have confirmed yet."""
-        if self.held:
-            return self.held[0]
+        if self.group:
+            return self.group[0][0]
         if self.vad.is_speech_detected():
             return self.previous_end
         unconfirmed = int(self.config.silero_vad.min_speech_duration * SAMPLE_RATE) + 2 * self.window
@@ -282,28 +333,41 @@ class SpeechStream:
             item = self.vad.front
             start, speech = self.base + item.start, np.asarray(item.samples, dtype=np.float32)
             self.vad.pop()
-            if self.held:
-                found.append(self._release(start))
-            pieces = split_long(speech, 0, speech.size)
-            for index, (low, high) in enumerate(pieces):
-                begin = start + low
-                # Pieces of one split stretch meet at the cut and get no padding across it.
-                left = max(begin - PAD, (self.previous_end + begin) // 2) if index == 0 else begin
-                piece = (begin, start + high, np.concatenate((self.audio(left, begin), speech[low:high])))
-                if index < len(pieces) - 1:
-                    found.append(piece)
-                else:
-                    self.held = piece
+            for low, high in split_long(speech, 0, speech.size):
+                found += self._gather(start + low, start + high)
             self.previous_end = start + speech.size
-        if self.held and (final or self.fed - self.held[1] >= self.HOLD):
-            # Speech that started again without being cut off yet gets no padding after.
-            following = self.total if final else self.held[1] if self.vad.is_speech_detected() else self.fed
-            found.append(self._release(following))
+        # Handed out once nobody has spoken for longer than a pause that would join on. In that
+        # much quiet a start the VAD has not confirmed yet lies well past the padding.
+        if self.group and (final or not self.vad.is_speech_detected() and self.fed - self.group[-1][1] > JOIN):
+            found.append(self._release(self.total if final else self.fed))
+        return found
+
+    def _gather(self, start: int, end: int) -> list[tuple[int, int, np.ndarray]]:
+        """Add a piece of speech to the group, handing the group out first if it cannot join."""
+        verdict = self.judge(start, end) if self.judge else ""
+        if verdict == self.DROP:
+            return []
+        found = []
+        if self.group:
+            gap = start - self.group[-1][1]
+            grown = self.length + min(gap, PAUSE) + end - start
+            if (gap <= JOIN and grown <= self.LIMIT and end - self.group[0][0] <= self.keep // 2
+                    and not self.alone and verdict != self.ALONE):
+                self.group.append((start, end))
+                self.length = grown
+                return found
+            found.append(self._release(start))
+        self.group, self.length, self.alone = [(start, end)], end - start, verdict == self.ALONE
         return found
 
     def _release(self, following: int) -> tuple[int, int, np.ndarray]:
-        """The held end of an utterance, padded up to the middle of the gap before `following`."""
-        start, end, clip = self.held
-        self.held = None
+        """The group as one clip: padded up to the middle of the gaps around it, so it never
+        overlaps the clips before and after it (pieces of one split stretch meet at the cut and
+        get no padding across it), with its pauses shortened."""
+        group, self.group = self.group, []
+        start, end = group[0][0], group[-1][1]
+        left = max(start - PAD, (self.released + start) // 2)
         right = min(end + PAD, (following + end) // 2)
-        return start, end, np.concatenate((clip, self.audio(end, right)))
+        self.released = end
+        clip = shorten_pauses(self.audio(left, right), [(low - left, high - left) for low, high in group])
+        return start, end, clip

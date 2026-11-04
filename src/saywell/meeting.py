@@ -1,8 +1,8 @@
 """Meetings: the chosen sources transcribed live, the transcript written to disk as it grows.
 
-Audio lives only until it is recognized: each source is cut at pauses (asr.SpeechStream), the
-pieces wait in a bounded queue and are recognized one at a time, oldest first. Only text is
-saved, encrypted for the current Windows user like the history.
+Audio lives only until it is recognized: each source is cut at its longer pauses
+(asr.SpeechStream), the pieces wait in a bounded queue and are recognized one at a time, oldest
+first. Only text is saved, encrypted for the current Windows user like the history.
 """
 
 from __future__ import annotations
@@ -47,6 +47,10 @@ ECHO_MARGIN = 2.0
 # speech, on which a model makes up words; speech, even quiet, is 20 dB and more above it. Not
 # applied to an app, whose level follows its volume slider.
 QUIET = -50.0
+# Speech on the microphone while the app played sound for at least this share of it may be its
+# echo. Recognized on its own, so that it is dropped (or kept) whole, never joined to the user's
+# own words before or after it.
+OVERLAP = 0.5
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,57 @@ def clock(seconds: float) -> str:
     seconds = max(0, int(seconds))
     hours, rest = divmod(seconds, 3600)
     return f"{hours}:{rest // 60:02d}:{rest % 60:02d}" if hours else f"{rest // 60:02d}:{rest % 60:02d}"
+
+
+# --- Paragraphs --------------------------------------------------------------------------------
+
+# The transcript is read in paragraphs, each one speaker's words. A new one starts when someone
+# else speaks, after a silence this long, or once the paragraph has gone on for TURN seconds, so
+# that a time is never far away.
+TURN = 60.0
+SILENCE = 10.0
+
+
+@dataclass(frozen=True)
+class Paragraph:
+    start: float
+    who: str
+    text: str
+
+
+def skipped_text(line: Line) -> str:
+    return f"（约 {max(1, round(line.end - line.start))} 秒没来得及识别）"
+
+
+def paragraphs(lines: list[Line], labels: bool) -> list[Paragraph]:
+    """The lines, in time order, as paragraphs. Without labels (a room) all speakers are one; a
+    stretch that could not be recognized stands on its own."""
+    result: list[Paragraph] = []
+    previous: Line | None = None
+    for line in lines:
+        if line.who == SKIPPED:
+            result.append(Paragraph(line.start, SKIPPED, skipped_text(line)))
+            previous = None
+        elif (
+            previous is not None
+            and (line.who == previous.who or not labels)
+            and line.start - previous.end < SILENCE
+            and line.start - result[-1].start < TURN
+        ):
+            last = result[-1]
+            result[-1] = Paragraph(last.start, last.who, run_on(last.text, line.text))
+            previous = line
+        else:
+            result.append(Paragraph(line.start, line.who, line.text))
+            previous = line
+    return result
+
+
+def run_on(text: str, more: str) -> str:
+    """Two pieces of speech as one: English needs a space between them, Chinese does not."""
+    if text and more and text[-1].isascii() and text[-1].isalnum() and more[0].isascii() and more[0].isalnum():
+        return f"{text} {more}"
+    return text + more
 
 
 # --- Echo --------------------------------------------------------------------------------------
@@ -263,8 +318,35 @@ class MeetingRecorder:
         chunks: queue.SimpleQueue = queue.SimpleQueue()
         timeline = Timeline(chunks.put, self.started, skip=chunks.put)
         source = Source(who, SpeechStream(self.vad_directory), timeline, chunks=chunks, exe=exe)
+        source.stream.judge = lambda start, end: self._judge(source, start, end)
         self.sources.append(source)
         return source
+
+    def _judge(self, source: Source, start: int, end: int) -> str:
+        """Room noise on the microphone is left out; speech on it that may be the app's echo is
+        recognized on its own (see SpeechStream.judge)."""
+        if source.who not in (ME, ROOM):
+            return ""
+        if peak_level(source.stream.audio(start, end)) < QUIET:
+            return source.stream.DROP
+        if source.who == ME and self._app_sounding(start, end) >= OVERLAP:
+            return source.stream.ALONE
+        return ""
+
+    def _app_sounding(self, start: int, end: int) -> float:
+        """The share of 100 ms frames in [start, end) in which a recorded app played sound."""
+        frame = SAMPLE_RATE // 10
+        count = max(1, (end - start) // frame)
+        sounding = np.zeros(count, dtype=bool)
+        for other in self.sources:
+            if other.who != OTHERS:
+                continue
+            audio = other.stream.audio(start, start + count * frame)
+            frames = audio[: audio.size // frame * frame].reshape(-1, frame)
+            if frames.size:
+                levels = 20 * np.log10(np.sqrt(np.mean(np.square(frames, dtype=np.float64), axis=1)) + 1e-9)
+                sounding[: levels.size] |= levels > QUIET
+        return float(sounding.mean())
 
     def add_microphone(self, device: int | None, who: str) -> None:
         from .capture import MicAudio
@@ -326,7 +408,10 @@ class MeetingRecorder:
         try:
             while True:
                 stopping = self.stopping.is_set()
-                for source in self.sources:
+                # The app first: whether speech on the microphone may be its echo is judged by
+                # the app's sound at the same moment (see _judge).
+                ordered = sorted(self.sources, key=lambda source: source.who == ME)
+                for source in ordered:
                     self._drain(source)
                 if stopping:
                     break
@@ -337,7 +422,7 @@ class MeetingRecorder:
                     except Exception:
                         pass  # Only a convenience; the meeting goes on without it.
                 time.sleep(0.02)
-            for source in self.sources:
+            for source in ordered:
                 for found in source.stream.finish():
                     self._heard(source, *found)
                 source.settled = source.stream.total
@@ -371,8 +456,6 @@ class MeetingRecorder:
         source.heard = source.heard or loudest > 1e-4
 
     def _heard(self, source: Source, start: int, end: int, clip: np.ndarray) -> None:
-        if source.who in (ME, ROOM) and peak_level(clip) < QUIET:
-            return
         with self.condition:
             heapq.heappush(self.waiting, Waiting(start, next(self.order), end, source.who, clip))
             self.waiting_samples += clip.size

@@ -41,7 +41,20 @@ from .audio import AudioError
 from .capture import AudioApp, audio_apps, loopback_supported
 from .export import FORMATS
 from .icons import draw_icon
-from .meeting import LABELS, ME, OTHERS, ROOM, SKIPPED, Line, MeetingRecorder, MeetingStore, clock, list_meetings
+from .meeting import (
+    LABELS,
+    ME,
+    OTHERS,
+    ROOM,
+    SKIPPED,
+    Line,
+    MeetingRecorder,
+    MeetingStore,
+    Paragraph,
+    clock,
+    list_meetings,
+    paragraphs,
+)
 from .minutes import (
     PREPARE_FROM,
     TEMPLATES,
@@ -279,11 +292,9 @@ class EdgeFade(QWidget):
 
 
 class TranscriptView(QTextEdit):
-    """The meeting's lines in the order they were said, one paragraph each. A small heading with
-    who and when starts each turn: a new speaker, or a minute after the last heading. Lines that
-    arrive late (the microphone waits for the others to be recognized) go where they belong."""
-
-    TURN = 60.0
+    """The meeting's lines in the order they were said, in paragraphs (meeting.paragraphs), each
+    led by who and when. Lines that arrive late (the microphone waits for the others to be
+    recognized) go where they belong."""
 
     def __init__(self):
         super().__init__()
@@ -295,7 +306,7 @@ class TranscriptView(QTextEdit):
                            " selection-background-color: #CCE0FA; }")
         self.document().setDocumentMargin(4)
         self.lines: list[Line] = []
-        self.headed: list[bool] = []
+        self.shown: list[Paragraph] = []  # What the document holds, a block each.
         self.labels = True
         self.fades = (EdgeFade(self, True), EdgeFade(self, False))
         bar = self.verticalScrollBar()
@@ -318,20 +329,15 @@ class TranscriptView(QTextEdit):
 
     def reset(self, labels: bool, placeholder: str = ""):
         self.clear()
-        self.lines, self.headed = [], []
+        self.lines, self.shown = [], []
         self.labels = labels
         self.setPlaceholderText(placeholder)
 
     def load(self, labels: bool, lines: list[Line], placeholder: str = "") -> None:
-        """A saved meeting, all at once (adding its lines one by one would be slow)."""
+        """A saved meeting, all at once."""
         self.reset(labels, placeholder)
         self.lines = sorted(lines, key=lambda line: (line.start, line.end))
-        self.headed = [False] * len(self.lines)
-        cursor = QTextCursor(self.document())
-        for index in range(len(self.lines)):
-            if index:
-                cursor.insertBlock()
-            self._write(cursor, index)
+        self._render()
         self.verticalScrollBar().setValue(0)
 
     def characters(self) -> int:
@@ -340,80 +346,79 @@ class TranscriptView(QTextEdit):
     def add(self, line: Line) -> None:
         bar = self.verticalScrollBar()
         following = bar.value() >= bar.maximum() - 4
-        index = bisect.bisect_right([(item.start, item.end) for item in self.lines], (line.start, line.end))
-        self.lines.insert(index, line)
-        self.headed.insert(index, False)
-        cursor = QTextCursor(self.document())
-        if len(self.lines) == 1:
-            cursor.movePosition(QTextCursor.MoveOperation.Start)
-        elif index == len(self.lines) - 1:
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            cursor.insertBlock()
-        else:
-            cursor.setPosition(self.document().findBlockByNumber(index).position())
-            cursor.insertBlock()
-            cursor.movePosition(QTextCursor.MoveOperation.PreviousBlock)
-        self._write(cursor, index)
-        # A heading further on may now be one too many, or missing.
-        for later in range(index + 1, len(self.lines)):
-            if self._heading(later) == self.headed[later]:
-                continue
-            block = self.document().findBlockByNumber(later)
-            cursor = QTextCursor(block)
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
-            cursor.removeSelectedText()
-            self._write(cursor, later)
+        bisect.insort(self.lines, line, key=lambda item: (item.start, item.end))
+        self._render()
         if following:
             bar.setValue(bar.maximum())
 
-    def _heading(self, index: int) -> bool:
-        if index == 0:
-            return True
-        line, previous = self.lines[index], self.lines[index - 1]
-        if line.who != previous.who and self.labels or SKIPPED in (line.who, previous.who):
-            return True
-        last = next(i for i in range(index - 1, -1, -1) if self.headed[i])
-        return line.start - self.lines[last].start >= self.TURN
+    def _render(self) -> None:
+        """Bring the document in line with the lines, rewriting only from the first paragraph that
+        changed. Mostly the last paragraph just grows: then only its new words are written, so a
+        selection in it survives."""
+        new = paragraphs(self.lines, self.labels)
+        old = self.shown
+        same = 0
+        while same < min(len(old), len(new)) and old[same] == new[same]:
+            same += 1
+        cursor = QTextCursor(self.document())
+        if same == len(old) - 1 and same < len(new) and self._grows(old[same], new[same]):
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.insertText(new[same].text[len(old[same].text):], self._text_format(new[same]))
+            same += 1
+        elif same < len(old):
+            if same:
+                block = self.document().findBlockByNumber(same - 1)
+                cursor.setPosition(block.position() + block.length() - 1)
+            cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+        else:
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+        for index in range(same, len(new)):
+            if index:
+                cursor.insertBlock()
+            self._write(cursor, new[index], index)
+        self.shown = new
 
-    def _write(self, cursor: QTextCursor, index: int) -> None:
-        line = self.lines[index]
-        headed = self.headed[index] = self._heading(index)
-        block = QTextBlockFormat()
-        block.setTopMargin(14 if headed and index else 2)
-        block.setLineHeight(150, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
-        cursor.setBlockFormat(block)
-        if headed:
-            who = LABELS.get(line.who, "") if self.labels else ""
-            if who:
-                name = QTextCharFormat()
-                name.setFontPointSize(9.5)
-                name.setFontWeight(QFont.Weight.DemiBold)
-                name.setForeground(QColor(ACCENT if line.who == ME else "#3A3A3C"))
-                cursor.insertText(who + "   ", name)
-            when = QTextCharFormat()
-            when.setFontPointSize(9)
-            when.setForeground(QColor(FAINT))
-            cursor.insertText(clock(line.start), when)
-            cursor.insertText(" ", when)
+    @staticmethod
+    def _grows(old: Paragraph, new: Paragraph) -> bool:
+        return old.start == new.start and old.who == new.who and new.text.startswith(old.text)
+
+    @staticmethod
+    def _text_format(paragraph: Paragraph) -> QTextCharFormat:
         text = QTextCharFormat()
         text.setFontPointSize(11.5)
-        if line.who == SKIPPED:
-            text.setForeground(QColor(FAINT))
-            text.setFontItalic(True)
-            cursor.insertText(f"（约 {max(1, round(line.end - line.start))} 秒没来得及识别）", text)
-        else:
-            text.setForeground(QColor(INK))
-            cursor.insertText(line.text, text)
+        text.setForeground(QColor(FAINT if paragraph.who == SKIPPED else INK))
+        text.setFontItalic(paragraph.who == SKIPPED)
+        return text
+
+    def _write(self, cursor: QTextCursor, paragraph: Paragraph, index: int) -> None:
+        block = QTextBlockFormat()
+        block.setTopMargin(14 if index else 2)
+        block.setLineHeight(150, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+        cursor.setBlockFormat(block)
+        who = LABELS.get(paragraph.who, "") if self.labels else ""
+        if who:
+            name = QTextCharFormat()
+            name.setFontPointSize(9.5)
+            name.setFontWeight(QFont.Weight.DemiBold)
+            name.setForeground(QColor(ACCENT if paragraph.who == ME else "#3A3A3C"))
+            cursor.insertText(who + "   ", name)
+        when = QTextCharFormat()
+        when.setFontPointSize(9)
+        when.setForeground(QColor(FAINT))
+        cursor.insertText(clock(paragraph.start) + " ", when)
+        cursor.insertText(paragraph.text, self._text_format(paragraph))
 
     def plain_text(self) -> str:
-        """The transcript for copying: a line per utterance, with time and speaker."""
+        """The transcript for copying: its paragraphs with time and speaker, a blank line apart."""
         rows = []
-        for line in self.lines:
-            if line.who == SKIPPED:
+        for paragraph in paragraphs(self.lines, self.labels):
+            if paragraph.who == SKIPPED:
                 continue
-            who = LABELS.get(line.who, "") if self.labels else ""
-            rows.append(f"[{clock(line.start)}] {who}：{line.text}" if who else f"[{clock(line.start)}] {line.text}")
-        return "\n".join(rows)
+            who = LABELS.get(paragraph.who, "") if self.labels else ""
+            when = clock(paragraph.start)
+            rows.append(f"[{when}] {who}：{paragraph.text}" if who else f"[{when}] {paragraph.text}")
+        return "\n\n".join(rows)
 
 
 # --- The page -----------------------------------------------------------------------------------
