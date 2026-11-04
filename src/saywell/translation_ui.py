@@ -9,6 +9,7 @@ its selection, so 替换 can type over it and the user can keep working with the
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import replace
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
@@ -496,6 +497,10 @@ class SelectionTranslate:
         self.mouse_timer.timeout.connect(lambda: self.reader.ask(("mouse", self.mouse_at)))
         self.mouse_at = (0, 0)
         self.enabled = False
+        # A shortcut that is one key on its own (a tap of right Alt) is watched by its own hook.
+        self.solo = None
+        self.solo_down = 0.0
+        self.solo_chord = False
 
     @property
     def settings(self):
@@ -505,7 +510,7 @@ class SelectionTranslate:
 
     def configure(self) -> str:
         """Follow the settings; returns a problem to show, or ""."""
-        from .shortcuts import parse_shortcut
+        from .shortcuts import parse_shortcut, shortcut_label
 
         settings = self.settings
         hotkeys = self.window.hotkeys
@@ -513,10 +518,16 @@ class SelectionTranslate:
         problem = ""
         if hotkeys:
             hotkeys.unregister(self.HOTKEY)
+            self._listen_solo(None)
             if self.enabled:
                 shortcut = parse_shortcut(settings.selection_hotkey)
-                if shortcut is None or shortcut.solo or not hotkeys.register(self.HOTKEY, shortcut.modifiers, shortcut.key):
-                    problem = f"划词翻译的快捷键 {settings.selection_hotkey} 被其他程序占用，请在设置中更换。"
+                if shortcut is not None and shortcut.name == settings.hotkey:
+                    problem = "划词翻译的快捷键和录音快捷键相同，请在设置中更换。"
+                elif shortcut is None or not (
+                    self._listen_solo(shortcut) if shortcut.solo
+                    else hotkeys.register(self.HOTKEY, shortcut.modifiers, shortcut.key)
+                ):
+                    problem = f"划词翻译的快捷键 {shortcut_label(settings.selection_hotkey)} 被其他程序占用，请在设置中更换。"
         self._watch(self.enabled and settings.selection_trigger in ("icon", "direct"))
         if not self.enabled:
             self.icon.hide()
@@ -524,6 +535,46 @@ class SelectionTranslate:
                 self.popup.hide()
                 self._closed()  # Esc must not stay taken from every program.
         return problem
+
+    def suspend(self):
+        """Stop listening for the shortcut until configure() runs again."""
+        if self.window.hotkeys:
+            self.window.hotkeys.unregister(self.HOTKEY)
+        self._listen_solo(None)
+
+    def _listen_solo(self, shortcut) -> bool:
+        """Watch a lone key (None stops watching). A tap translates; CapsLock is kept from
+        other programs and re-sent when it was not tapped, so translating does not flip it."""
+        from .windows import SoloKeyHook
+
+        if self.solo is not None:
+            self.solo.stop()
+            self.solo = None
+        if shortcut is None:
+            return True
+        hook = SoloKeyHook(shortcut.key, swallow=shortcut.name == "CapsLock", mask=shortcut.name == "RightAlt")
+        hook.events.pressed.connect(self._solo_pressed)
+        hook.events.chorded.connect(self._solo_chorded)
+        hook.events.released.connect(self._solo_released)
+        if not hook.start():
+            return False
+        self.solo = hook
+        return True
+
+    def _solo_pressed(self):
+        self.solo_down, self.solo_chord = time.monotonic(), False
+
+    def _solo_chorded(self):
+        self.solo_chord = True
+
+    def _solo_released(self):
+        from .shortcuts import SOLO_TAP_MS
+        from .windows import tap_key
+
+        if not self.solo_chord and time.monotonic() - self.solo_down < SOLO_TAP_MS / 1000:
+            self.hotkey()
+        elif self.solo is not None and self.solo.swallow:
+            tap_key(self.solo.key)
 
     def _watch(self, on: bool):
         if on and self.watcher is None:
@@ -537,6 +588,7 @@ class SelectionTranslate:
             self.watcher = None
 
     def shutdown(self):
+        self._listen_solo(None)
         self._watch(False)
         self.reader.stop()
         if self.cancel:

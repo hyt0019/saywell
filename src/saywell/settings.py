@@ -129,7 +129,7 @@ class Settings:
     # selection_excluded (executables, lower case) are left alone.
     selection_translate: bool = False
     selection_trigger: str = "icon"
-    selection_hotkey: str = "Alt+T"
+    selection_hotkey: str = "RightAlt"
     selection_native: str = "简体中文"
     selection_foreign: str = "英语"
     selection_style: str = "natural"

@@ -81,7 +81,16 @@ from .models import (
 )
 from .settings import Settings, read_key, save_key
 from .vocabulary import FILE_FILTER, LexiconError, import_lexicon
-from .shortcuts import KEY_NAMES, RECORDING_CHOICES, shortcut_label, shortcut_name, shortcut_problem, usage_hint
+from .shortcuts import (
+    KEY_NAMES,
+    RECORDING_CHOICES,
+    SELECTION_CHOICES,
+    selection_hint,
+    shortcut_label,
+    shortcut_name,
+    shortcut_problem,
+    usage_hint,
+)
 from .translation import LANGUAGES as TRANSLATION_LANGUAGES
 from .translation import SCRIPTS as TRANSLATION_SCRIPTS
 from .translation import STYLES as TRANSLATION_STYLES
@@ -1763,7 +1772,6 @@ def footer_bar() -> tuple[QFrame, QHBoxLayout]:
 
 CUSTOM_HOTKEY = "custom"
 SELECTION_TRIGGERS = ("icon", "direct", "hotkey")
-SELECTION_HOTKEYS = ("Alt+T", "Ctrl+Alt+T", "Ctrl+Alt+D", "F9")
 
 
 class HotkeyRecorder(QDialog):
@@ -2002,20 +2010,18 @@ class SettingsDialog(QDialog):
         keys = QVBoxLayout()
         keys.setSpacing(4)
         self.selection_hotkey = ComboBox()
-        for name in SELECTION_HOTKEYS:
-            self.selection_hotkey.addItem(name, name)
-        if settings.selection_hotkey not in SELECTION_HOTKEYS:
-            self.selection_hotkey.addItem(settings.selection_hotkey, settings.selection_hotkey)
+        for name in SELECTION_CHOICES:
+            self.selection_hotkey.addItem(shortcut_label(name), name)
+        if settings.selection_hotkey not in SELECTION_CHOICES:
+            self.selection_hotkey.addItem(shortcut_label(settings.selection_hotkey), settings.selection_hotkey)
         self.selection_hotkey.addItem("自定义…", CUSTOM_HOTKEY)
         self.selection_hotkey.setCurrentIndex(max(0, self.selection_hotkey.findData(settings.selection_hotkey)))
         self.selection_hotkey_choice = settings.selection_hotkey
         self.selection_hotkey.activated.connect(self.choose_selection_hotkey)
         self.selection_hotkey.setMaximumWidth(200)
         keys.addWidget(self.selection_hotkey)
-        keys.addWidget(label(
-            "选中文字后按一下，任何触发方式下都能用。读不到文字时会用 Ctrl+C 复制一次，随后恢复剪贴板；终端里不会。",
-            "muted", wrap=True,
-        ))
+        self.selection_key_hint = label(selection_hint(settings.selection_hotkey), "muted", wrap=True)
+        keys.addWidget(self.selection_key_hint)
         form.addRow(field_label("快捷键"), keys)
         way = QVBoxLayout()
         way.setSpacing(4)
@@ -2221,9 +2227,10 @@ class SettingsDialog(QDialog):
                 self.selection_hotkey.setCurrentIndex(self.selection_hotkey.findData(self.selection_hotkey_choice))
                 return
             if self.selection_hotkey.findData(name) < 0:
-                self.selection_hotkey.insertItem(self.selection_hotkey.count() - 1, name, name)
+                self.selection_hotkey.insertItem(self.selection_hotkey.count() - 1, shortcut_label(name), name)
             self.selection_hotkey.setCurrentIndex(self.selection_hotkey.findData(name))
         self.selection_hotkey_choice = name
+        self.selection_key_hint.setText(selection_hint(name))
 
     def update_selection_hint(self, *_):
         hints = (

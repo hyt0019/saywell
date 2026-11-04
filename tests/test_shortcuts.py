@@ -350,3 +350,12 @@ def test_settings_check_for_updates_and_keep_the_choice(qt_app, monkeypatch):
     dialog.save()
     assert dialog.updated.check_updates is False
     dialog.close()
+
+
+def test_the_selection_shortcut_is_one_key_and_its_hint_says_how_to_press_it():
+    from saywell.shortcuts import SELECTION_CHOICES, selection_hint
+
+    assert SELECTION_CHOICES[0] == "RightAlt"
+    assert all(parse_shortcut(name) is not None for name in SELECTION_CHOICES)
+    assert "单独轻按一下右 Alt，" in selection_hint("RightAlt")
+    assert selection_hint("F9").startswith("选中文字后按一下 F9，")

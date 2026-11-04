@@ -169,7 +169,7 @@ class Hotkeys:
 
 
 def test_esc_is_only_taken_while_the_popup_is_open(run):
-    window, controller = run(selection_trigger="direct")
+    window, controller = run(selection_trigger="direct", selection_hotkey="Alt+T")
     window.hotkeys = Hotkeys()
     del controller.configure  # The real one, with these hotkeys.
     controller._watch = lambda on: None
@@ -182,6 +182,65 @@ def test_esc_is_only_taken_while_the_popup_is_open(run):
     window.settings = replace(window.settings, selection_translate=False)
     controller.configure()  # Turned off with the popup open.
     assert window.hotkeys.registered == set() and not controller.popup.isVisible()
+
+
+class FakeSoloHook:
+    """Stands in for the low-level keyboard hook; the test drives its events."""
+
+    made = []
+
+    def __init__(self, key, swallow=False, mask=False):
+        from saywell.windows import SoloKeyEvents
+
+        self.key, self.swallow, self.mask = key, swallow, mask
+        self.events = SoloKeyEvents()
+        self.stopped = False
+        FakeSoloHook.made.append(self)
+
+    def start(self):
+        return True
+
+    def stop(self):
+        self.stopped = True
+
+
+def test_a_tap_of_right_alt_translates_and_a_chord_or_a_long_press_does_not(run, monkeypatch):
+    FakeSoloHook.made.clear()
+    monkeypatch.setattr("saywell.windows.SoloKeyHook", FakeSoloHook)
+    window, controller = run()  # The default: a tap of right Alt.
+    assert window.settings.selection_hotkey == "RightAlt"
+    window.hotkeys = Hotkeys()
+    del controller.configure
+    controller._watch = lambda on: None
+    assert controller.configure() == "" and window.hotkeys.registered == set()
+    hook = FakeSoloHook.made[-1]
+    assert (hook.key, hook.mask, hook.swallow) == (0xA5, True, False)  # The menu bar stays shut.
+    asked = []
+    controller.reader.ask = asked.append
+    hook.events.pressed.emit()
+    hook.events.released.emit()
+    assert [kind for kind, _where in asked] == ["hotkey"]
+    hook.events.pressed.emit()
+    hook.events.chorded.emit()  # Right Alt as part of a shortcut.
+    hook.events.released.emit()
+    controller.solo_down -= 1.0
+    hook.events.pressed.emit()
+    controller.solo_down -= 1.0  # Held for a second.
+    hook.events.released.emit()
+    assert len(asked) == 1
+    controller.suspend()
+    assert hook.stopped and controller.solo is None
+
+
+def test_the_translation_key_cannot_be_the_recording_key(run, monkeypatch):
+    FakeSoloHook.made.clear()
+    monkeypatch.setattr("saywell.windows.SoloKeyHook", FakeSoloHook)
+    window, controller = run(hotkey="RightAlt")
+    window.hotkeys = Hotkeys()
+    del controller.configure
+    controller._watch = lambda on: None
+    assert "录音快捷键相同" in controller.configure()
+    assert FakeSoloHook.made == [] and window.hotkeys.registered == set()
 
 
 def test_the_style_can_be_changed_in_the_popup_and_is_kept(run):

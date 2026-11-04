@@ -93,5 +93,5 @@ def test_selection_translation_is_off_until_turned_on_and_bad_choices_fall_back(
     path.write_text(json.dumps(saved), encoding="utf-8")
     loaded = settings.Settings.load(path)
     assert loaded.selection_translate and loaded.selection_style == "formal"
-    assert (loaded.selection_trigger, loaded.selection_native, loaded.selection_hotkey) == ("icon", "简体中文", "Alt+T")
+    assert (loaded.selection_trigger, loaded.selection_native, loaded.selection_hotkey) == ("icon", "简体中文", "RightAlt")
     assert loaded.selection_excluded == ["keepass.exe", "wechat.exe"]

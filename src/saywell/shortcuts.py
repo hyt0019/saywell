@@ -59,6 +59,9 @@ RESERVED = {
 }
 
 RECORDING_CHOICES = ("RightCtrl", "RightAlt", "CapsLock", "Alt+X", "Alt+C", "Alt+Q", "Alt+Z", "Ctrl+Space", "F8")
+# Selection translation is used in passing, so one key: a tap of a right-hand modifier (shorter
+# than SOLO_TAP_MS, nothing else pressed) or F9. Alt+T stays for those who want a combination.
+SELECTION_CHOICES = ("RightAlt", "RightCtrl", "F9", "Alt+T")
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,17 @@ def usage_hint(name: str, hold: bool) -> str:
             return f"单独按住{key}约 0.3 秒开始录音，松开结束；轻按或和其他键一起按时，仍是原来的功能。"
         return f"单独轻按一下{key}开始录音，再轻按一下结束；按住不放或和其他键一起按时，仍是原来的功能。"
     return f"按住{key}说话，松开结束。" if hold else f"按一下{key}开始录音，再按一下结束。"
+
+
+def selection_hint(name: str) -> str:
+    """How the selection translation shortcut is used, for the settings page."""
+    key = shortcut_label(name)
+    key = (" " if key[0].isascii() else "") + key  # A comma follows, so no space after it.
+    if name in SOLO_KEYS:
+        how = f"选中文字后单独轻按一下{key}，任何触发方式下都能用；和其他键一起按时仍是原来的功能。"
+    else:
+        how = f"选中文字后按一下{key}，任何触发方式下都能用。"
+    return how + "读不到文字时会用 Ctrl+C 复制一次，随后恢复剪贴板；终端里不会。"
 
 
 def shortcut_problem(name: str) -> str | None:
