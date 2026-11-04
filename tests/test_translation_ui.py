@@ -154,3 +154,31 @@ def test_turning_it_off_hides_everything(qt_app):
     controller.reader.ask = asked.append
     controller.hotkey()  # Ignored while off.
     assert asked == [] and not controller.popup.isVisible()
+
+
+class Hotkeys:
+    def __init__(self):
+        self.registered = set()
+
+    def register(self, identifier, modifiers, key):
+        self.registered.add(identifier)
+        return True
+
+    def unregister(self, identifier):
+        self.registered.discard(identifier)
+
+
+def test_esc_is_only_taken_while_the_popup_is_open(run):
+    window, controller = run(selection_trigger="direct")
+    window.hotkeys = Hotkeys()
+    del controller.configure  # The real one, with these hotkeys.
+    controller._watch = lambda on: None
+    assert controller.configure() == "" and window.hotkeys.registered == {controller.HOTKEY}
+    controller._read(("mouse", (260, 118)), PAGE)
+    assert controller.ESCAPE in window.hotkeys.registered
+    controller.escape()
+    assert window.hotkeys.registered == {controller.HOTKEY}
+    controller._read(("mouse", (260, 118)), replace(PAGE, text="另一段"))
+    window.settings = replace(window.settings, selection_translate=False)
+    controller.configure()  # Turned off with the popup open.
+    assert window.hotkeys.registered == set() and not controller.popup.isVisible()

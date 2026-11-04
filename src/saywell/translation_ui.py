@@ -491,7 +491,9 @@ class SelectionTranslate:
         self._watch(self.enabled and settings.selection_trigger in ("icon", "direct"))
         if not self.enabled:
             self.icon.hide()
-            self.popup.hide()
+            if self.popup.isVisible():
+                self.popup.hide()
+                self._closed()  # Esc must not stay taken from every program.
         return problem
 
     def _watch(self, on: bool):
