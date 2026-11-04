@@ -1324,8 +1324,11 @@ class MainWindow(QMainWindow):
             return
         dialog = SettingsDialog(current, self)
         dialog.release_found.connect(lambda release: self.offer_release(release, manual=True))
-        # Typing a new shortcut, or holding right Ctrl in the dialog, must not start a recording.
+        # Typing a new shortcut, or holding right Ctrl in the dialog, must not start a recording
+        # or a translation; configure_hotkeys puts them back.
         self.suspend_hotkey()
+        if self.hotkeys and self.selection is not None:
+            self.hotkeys.unregister(self.selection.HOTKEY)
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
         known = {item["id"] for item in current.lexicons} | getattr(dialog, "imported_ids", set())
         try:
