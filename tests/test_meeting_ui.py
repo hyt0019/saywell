@@ -427,26 +427,38 @@ def test_exporting_saves_the_minutes_and_remembers_the_choices(window, no_device
         return str(tmp_path / "纪要"), kinds
 
     monkeypatch.setattr(QFileDialog, "getSaveFileName", choose)
-    page.fill_export_menu()
-    assert page.export_menu.actions()[0].text() == "还没有纪要，将只导出会议文字"
-    page.export_meeting("txt")
+
+    def panel():
+        page.export_button.click()
+        return QApplication.activePopupWidget()
+
+    # Before there are minutes: the transcript alone, said so instead of a choice.
+    shown = panel()
+    assert shown.content.isHidden() and not shown.alone.isHidden() and shown.kind == "docx"
+    shown.tiles.buttons()[3].click()  # 纯文本
+    shown.button.click()
+    assert QApplication.activePopupWidget() is None
     assert asked[0].name == file_name(page.store.info()["title"]) + ".txt"
     assert "那 PDF 先不做了" in (tmp_path / "纪要.txt").read_text(encoding="utf-8-sig")
     assert window.settings.meeting_export_dir == str(tmp_path) and page.export_button.text() == "已导出"
+    assert window.settings.meeting_export_format == "txt"
 
     page.write_minutes()
     assert wait_for(lambda: page.minutes is not None)
-    page.fill_export_menu()
-    actions = {action.text(): action for action in page.export_menu.actions()}
-    assert actions["只要纪要"].isChecked() and not actions["纪要和会议文字"].isChecked()
-    page.export_meeting("md")
+    shown = panel()
+    assert not shown.content.isHidden() and shown.content.current() == 0
+    assert shown.kind == "txt"  # The format used last time.
+    shown.tiles.buttons()[2].chosen.emit("md")  # A double click exports right away.
     markdown = (tmp_path / "纪要.md").read_text(encoding="utf-8")
     assert "发预算明细" in markdown and "会议文字" not in markdown
-    actions["纪要和会议文字"].trigger()
+    shown = panel()
+    shown.content.buttons[1].click()
     assert window.settings.meeting_export_transcript
-    page.export_meeting("md")
+    shown.button.click()
     assert "## 会议文字" in (tmp_path / "纪要.md").read_text(encoding="utf-8")
     assert asked[-1].parent == tmp_path  # The folder saved to last time.
+    assert panel().content.current() == 1
+    QApplication.activePopupWidget().close()
 
     def fail(path, blocks):
         raise PermissionError("open in Word")

@@ -20,7 +20,6 @@ from pathlib import Path
 
 from PySide6.QtCore import QFileInfo, QObject, QPoint, QPointF, QRectF, QSize, QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QActionGroup,
     QColor,
     QFont,
     QFontMetrics,
@@ -28,6 +27,7 @@ from PySide6.QtGui import (
     QKeySequence,
     QLinearGradient,
     QPainter,
+    QPen,
     QPixmap,
     QTextBlockFormat,
     QTextCharFormat,
@@ -38,11 +38,13 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
+    QButtonGroup,
     QDialog,
     QFileDialog,
     QFileIconProvider,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -97,6 +99,7 @@ from .ui import (
     HeroCard,
     LevelBars,
     MicButton,
+    Segmented,
     Spinner,
     Switch,
     Tween,
@@ -1101,15 +1104,173 @@ class TemplateBox(ComboBox):
         pass
 
 
-class StayOpenMenu(QMenu):
-    """A menu whose check boxes can be ticked without it closing."""
+# What each format is good for, and how its badge looks: the extension on a tint.
+FORMAT_NOTES = {
+    "docx": ("方便继续修改、发给别人", "#2F6FD6", "#E8F0FC"),
+    "pdf": ("版式固定，适合打印", "#D2453B", "#FCEBEA"),
+    "md": ("适合 Obsidian 等笔记", "#3A3A3C", "#EDEDF0"),
+    "txt": ("不带格式，哪里都能打开", "#6E6E73", "#F2F2F5"),
+}
 
-    def mouseReleaseEvent(self, event):
-        action = self.activeAction()
-        if action is not None and action.isCheckable() and action.isEnabled():
-            action.trigger()
-            return
-        super().mouseReleaseEvent(event)
+
+class FormatTile(QAbstractButton):
+    """A format to export as: its extension as a badge, its name and what it is good for."""
+
+    chosen = Signal(str)  # Double-clicked: export as this right away.
+
+    def __init__(self, kind: str):
+        super().__init__()
+        self.kind = kind
+        self.name = FORMATS[kind][0]
+        self.note, self.ink, self.tint = FORMAT_NOTES[kind]
+        self.hover = Tween(self, duration=140)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(206, 60)
+
+    def enterEvent(self, event):
+        self.hover.to(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hover.to(0.0, 220)
+        super().leaveEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.chosen.emit(self.kind)
+        else:
+            super().mouseDoubleClickEvent(event)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        box = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        if self.isChecked():
+            painter.setPen(QPen(QColor(ACCENT), 1.5))
+            painter.setBrush(QColor("#F5F9FF"))
+        else:
+            painter.setPen(QPen(QColor("#E3E3E8"), 1))
+            painter.setBrush(mix(QColor("#FFFFFF"), QColor("#F7F7F9"), self.hover.value))
+        painter.drawRoundedRect(box, 11, 11)
+        badge = QRectF(12, (self.height() - 36) / 2, 36, 36)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self.tint))
+        painter.drawRoundedRect(badge, 9, 9)
+        small = QFont(self.font())
+        small.setPixelSize(10 if len(self.kind) > 3 else 11)
+        small.setWeight(QFont.Weight.Bold)
+        painter.setFont(small)
+        painter.setPen(QColor(self.ink))
+        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, self.kind.upper())
+        left = badge.right() + 12
+        title = QFont(self.font())
+        title.setPixelSize(14)
+        title.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(title)
+        painter.setPen(QColor(INK))
+        painter.drawText(QRectF(left, 11, self.width() - left - 10, 20), Qt.AlignmentFlag.AlignVCenter, self.name)
+        note = QFont(self.font())
+        note.setPixelSize(12)
+        painter.setFont(note)
+        painter.setPen(QColor(FAINT))
+        elided = QFontMetrics(note).elidedText(self.note, Qt.TextElideMode.ElideRight, int(self.width() - left - 10))
+        painter.drawText(QRectF(left, 31, self.width() - left - 10, 18), Qt.AlignmentFlag.AlignVCenter, elided)
+
+
+class ExportPanel(QFrame):
+    """A popup to export the meeting: first what goes in the file, then the format, then the
+    button that asks where to save it. Both choices are remembered."""
+
+    export = Signal(str)  # The format chosen.
+    content_changed = Signal(bool)  # Whether the transcript goes along.
+
+    def __init__(self, minutes: bool, transcript: bool, kind: str, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 10, 14, 18)
+        panel = QFrame()
+        panel.setObjectName("pickerPanel")
+        panel.setStyleSheet("QFrame#pickerPanel { background: #FFFFFF; border: 1px solid #E3E3E8; border-radius: 14px; }")
+        shadow = QGraphicsDropShadowEffect(panel)
+        shadow.setBlurRadius(30)
+        shadow.setOffset(0, 8)
+        shadow.setColor(QColor(0, 0, 0, 38))
+        panel.setGraphicsEffect(shadow)
+        outer.addWidget(panel)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(0)
+        layout.addWidget(label("导出会议", "cardTitle"))
+        layout.addSpacing(14)
+        layout.addWidget(label("内容", "caption"))
+        layout.addSpacing(6)
+        self.content = Segmented(("纪要", "纪要和会议文字"))
+        self.content.set_current(1 if transcript else 0, animate=False)
+        self.content.changed.connect(lambda index: self.content_changed.emit(index == 1))
+        self.alone = label("还没有生成纪要，这次只导出会议文字。", "muted", wrap=True)
+        if minutes:
+            layout.addWidget(self.content, 0, Qt.AlignmentFlag.AlignLeft)
+            self.alone.hide()
+        else:
+            self.content.hide()
+            layout.addWidget(self.alone)
+        layout.addSpacing(16)
+        layout.addWidget(label("格式", "caption"))
+        layout.addSpacing(6)
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        self.tiles = QButtonGroup(self)
+        for index, format_kind in enumerate(FORMATS):
+            tile = FormatTile(format_kind)
+            tile.setToolTip("双击直接导出")
+            tile.chosen.connect(self._export_as)
+            self.tiles.addButton(tile, index)
+            grid.addWidget(tile, index // 2, index % 2)
+            tile.setChecked(format_kind == kind)
+        if self.tiles.checkedButton() is None:
+            self.tiles.buttons()[0].setChecked(True)
+        layout.addLayout(grid)
+        layout.addSpacing(16)
+        foot = QHBoxLayout()
+        foot.setSpacing(12)
+        foot.addWidget(label("导出的文件不加密，保存在你选的位置。", "caption"))
+        foot.addStretch()
+        self.button = make_button("导出…", Glyph.EXPORT, "primary")
+        self.button.clicked.connect(self._export)
+        foot.addWidget(self.button)
+        layout.addLayout(foot)
+
+    @property
+    def kind(self) -> str:
+        return self.tiles.checkedButton().kind
+
+    def _export(self):
+        self._export_as(self.kind)
+
+    def _export_as(self, kind: str):
+        self.close()
+        self.export.emit(kind)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._export()
+        else:
+            super().keyPressEvent(event)
+
+    def show_above(self, anchor: QWidget):
+        """Above the anchor (it sits at the bottom of the window), left edges lined up."""
+        self.adjustSize()
+        screen = (anchor.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+        corner = anchor.mapToGlobal(QPoint(-14, 0))
+        x = max(screen.left(), min(corner.x(), screen.right() - self.width()))
+        y = corner.y() - self.height() + 10
+        if y < screen.top():
+            y = anchor.mapToGlobal(QPoint(0, anchor.height() - 4)).y()
+        self.move(x, y)
+        self.show()
 
 
 class MeetingRow(QWidget):
@@ -1340,9 +1501,7 @@ class MeetingPage(QWidget):
         self.export_button = make_button("导出", Glyph.EXPORT, "ghost")
         self.export_button.set_trailing(Glyph.CHEVRON_DOWN)
         self.export_button.setToolTip("把纪要和会议文字存成 Word、PDF、Markdown 或纯文本文件")
-        self.export_menu = StayOpenMenu(self.export_button)
-        self.export_menu.aboutToShow.connect(self.fill_export_menu)
-        self.export_button.setMenu(self.export_menu)
+        self.export_button.clicked.connect(self.open_export)
         actions.addWidget(self.export_button)
         actions.addStretch()
         self.copy_minutes_button = make_button("复制纪要", Glyph.COPY, "ghost")
@@ -1861,28 +2020,13 @@ class MeetingPage(QWidget):
 
     # Saving as a file
 
-    def fill_export_menu(self):
-        """What goes in the file (minutes alone, or with the transcript), then the formats."""
-        menu = self.export_menu
-        menu.clear()
-        if self.minutes is None:
-            menu.addAction("还没有纪要，将只导出会议文字").setEnabled(False)
-        else:
-            menu.addAction("内容").setEnabled(False)
-            group = QActionGroup(menu)
-            for text, transcript in (("只要纪要", False), ("纪要和会议文字", True)):
-                action = menu.addAction(text)
-                action.setCheckable(True)
-                action.setChecked(self.main.settings.meeting_export_transcript == transcript)
-                action.setActionGroup(group)
-                action.triggered.connect(
-                    lambda _checked=False, transcript=transcript: self._save(meeting_export_transcript=transcript)
-                )
-        menu.addSeparator()
-        menu.addAction("导出为").setEnabled(False)
-        for kind, (name, _filter) in FORMATS.items():
-            action = menu.addAction(f"{name}	.{kind}")
-            action.triggered.connect(lambda _checked=False, kind=kind: self.export_meeting(kind))
+    def open_export(self):
+        """The panel that asks what goes in the file and in which format."""
+        settings = self.main.settings
+        panel = ExportPanel(self.minutes is not None, settings.meeting_export_transcript, settings.meeting_export_format, self)
+        panel.content_changed.connect(lambda transcript: self._save(meeting_export_transcript=transcript))
+        panel.export.connect(self.export_meeting)
+        panel.show_above(self.export_button)
 
     def export_meeting(self, kind: str):
         """The minutes, with the transcript if asked for (or alone, before there are minutes)."""
@@ -1916,7 +2060,7 @@ class MeetingPage(QWidget):
             return
         finally:
             QApplication.restoreOverrideCursor()
-        self._save(meeting_export_dir=str(path.parent))
+        self._save(meeting_export_dir=str(path.parent), meeting_export_format=kind)
         self.main.set_notice("")
         self.export_button.flash("已导出")
 

@@ -121,6 +121,7 @@ class Settings:
     # with the minutes.
     meeting_export_dir: str = ""
     meeting_export_transcript: bool = False
+    meeting_export_format: str = "docx"
 
     @property
     def download_root(self) -> Path:
