@@ -195,6 +195,27 @@ def test_minutes_are_edited_in_place_and_read_back_as_blocks(qt_app):
     assert view.isReadOnly() and not view.dirty
 
 
+def test_the_template_picker_explains_and_previews_each_template(window):
+    from saywell.meeting_ui import TEMPLATE_SAMPLES, TEMPLATE_USES, template_sample
+    from saywell.minutes import TEMPLATES
+
+    assert set(TEMPLATE_SAMPLES) == set(TEMPLATE_USES) == {template.id for template in TEMPLATES}
+    for template in TEMPLATES:  # Every section the template writes has an example.
+        headings = [value for kind, value in template_sample(template) if kind == "heading"]
+        assert headings == [*template.sections, template.todo]
+    page = window.meeting
+    page.template_box.showPopup()
+    picker = QApplication.activePopupWidget()
+    assert picker.rows[0].chosen and picker.name.text() == "通用会议"
+    picker.rows[4].hovered.emit()
+    assert picker.name.text() == "课堂讲座" and "课后任务" in picker.sample.toPlainText()
+    assert picker.rows[4].current and not picker.rows[0].current
+    assert window.settings.meeting_template == "general"  # Looking changes nothing.
+    picker.rows[1].click()
+    assert page.template_box.currentData() == "project" and window.settings.meeting_template == "project"
+    assert QApplication.activePopupWidget() is None
+
+
 def test_meeting_tab_shows_its_own_card(window):
     assert [button.text() for button in window.page_buttons] == ["概览", "文字", "会议"]
     window.show_page(2)

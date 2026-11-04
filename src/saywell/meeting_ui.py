@@ -698,11 +698,12 @@ class MinutesView(GuardedEdit):
     )
     WRITING = ("正在根据会议文字生成纪要，一般要十几秒，会议很长时会久一些。", "可以继续记录，不影响识别。")
 
-    def __init__(self):
+    def __init__(self, size: int = 14):
         super().__init__()
+        self.size = size  # Of the text, in pixels; previews are smaller.
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setStyleSheet("QTextEdit { background: transparent; border: none; padding: 0 10px 10px 14px;"
-                           " font-size: 14px; selection-background-color: #CCE0FA; }")
+                           f" font-size: {size}px; selection-background-color: #CCE0FA; }}")
         self.document().setIndentWidth(16)
         self.showing = False  # Minutes, not an explanation in their place.
         self.empty(self.EMPTY)
@@ -763,7 +764,7 @@ class MinutesView(GuardedEdit):
         block = QTextBlockFormat()
         block.setProperty(self.KIND, kind)
         top, bottom = {
-            "meta": (0, 6), "heading": (16, 4), "paragraph": (0, 2), "chapter": (4, 0), "points": (0, 4),
+            "meta": (0, 6), "heading": (16 if self.size >= 14 else 9, 4), "paragraph": (0, 2), "chapter": (4, 0), "points": (0, 4),
             "item": (2, 2), "todo": (2, 2),
         }[kind]
         block.setTopMargin(top)
@@ -774,16 +775,16 @@ class MinutesView(GuardedEdit):
             block.setMarker(QTextBlockFormat.MarkerType.Unchecked)
         return block
 
-    @staticmethod
-    def _char(kind: str) -> QTextCharFormat:
+    def _char(self, kind: str) -> QTextCharFormat:
         text = QTextCharFormat()
+        base = self.size
         size, color, weight = {
-            "meta": (12, FAINT, QFont.Weight.Normal),
-            "heading": (14, INK, QFont.Weight.Bold),
-            "time": (14, ACCENT, QFont.Weight.DemiBold),
-            "bold": (14, INK, QFont.Weight.Bold),
-            "points": (14, "#3A3A3C", QFont.Weight.Normal),
-        }.get(kind, (14, INK, QFont.Weight.Normal))
+            "meta": (base - 2, FAINT, QFont.Weight.Normal),
+            "heading": (base, INK, QFont.Weight.Bold),
+            "time": (base, ACCENT, QFont.Weight.DemiBold),
+            "bold": (base, INK, QFont.Weight.Bold),
+            "points": (base, "#3A3A3C", QFont.Weight.Normal),
+        }.get(kind, (base, INK, QFont.Weight.Normal))
         text.setProperty(QTextFormat.Property.FontPixelSize, size)
         text.setForeground(QColor(color))
         text.setFontWeight(weight)
@@ -840,6 +841,210 @@ class MinutesView(GuardedEdit):
             self.setTextCursor(cursor)
             return False
         return True
+
+
+# --- Choosing a template ------------------------------------------------------------------------
+
+# What each template suits, in a line for the list.
+TEMPLATE_USES = {
+    "general": "临时讨论、没有固定流程的会",
+    "project": "周会、站会、项目进度同步",
+    "client": "见客户、合作方，谈需求和方案",
+    "decision": "比较几个方案、需要拍板的会",
+    "lecture": "上课、培训、分享和讲座",
+}
+
+# What each template writes for a short meeting of the kind it suits, beyond what all of them
+# write (the summary, chapters and points to confirm): shown as its preview.
+TEMPLATE_SAMPLES = {
+    "general": {
+        "sections": [{"heading": "要点", "items": ["月中周六人最齐。", "郊区一日游比聚餐更受欢迎。"]},
+                     {"heading": "决定事项", "items": ["团建定在 15 日（周六），每人预算 300 元以内。"]}],
+        "todos": [{"task": "收集忌口和交通需求", "owner": "小林", "due": "周三"}],
+    },
+    "project": {
+        "sections": [{"heading": "各项进展", "items": ["前端：导出功能完成 80%，周四提测。", "后端：支付接口在联调。"]},
+                     {"heading": "风险与问题", "items": ["对方接口文档有变动，联调可能延期一周。"]},
+                     {"heading": "决定事项", "items": ["2.3 先发不含支付的版本。"]}],
+        "todos": [{"task": "整理支付接口的变动清单", "owner": "我", "due": "明天"}],
+    },
+    "client": {
+        "sections": [{"heading": "客户需求", "items": ["6 月底前上线门店版。", "能按门店导出报表。"]},
+                     {"heading": "客户的顾虑", "items": ["历史数据迁移会不会丢单。"]},
+                     {"heading": "我方承诺", "items": ["下周给出迁移方案，并先做一次演练。"]}],
+        "todos": [{"task": "把迁移方案发给客户", "owner": "我", "due": "下周三"}],
+    },
+    "decision": {
+        "sections": [{"heading": "讨论过的方案", "items": ["自建：可定制，需要 3 个月和 2 名开发。", "外采：两周可用，按坐席年付。"]},
+                     {"heading": "决定及理由", "items": ["先外采：上线快、成本可控，先验证需求。"]},
+                     {"heading": "分歧与未定事项", "items": ["运营希望保留自建的可能，半年后再议。"]}],
+        "todos": [{"task": "约两家供应商演示", "owner": "其他参会人", "due": "周五"}],
+    },
+    "lecture": {
+        "sections": [{"heading": "知识点", "items": ["弹性 = 需求量变化率 ÷ 价格变化率。", "大于 1 为富有弹性。"]},
+                     {"heading": "例子", "items": ["打车涨价 20%，订单下降 30%，弹性为 1.5。"]},
+                     {"heading": "课上的问题", "items": ["必需品的弹性为什么小？"]}],
+        "todos": [{"task": "完成第 3 章习题 1 到 5", "owner": "", "due": "下周一"}],
+    },
+}
+
+
+def template_sample(template) -> list[tuple[str, object]]:
+    """The preview of a template: what it writes for its sample meeting, as the page shows it."""
+    from .minutes import Notes, tidy
+
+    notes = tidy(Notes.model_validate(TEMPLATE_SAMPLES[template.id]), template)
+    return outline(Minutes(notes, template.id, 0, 0), {})[2:]
+
+
+class TemplateRow(PickerRow):
+    """A template in the picker: its name, what it suits, a tick when chosen. Hovering previews it."""
+
+    hovered = Signal()
+
+    def __init__(self, template, chosen: bool):
+        super().__init__(template.name, TEMPLATE_USES.get(template.id, ""), chosen=chosen)
+        self.template = template
+        self.current = False  # The one previewed.
+
+    def enterEvent(self, event):
+        self.hovered.emit()
+        super().enterEvent(event)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        shade = max(self.hover.value, 1.0 if self.current else 0.0)
+        if shade > 0.01:
+            painter.setBrush(mix(QColor("#FFFFFF"), QColor("#F0F0F4"), shade))
+            painter.drawRoundedRect(QRectF(self.rect()).adjusted(4, 1, -4, -1), 10, 10)
+        left, right = 16, self.width() - (40 if self.chosen else 16)
+        title = QFont(self.font())
+        title.setPixelSize(14)
+        if self.chosen:
+            title.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(title)
+        painter.setPen(QColor(INK))
+        painter.drawText(QRectF(left, 7, right - left, 20), Qt.AlignmentFlag.AlignVCenter, self.title)
+        note = QFont(self.font())
+        note.setPixelSize(12)
+        painter.setFont(note)
+        painter.setPen(QColor(FAINT))
+        elided = QFontMetrics(note).elidedText(self.note, Qt.TextElideMode.ElideRight, int(right - left))
+        painter.drawText(QRectF(left, 26, right - left, 18), Qt.AlignmentFlag.AlignVCenter, elided)
+        if self.chosen:
+            draw_icon(painter, Glyph.CHECK, QRectF(self.width() - 34, (self.height() - 16) / 2, 16, 16), ACCENT)
+
+
+class TemplatePicker(QFrame):
+    """A popup with the templates on the left and, on the right, what the one under the mouse
+    is for and a sample of the minutes it writes."""
+
+    chosen = Signal(int)  # Index into TEMPLATES.
+
+    def __init__(self, current: int, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 10, 14, 18)
+        panel = QFrame()
+        panel.setObjectName("pickerPanel")
+        panel.setStyleSheet("QFrame#pickerPanel { background: #FFFFFF; border: 1px solid #E3E3E8; border-radius: 14px; }")
+        shadow = QGraphicsDropShadowEffect(panel)
+        shadow.setBlurRadius(30)
+        shadow.setOffset(0, 8)
+        shadow.setColor(QColor(0, 0, 0, 38))
+        panel.setGraphicsEffect(shadow)
+        outer.addWidget(panel)
+        columns = QHBoxLayout(panel)
+        columns.setContentsMargins(4, 12, 0, 8)
+        columns.setSpacing(0)
+        listing = QVBoxLayout()
+        listing.setSpacing(0)
+        caption = label("纪要模板", "caption")
+        caption.setContentsMargins(16, 0, 16, 6)
+        listing.addWidget(caption)
+        self.rows = []
+        for index, template in enumerate(TEMPLATES):
+            row = TemplateRow(template, index == current)
+            row.setFixedWidth(250)
+            row.hovered.connect(lambda index=index: self.preview(index))
+            row.clicked.connect(lambda _checked=False, index=index: self._choose(index))
+            listing.addWidget(row)
+            self.rows.append(row)
+        listing.addStretch()
+        columns.addLayout(listing)
+        rule = QFrame()
+        rule.setFixedWidth(1)
+        rule.setStyleSheet("background: #EDEDF0;")
+        columns.addWidget(rule)
+        side = QVBoxLayout()
+        side.setContentsMargins(18, 2, 12, 8)
+        side.setSpacing(6)
+        self.name = label("", "cardTitle")
+        side.addWidget(self.name)
+        self.focus = label("", "muted", wrap=True)
+        self.focus.setFixedWidth(360)
+        side.addWidget(self.focus)
+        side.addSpacing(4)
+        # The sample on a sheet of its own, so it reads as an example.
+        sheet = QFrame()
+        sheet.setObjectName("templateSheet")
+        sheet.setStyleSheet("QFrame#templateSheet { background: #F7F7F9; border-radius: 10px; }")
+        inside = QVBoxLayout(sheet)
+        inside.setContentsMargins(14, 10, 8, 6)
+        inside.setSpacing(0)
+        inside.addWidget(label("示例", "caption"))
+        self.sample = MinutesView(size=12)
+        self.sample.setFixedSize(332, 252)
+        self.sample.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sample.setStyleSheet(self.sample.styleSheet().replace("padding: 0 10px 10px 14px", "padding: 0"))
+        inside.addWidget(self.sample)
+        side.addWidget(sheet)
+        side.addWidget(label("每个模板还都会写会议概要、带时间的章节速览和待确认。", "caption"))
+        side.addStretch()
+        columns.addLayout(side)
+        self.preview(current)
+
+    def preview(self, index: int) -> None:
+        template = TEMPLATES[index]
+        for number, row in enumerate(self.rows):
+            if row.current != (number == index):
+                row.current = number == index
+                row.update()
+        self.name.setText(template.name)
+        self.focus.setText(template.focus)
+        self.sample.show_blocks(template_sample(template))
+
+    def _choose(self, index: int):
+        self.chosen.emit(index)
+        self.close()
+
+    def show_near(self, anchor: QWidget):
+        """Above the anchor (it sits at the bottom of the window), right edges lined up."""
+        self.adjustSize()
+        screen = (anchor.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+        corner = anchor.mapToGlobal(QPoint(anchor.width() + 14, 0))
+        x = max(screen.left(), min(corner.x() - self.width(), screen.right() - self.width()))
+        y = corner.y() - self.height() + 10
+        if y < screen.top():
+            y = anchor.mapToGlobal(QPoint(0, anchor.height() - 4)).y()
+        self.move(x, y)
+        self.show()
+
+
+class TemplateBox(ComboBox):
+    """The template choice: looks like the other choices, but opens TemplatePicker."""
+
+    def showPopup(self):
+        picker = TemplatePicker(self.currentIndex(), self)
+        picker.chosen.connect(self.setCurrentIndex)
+        picker.show_near(self)
+
+    def hidePopup(self):
+        pass
 
 
 class StayOpenMenu(QMenu):
@@ -1019,12 +1224,12 @@ class MeetingPage(QWidget):
         self.copy_minutes_button = make_button("复制纪要", Glyph.COPY, "ghost")
         self.copy_minutes_button.clicked.connect(self.copy_minutes)
         actions.addWidget(self.copy_minutes_button)
-        self.template_box = ComboBox()
+        self.template_box = TemplateBox()
         for template in TEMPLATES:
             self.template_box.addItem(template.name, template.id)
         chosen = next((i for i, t in enumerate(TEMPLATES) if t.id == main.settings.meeting_template), 0)
         self.template_box.setCurrentIndex(chosen)
-        self.template_box.setToolTip("纪要的写法：通用会议、项目例会、客户沟通、讨论决策或课堂讲座")
+        self.template_box.setToolTip("纪要的写法。点开可以看每个模板适合什么会，以及写出来的样子")
         self.template_box.currentIndexChanged.connect(
             lambda _index: self._save(meeting_template=self.template_box.currentData())
         )
