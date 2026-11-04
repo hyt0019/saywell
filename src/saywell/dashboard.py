@@ -16,26 +16,28 @@ from .stats import TYPING_CHARS_PER_MINUTE, Day, StatsStore
 from .ui import ACCENT, INK, MUTED, Glyph, Tween, label, make_button
 
 WEEKDAYS = "一二三四五六日"
-SUBTLE = "#8E8E93"
-HAIRLINE = "#E8E8ED"
-# Empty, then four steps of the accent blue.
-HEAT = ("#EDEFF2", "#CFE2FB", "#8EBCF6", "#3E8BEE", "#0A5BD3")
+SUBTLE = "#958C7F"
+HAIRLINE = "#EEE7DB"
+# Empty, then four steps of indigo.
+HEAT = ("#EFE9DE", "#D3D7EB", "#9AA2D0", "#4A57A0", "#3C488E")
 HEAT_STEPS = (1, 300, 1000, 3000)
-NUMBER_FAMILIES = ["Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI"]
+# Large numbers in the headings' serif; the rest falls back to the system faces.
+NUMBER_FAMILIES = ["Saywell Serif", "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI"]
 
 DASHBOARD_STYLE = """
-QFrame#panel { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 18px; }
-QLabel#panelTitle { font-size: 15px; font-weight: 700; color: #1D1D1F; }
-QLabel#panelMeta { font-size: 12px; color: #8E8E93; }
-QLabel#statCaption { font-size: 13px; color: #6E6E73; }
-QLabel#statSub { font-size: 12px; color: #8E8E93; }
-QLabel#latestText { font-size: 15px; color: #1D1D1F; }
-QLabel#latestEmpty { font-size: 14px; color: #8E8E93; }
-QLabel#rowLabel { color: #6E6E73; font-size: 13px; }
-QLabel#rowValue { color: #1D1D1F; font-size: 13px; }
-QLabel#trackTitle { color: #3A3A3C; font-size: 13px; }
-QLabel#trackValue { color: #1D1D1F; font-size: 13px; font-weight: 700; }
-QFrame#vline { background: #EDEDF0; min-width: 1px; max-width: 1px; border: none; }
+QFrame#panel { background: transparent; border: none; border-top: 1px solid #E8E0D3; border-radius: 0; }
+QFrame#summary { background: transparent; border: none; }
+QLabel#panelTitle { font-family: 'Saywell Serif'; font-size: 17px; font-weight: 700; color: #192457; }
+QLabel#panelMeta { font-size: 12px; color: #958C7F; }
+QLabel#statCaption { font-size: 13px; color: #776F63; }
+QLabel#statSub { font-size: 12px; color: #958C7F; }
+QLabel#latestText { font-size: 15px; color: #1D2240; }
+QLabel#latestEmpty { font-size: 14px; color: #958C7F; }
+QLabel#rowLabel { color: #776F63; font-size: 13px; }
+QLabel#rowValue { color: #1D2240; font-size: 13px; }
+QLabel#trackTitle { color: #47413A; font-size: 13px; }
+QLabel#trackValue { color: #1D2240; font-size: 13px; font-weight: 700; }
+QFrame#vline { background: #EEE7DB; min-width: 1px; max-width: 1px; border: none; }
 """
 
 
@@ -109,8 +111,8 @@ class HoverCard(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(0, 0, 0, 7 - step))
             painter.drawRoundedRect(body.adjusted(-step, -step + 2, step, step + 2), 12 + step, 12 + step)
-        painter.setBrush(QColor("#FFFFFF"))
-        painter.setPen(QPen(QColor("#E3E3E8"), 1))
+        painter.setBrush(QColor("#FFFCF7"))
+        painter.setPen(QPen(QColor("#E8E0D3"), 1))
         painter.drawRoundedRect(body, 12, 12)
         title_font, body_font = self.fonts()
         painter.setFont(title_font)
@@ -150,7 +152,7 @@ class CountLabel(QLabel):
     def _render(self, value):
         families = ", ".join(f"'{family}'" for family in NUMBER_FAMILIES)
         self.setText(
-            f"<span style=\"font-family:{families}; font-size:{self.size}px; font-weight:600; color:{INK}\">"
+            f"<span style=\"font-family:{families}; font-size:{self.size}px; font-weight:700; color:{ACCENT}\">"
             f"{self.formatter(float(value))}</span>"
             f"<span style='font-size:13px; color:{MUTED}'>&nbsp;{self.unit}</span>"
         )
@@ -160,10 +162,10 @@ class Stat(QWidget):
     def __init__(self, caption: str):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(4)
+        layout.setContentsMargins(28, 14, 22, 18)
+        layout.setSpacing(2)
         layout.addWidget(label(caption, "statCaption"))
-        self.value = CountLabel()
+        self.value = CountLabel(38)
         layout.addWidget(self.value)
         self.sub = label("", "statSub")
         layout.addWidget(self.sub)
@@ -177,7 +179,7 @@ def panel(title: str) -> tuple[QFrame, QVBoxLayout, QHBoxLayout]:
     frame = QFrame()
     frame.setObjectName("panel")
     layout = QVBoxLayout(frame)
-    layout.setContentsMargins(24, 20, 24, 20)
+    layout.setContentsMargins(28, 20, 28, 14)
     layout.setSpacing(14)
     head = QHBoxLayout()
     head.setSpacing(10)
@@ -340,11 +342,11 @@ class MiniBars(QWidget):
             height = max(3.0, (self.height() - 4) * value / peak) if value else 3.0
             rect = QRectF(index * width + width * 0.2, self.height() - height, width * 0.6, height)
             if not value:
-                color = QColor("#EDEFF2")
+                color = QColor("#EFE9DE")
             elif index == self.hovered or (self.hovered < 0 and index == len(self.values) - 1):
                 color = QColor(ACCENT)
             else:
-                color = QColor("#B9D5F8")
+                color = QColor("#C3C8E4")
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
             painter.drawRoundedRect(rect, 2.5, 2.5)
@@ -446,10 +448,10 @@ class MilestoneTrack(QWidget):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor(ACCENT))
                 painter.drawEllipse(node)
-                draw_icon(painter, "check", node.adjusted(3, 3, -3, -3), "#FFFFFF", 3.4)
+                draw_icon(painter, "check", node.adjusted(3, 3, -3, -3), "#FFFCF7", 3.4)
             else:
-                painter.setPen(QPen(QColor("#D1D1D6"), 1.5))
-                painter.setBrush(QColor("#FFFFFF"))
+                painter.setPen(QPen(QColor("#D9D0C1"), 1.5))
+                painter.setBrush(QColor("#FFFCF7"))
                 painter.drawEllipse(node)
             painter.setPen(QColor(INK if reached else SUBTLE))
             painter.drawText(QRectF(x - 40, y + 12, 80, 18), Qt.AlignmentFlag.AlignCenter, name)
@@ -491,10 +493,10 @@ class Overview(QWidget):
         self.hovercard = HoverCard()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        layout.setSpacing(6)
 
         summary = QFrame()
-        summary.setObjectName("panel")
+        summary.setObjectName("summary")
         stats = QHBoxLayout(summary)
         stats.setContentsMargins(0, 0, 0, 0)
         stats.setSpacing(0)
@@ -523,9 +525,9 @@ class Overview(QWidget):
         layout.addWidget(heat)
 
         row = QHBoxLayout()
-        row.setSpacing(14)
+        row.setSpacing(10)
         left = QVBoxLayout()
-        left.setSpacing(14)
+        left.setSpacing(6)
         latest, latest_layout, latest_head = panel("最近一次")
         self.latest_meta = label("", "panelMeta")
         latest_head.addWidget(self.latest_meta)
@@ -577,7 +579,7 @@ class Overview(QWidget):
         usage_head.addWidget(self.provider)
         self.balance = QLabel()
         families = ", ".join(f"'{family}'" for family in NUMBER_FAMILIES)
-        self.balance.setStyleSheet(f"color: {INK}; font-family: {families}; font-size: 30px; font-weight: 600;")
+        self.balance.setStyleSheet(f"color: {ACCENT}; font-family: {families}; font-size: 32px; font-weight: 700;")
         balance_row = QHBoxLayout()
         figures = QVBoxLayout()
         figures.setSpacing(2)

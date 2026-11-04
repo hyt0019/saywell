@@ -6,6 +6,7 @@
 |---|---|---|
 | Python | 运行时 | https://www.python.org/ |
 | Segoe Fluent Icons | 界面图标，使用 Windows 系统字体，不随程序分发 | https://learn.microsoft.com/windows/apps/design/style/segoe-fluent-icons-font |
+| Noto Serif SC（思源宋体） | 标题和大数字的衬线字，截取 700 字重和 GB2312 常用字，改名 Saywell Serif 随程序分发，SIL OFL 1.1（许可证见 `saywell/assets/fonts/OFL.txt`） | https://github.com/google/fonts/tree/main/ofl/notoserifsc |
 | Qt / PySide6 Essentials | 桌面界面 | https://www.qt.io/qt-for-python |
 | sherpa-onnx / ONNX Runtime | 本地语音推理 | https://github.com/k2-fsa/sherpa-onnx |
 | SenseVoice | 语音识别模型（默认） | https://github.com/FunAudioLLM/SenseVoice |

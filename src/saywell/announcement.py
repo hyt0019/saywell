@@ -19,20 +19,20 @@ WIDTH = 580
 # hairlines between the points, and only type weight and grey to set titles apart.
 STYLE = """
 QLabel#announceTitle { font-size: 22px; font-weight: 700; }
-QLabel#announceMeta { color: #86868B; font-size: 13px; }
-QLabel#announceSummary { color: #1D1D1F; font-size: 15px; }
-QLabel#announceSection { color: #86868B; font-size: 13px; font-weight: 600; padding-left: 2px; }
-QLabel#announceItemTitle { color: #1D1D1F; font-size: 14px; font-weight: 600; }
-QLabel#announceItem { color: #6E6E73; font-size: 13px; }
-QLabel#announceItemPlain { color: #1D1D1F; font-size: 14px; }
-QLabel#announceNote { color: #86868B; font-size: 12px; }
+QLabel#announceMeta { color: #8C8376; font-size: 13px; }
+QLabel#announceSummary { color: #1D2240; font-size: 15px; }
+QLabel#announceSection { color: #8C8376; font-size: 13px; font-weight: 600; padding-left: 2px; }
+QLabel#announceItemTitle { color: #1D2240; font-size: 14px; font-weight: 600; }
+QLabel#announceItem { color: #776F63; font-size: 13px; }
+QLabel#announceItemPlain { color: #1D2240; font-size: 14px; }
+QLabel#announceNote { color: #8C8376; font-size: 12px; }
 QLabel#announceLink { font-size: 13px; padding-left: 2px; }
-QFrame#announceGroup { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 14px; }
-QFrame#announceRule { background: #EBEBF0; min-height: 1px; max-height: 1px; border: none; }
+QFrame#announceGroup { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }
+QFrame#announceRule { background: #EEE7DB; min-height: 1px; max-height: 1px; border: none; }
 """
 
 
-def rich(text: str, bold: str = "#1D1D1F") -> str:
+def rich(text: str, bold: str = "#1D2240") -> str:
     """Escaped text with the notes' **bold** kept, set with a little more line spacing."""
     text = html.escape(text, quote=False)
     text = re.sub(r"\*\*(.+?)\*\*", rf'<span style="color:{bold}; font-weight:600">\1</span>', text)
@@ -151,7 +151,7 @@ class AnnouncementDialog(QDialog):
                 body.addWidget(group(items))
                 body.addSpacing(18)
         # A plain text link, so it lines up with the section names above it.
-        more = QLabel(f'<a href="{html.escape(changelog)}" style="color:#0066CC; text-decoration:none">查看完整更新日志 ›</a>')
+        more = QLabel(f'<a href="{html.escape(changelog)}" style="color:#3C488E; text-decoration:none">查看完整更新日志 ›</a>')
         more.setObjectName("announceLink")
         more.setTextFormat(Qt.TextFormat.RichText)
         more.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)

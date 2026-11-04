@@ -35,7 +35,7 @@ from .brand import bird_rect, draw_swallow, draw_tile, squircle
 from .translation import LANGUAGES, STYLES, Translation, target_language
 from .ui import INK, Glyph, Segmented, Spinner, Tween, app_icon, label, make_button
 
-FAINT = "#8E8E93"
+FAINT = "#958C7F"
 WIDTH = 384
 ICON_SECONDS = 4.0  # The button goes away unless it is used or hovered.
 NEAR = 120  # How close (physical pixels) the mouse must be to the selection for it to count.
@@ -184,7 +184,7 @@ class TranslationPopup(Floating):
         self.panel = QFrame()
         self.panel.setObjectName("translationPanel")
         self.panel.setStyleSheet(
-            "QFrame#translationPanel { background: #FFFFFF; border: 1px solid #E3E3E8; border-radius: 14px; }"
+            "QFrame#translationPanel { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }"
         )
         shadow = QGraphicsDropShadowEffect(self.panel)
         shadow.setBlurRadius(28)

@@ -58,10 +58,13 @@ from .ui import (
     MicButton,
     ModelDialog,
     RecordingOverlay,
-    Segmented,
+    KeyHint,
+    TabBar,
+    vrule,
     SettingsDialog,
     Toast,
     app_icon,
+    load_fonts,
     dialog_header,
     fade_in,
     footer_bar,
@@ -123,7 +126,7 @@ class MainWindow(QMainWindow):
         "busy": ("busy", "处理中"),
         "waiting": ("busy", "等待选择输入框"),
     }
-    TONES = {"idle": "#AEAEB2", "rec": "#FF3B30", "busy": "#FF9F0A", "done": "#34C759"}
+    TONES = {"idle": "#B5AC9F", "rec": "#E5654F", "busy": "#E0A040", "done": "#5A9E6F"}
 
     def __init__(self, settings: Settings | None = None, native: bool = True):
         super().__init__()
@@ -172,6 +175,7 @@ class MainWindow(QMainWindow):
         self.update_cancel = Event()
         self.checking_update = False
         self.announced_release = ""
+        load_fonts()  # Also when built without main(), as the screenshot scripts do.
         self.setWindowTitle("好好说 Saywell")
         self.setWindowIcon(app_icon())
         available = self.screen().availableGeometry().height() if self.screen() else 900
@@ -252,7 +256,7 @@ class MainWindow(QMainWindow):
         brand.addWidget(label("保留你的意思，整理你的表达。", "muted"))
         header.addLayout(brand)
         header.addStretch()
-        self.page_switch = Segmented(("概览", "文字", "会议"))
+        self.page_switch = TabBar(("概览", "文字", "会议"))
         self.page_group, self.page_buttons = self.page_switch.group, self.page_switch.buttons
         self.page_switch.changed.connect(self.show_page)
         header.addWidget(self.page_switch)
@@ -303,16 +307,17 @@ class MainWindow(QMainWindow):
         meta = QWidget()
         chips = QHBoxLayout(meta)
         chips.setContentsMargins(0, 0, 0, 0)
-        chips.setSpacing(8)
-        self.shortcut_label = label("", "heroMeta")
-        self.insert_label = label(f"{INSERT_HOTKEY} 补输结果", "heroMeta")
+        chips.setSpacing(14)
+        self.shortcut_label = KeyHint()
+        self.insert_label = KeyHint(INSERT_HOTKEY, "补输结果")
         self.model_chip = make_button("", Glyph.MODEL, "heroChip")
         self.model_chip.setToolTip("更换或下载本地语音模型")
         self.model_chip.clicked.connect(self.open_models)
         chips.addWidget(self.shortcut_label)
-        chips.addWidget(label("·", "heroMeta"))
+        chips.addWidget(vrule(), 0, Qt.AlignmentFlag.AlignVCenter)
         chips.addWidget(self.insert_label)
-        chips.addWidget(label("·", "heroMeta"))
+        chips.addWidget(vrule(), 0, Qt.AlignmentFlag.AlignVCenter)
+        chips.addSpacing(-8)  # The chip's own padding is room enough.
         chips.addWidget(self.model_chip)
         chips.addStretch()
         self.hero_bottom.addWidget(meta)
@@ -423,7 +428,7 @@ class MainWindow(QMainWindow):
 
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
-        bottom.addWidget(glyph_label(Glyph.LOCK, "#8E8E93", 13))
+        bottom.addWidget(glyph_label(Glyph.LOCK, "#958C7F", 13))
         self.stats = label(IDLE_STATS, "caption")
         self.stats.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         bottom.addWidget(self.stats, 1)
@@ -777,7 +782,7 @@ class MainWindow(QMainWindow):
             if self.isVisible():
                 fade_in(self.hero_bottom.currentWidget(), 280)
         action ="按住说话" if self.settings.hold_to_talk else "按一下开始，再按结束"
-        self.shortcut_label.setText(f"{shortcut_label(self.settings.hotkey)} {action}")
+        self.shortcut_label.set_hint(shortcut_label(self.settings.hotkey), action)
 
     def result_edited(self):
         if self.state == "idle":
@@ -1408,7 +1413,7 @@ class MainWindow(QMainWindow):
         body.addWidget(empty, 1)
         layout.addLayout(body, 1)
         footer, actions = footer_bar()
-        clear_button = make_button("清空全部历史", Glyph.DELETE, "danger", "#D70015")
+        clear_button = make_button("清空全部历史", Glyph.DELETE, "danger", "#B94534")
         clear_button.setEnabled(bool(rows))
         load_button = make_button("载入选中记录", None, "primary")
         load_button.setEnabled(bool(rows))
@@ -1535,6 +1540,7 @@ def main() -> int:
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Saywell")
     app.setOrganizationName("Saywell")
+    load_fonts()
     app.setStyleSheet(STYLE)
     app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(False)

@@ -28,6 +28,7 @@ from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QFont,
+    QFontDatabase,
     QFontMetrics,
     QIcon,
     QBrush,
@@ -85,98 +86,110 @@ from .translation import LANGUAGES as TRANSLATION_LANGUAGES
 from .translation import SCRIPTS as TRANSLATION_SCRIPTS
 from .translation import STYLES as TRANSLATION_STYLES
 
-INK = "#1D1D1F"
-MUTED = "#6E6E73"
-ACCENT = "#0071E3"
-ACCENT_SOFT = "#E8F1FD"
-RECORD = "#FF3B30"
-DISABLED = "#C7C7CC"
-# The one expressive touch in an otherwise quiet interface: an Apple Intelligence
-# style blue → violet → pink → amber glow for listening and processing.
-AURORA = ("#3B82F6", "#8B5CF6", "#EC4899", "#F59E0B")
+# The palette grows out of the icon (brand.py): warm paper, ink, one indigo fold and a coral
+# breast. Coral marks what is live (listening, recording, the other voices); nothing else is loud.
+PAPER = "#F6F1E8"  # The window.
+SHEET = "#FFFCF7"  # What lies on it: cards, fields, menus, popups.
+LINE = "#E8E0D3"  # Hairlines between things.
+INK = "#1D2240"  # Text.
+MUTED = "#776F63"  # Quieter text.
+ACCENT = "#192457"  # Ink navy: the primary button, the chosen tab, key numbers.
+ACCENT_SOFT = "#ECEDF5"
+INDIGO = "#3C488E"
+CORAL = "#F2755F"
+RECORD = "#E5654F"
+DISABLED = "#CFC6B8"
+SERIF = "Saywell Serif"  # Headings and large numbers (assets/fonts, a cut of Noto Serif SC).
+# A voice on the dark recording pill: indigo through a dusty mauve to coral. On paper the bars
+# stay in ink, as the card's coral edge already says it is live.
+VOICE = ("#3C488E", "#8A6F9E", "#F2755F")
 
 STYLE = """
-QWidget { font-family: 'Microsoft YaHei UI'; font-size: 14px; color: #1D1D1F; }
-QMainWindow, QDialog { background: #F5F5F7; }
+QWidget { font-family: 'Microsoft YaHei UI'; font-size: 14px; color: #1D2240; }
+QMainWindow, QDialog { background: #F6F1E8; }
 QLabel { background: transparent; }
-QLabel#brand { font-size: 20px; font-weight: 700; }
-QLabel#brandLatin { font-size: 15px; font-weight: 600; color: #8E8E93; padding-bottom: 2px; }
-QLabel#title { font-size: 24px; font-weight: 700; }
-QLabel#muted { color: #6E6E73; font-size: 13px; }
-QLabel#caption { color: #8E8E93; font-size: 12px; }
-QLabel#section { font-size: 15px; font-weight: 700; }
-QLabel#cardTitle { font-size: 15px; font-weight: 700; }
-QLabel#fieldLabel { color: #3A3A3C; font-size: 13px; }
-QLabel#count { background: #F2F2F7; color: #6E6E73; border-radius: 9px; padding: 2px 9px; font-size: 12px; }
-QLabel#tag { color: #6E6E73; border: 1px solid #E0E0E5; border-radius: 9px; padding: 1px 8px; font-size: 12px; }
-QLabel#tagActive { background: #0071E3; color: #FFFFFF; border-radius: 9px; padding: 2px 9px; font-size: 12px; }
-QLabel#tagGpu { color: #0A5BD3; border: 1px solid #BCD4F5; border-radius: 9px; padding: 1px 8px; font-size: 12px; }
-QLabel#strength { color: #3A3A3C; font-size: 13px; }
-QLabel#caveat { color: #8E8E93; font-size: 12px; }
-QLabel#speed { color: #6E6E73; font-size: 12px; }
-QLabel#notice { background: #FFF8E5; color: #7A4F00; border: 1px solid #F9E2A7; border-radius: 12px;
+QLabel#brand { font-family: 'Saywell Serif'; font-weight: 700; color: #192457; font-size: 21px; }
+QLabel#brandLatin { font-family: 'Saywell Serif'; font-size: 15px; font-weight: 600; color: #A69D90;
+                    padding-bottom: 2px; }
+QLabel#title { font-family: 'Saywell Serif'; font-weight: 700; color: #192457; font-size: 26px; }
+QLabel#muted { color: #776F63; font-size: 13px; }
+QLabel#caption { color: #958C7F; font-size: 12px; }
+QLabel#section { font-family: 'Saywell Serif'; font-weight: 700; color: #192457; font-size: 16px; }
+QLabel#cardTitle { font-family: 'Saywell Serif'; font-weight: 700; color: #192457; font-size: 16px; }
+QLabel#fieldLabel { color: #47413A; font-size: 13px; }
+QLabel#count { background: #F2ECE2; color: #776F63; border-radius: 9px; padding: 2px 9px; font-size: 12px; }
+QLabel#tag { color: #776F63; border: 1px solid #E5DCCD; border-radius: 9px; padding: 1px 8px; font-size: 12px; }
+QLabel#tagActive { background: #192457; color: #FFFCF7; border-radius: 9px; padding: 2px 9px; font-size: 12px; }
+QLabel#tagGpu { color: #3C488E; border: 1px solid #C3C8E4; border-radius: 9px; padding: 1px 8px; font-size: 12px; }
+QLabel#strength { color: #47413A; font-size: 13px; }
+QLabel#caveat { color: #958C7F; font-size: 12px; }
+QLabel#speed { color: #776F63; font-size: 12px; }
+QLabel#notice { background: #FBF2DE; color: #77561F; border: 1px solid #EEDDB4; border-radius: 12px;
                 padding: 10px 14px; font-size: 13px; }
 
-QFrame#hero QLabel { color: #1D1D1F; }
-QLabel#status { font-size: 24px; font-weight: 700; color: #1D1D1F; }
-QLabel#heroHint { color: #6E6E73; font-size: 14px; }
-QLabel#pill { font-size: 13px; color: #6E6E73; }
-QLabel#heroMeta { color: #8E8E93; font-size: 13px; }
+QFrame#hero QLabel { color: #1D2240; }
+QLabel#status { font-family: 'Saywell Serif'; font-weight: 700; color: #192457; font-size: 28px; }
+QLabel#heroHint { color: #776F63; font-size: 14px; }
+QLabel#pill { font-size: 13px; color: #776F63; }
+QLabel#heroMeta { color: #776F63; font-size: 13px; }
+QLabel#keycap { background: #FBF7F0; color: #47413A; border: 1px solid #DCD3C4; border-bottom: 2px solid #D0C5B3;
+                border-radius: 6px; padding: 0px 7px; font-size: 12px; }
+QFrame#vrule { background: #E2D9CA; min-width: 1px; max-width: 1px; border: none; }
 
-QFrame#card { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 18px; }
-QFrame#card[accent="true"] { border: 1px solid #CFE0F6; }
+QFrame#card { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 18px; }
+QFrame#card[accent="true"] { border: 1px solid #D3D7EB; }
 QFrame#card QPlainTextEdit { background: transparent; border: none; padding: 2px 12px 12px 12px;
-                             font-size: 16px; selection-background-color: #CCE0FA; }
-QFrame#sectionCard { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 16px; }
-QFrame#modelCard { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 16px; }
-QFrame#modelCard[active="true"] { border: 2px solid #0071E3; }
-QFrame#locationBar { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 14px; }
-QFrame#footerBar { background: #FFFFFF; border-top: 1px solid #E5E5EA; }
-QFrame#divider { background: #EFEFF4; max-height: 1px; min-height: 1px; border: none; }
+                             font-size: 16px; selection-background-color: #D8DBEE; }
+QFrame#sectionCard { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 16px; }
+QFrame#modelCard { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 16px; }
+QFrame#modelCard[active="true"] { border: 2px solid #192457; }
+QFrame#locationBar { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }
+QFrame#footerBar { background: #FFFCF7; border-top: 1px solid #E8E0D3; }
+QFrame#divider { background: #F1EBE1; max-height: 1px; min-height: 1px; border: none; }
 
-QPlainTextEdit { background: #FFFFFF; border: 1px solid #D2D2D7; border-radius: 12px; padding: 10px;
-                 selection-background-color: #CCE0FA; }
-QPlainTextEdit:focus { border-color: #0071E3; }
-QLineEdit, QComboBox, QSpinBox { background: #FFFFFF; border: 1px solid #D2D2D7; border-radius: 10px;
-    padding: 7px 11px; min-height: 22px; selection-background-color: #CCE0FA; }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #0071E3; }
-QLineEdit:hover, QComboBox:hover, QSpinBox:hover { border-color: #B8B8BF; }
+QPlainTextEdit { background: #FFFCF7; border: 1px solid #DCD3C4; border-radius: 12px; padding: 10px;
+                 selection-background-color: #D8DBEE; }
+QPlainTextEdit:focus { border-color: #192457; }
+QLineEdit, QComboBox, QSpinBox { background: #FFFCF7; border: 1px solid #DCD3C4; border-radius: 10px;
+    padding: 7px 11px; min-height: 22px; selection-background-color: #D8DBEE; }
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #192457; }
+QLineEdit:hover, QComboBox:hover, QSpinBox:hover { border-color: #C4BAAA; }
 QComboBox { padding-right: 32px; }
 QComboBox::drop-down { border: none; width: 30px; }
 QComboBox::down-arrow { image: none; width: 0; height: 0; }
-QComboBox QAbstractItemView { background: #FFFFFF; border: 1px solid #D2D2D7; border-radius: 10px;
-    selection-background-color: #E8F1FD; selection-color: #1D1D1F; outline: none; padding: 4px; }
+QComboBox QAbstractItemView { background: #FFFCF7; border: 1px solid #DCD3C4; border-radius: 10px;
+    selection-background-color: #ECEDF5; selection-color: #1D2240; outline: none; padding: 4px; }
 
-QPushButton { background: #E9E9EE; border: 1px solid transparent; border-radius: 17px; padding: 8px 18px;
-              color: #1D1D1F; }
-QPushButton:hover { background: #E1E1E7; }
-QPushButton:pressed { background: #D6D6DD; }
-QPushButton:focus { border-color: #0071E3; }
-QPushButton:disabled { color: #AEAEB2; background: #F2F2F5; }
-QLabel#checkText { color: #6E6E73; font-size: 13px; }
-QLabel#checkText[tone="ok"] { color: #1F7A35; }
-QLabel#checkText[tone="fail"] { color: #D70015; }
-QLabel#plazaIntro { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 14px; padding: 12px 16px;
-    color: #3A3A3C; font-size: 13px; }
+QPushButton { background: #EEE7DB; border: 1px solid transparent; border-radius: 17px; padding: 8px 18px;
+              color: #1D2240; }
+QPushButton:hover { background: #E7DFD1; }
+QPushButton:pressed { background: #DED5C5; }
+QPushButton:focus { border-color: #192457; }
+QPushButton:disabled { color: #B5AC9F; background: #F2ECE2; }
+QLabel#checkText { color: #776F63; font-size: 13px; }
+QLabel#checkText[tone="ok"] { color: #3F7A53; }
+QLabel#checkText[tone="fail"] { color: #B94534; }
+QLabel#plazaIntro { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; padding: 12px 16px;
+    color: #47413A; font-size: 13px; }
 
-QProgressBar { background: #E5E5EA; border: none; border-radius: 3px; min-height: 6px; max-height: 6px; }
-QProgressBar::chunk { background: #0071E3; border-radius: 3px; }
+QProgressBar { background: #E8E0D3; border: none; border-radius: 3px; min-height: 6px; max-height: 6px; }
+QProgressBar::chunk { background: #192457; border-radius: 3px; }
 QScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 4px 2px; }
-QScrollBar::handle:vertical { background: #C7C7CC; border-radius: 3px; min-height: 30px; }
-QScrollBar::handle:vertical:hover { background: #AEAEB2; }
+QScrollBar::handle:vertical { background: #CFC6B8; border-radius: 3px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: #B5AC9F; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QSplitter::handle { background: transparent; }
-QListWidget { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 14px; padding: 6px; outline: none; }
-QListWidget::item { padding: 10px 12px; border-radius: 9px; color: #1D1D1F; }
-QListWidget::item:hover { background: #F5F5F7; }
-QListWidget::item:selected { background: #E8F1FD; color: #1D1D1F; }
-QMenu { background: #FFFFFF; border: 1px solid #E0E0E5; border-radius: 10px; padding: 6px; }
+QListWidget { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; padding: 6px; outline: none; }
+QListWidget::item { padding: 10px 12px; border-radius: 9px; color: #1D2240; }
+QListWidget::item:hover { background: #F6F1E8; }
+QListWidget::item:selected { background: #ECEDF5; color: #1D2240; }
+QMenu { background: #FFFCF7; border: 1px solid #E5DCCD; border-radius: 10px; padding: 6px; }
 QMenu::item { padding: 7px 26px 7px 14px; border-radius: 6px; }
-QMenu::item:selected { background: #0071E3; color: #FFFFFF; }
-QToolTip { background: #1D1D1F; color: #FFFFFF; border: none; padding: 6px 9px; border-radius: 6px; }
+QMenu::item:selected { background: #192457; color: #FFFCF7; }
+QToolTip { background: #1D2240; color: #FFFCF7; border: none; padding: 6px 9px; border-radius: 6px; }
 """
 
 
@@ -320,19 +333,19 @@ class ButtonLook:
 
 
 BUTTON_LOOKS = {
-    "": ButtonLook("#ECECF0", "#E2E2E7", "#D6D6DC", INK),
-    "primary": ButtonLook(ACCENT, "#1A80EC", "#0062C4", "#FFFFFF", padding=18, bold=True),
-    "toolbar": ButtonLook(CLEAR_COLOR, "#E8E8ED", "#DCDCE2", "#3A3A3C", height=34, padding=12),
-    "ghost": ButtonLook(CLEAR_COLOR, "#E8E8ED", "#DCDCE2", "#3A3A3C", height=34, padding=12),
-    "danger": ButtonLook(CLEAR_COLOR, "#FFEDEC", "#FFDCD9", "#D70015", height=34, padding=12),
-    "link": ButtonLook(CLEAR_COLOR, "#EAF2FD", "#D9E8FB", "#0066CC", height=28, padding=9, size=13),
-    "chip": ButtonLook("#FFFFFF", "#F6F6F8", "#EDEDF0", "#3A3A3C", "#E0E0E5", 30, 13, 13,
-                       checked_background=INK, checked_text="#FFFFFF"),
-    "check": ButtonLook("#FFFFFF", "#FFFFFF", "#F2F6FC", INK, "#D8D8DD", 30, 13, 13, hover_border=ACCENT),
+    "": ButtonLook("#EEE7DB", "#E7DFD1", "#DED5C5", INK),
+    "primary": ButtonLook(ACCENT, "#26336E", "#111A44", "#FFFCF7", padding=18, bold=True),
+    "toolbar": ButtonLook(CLEAR_COLOR, "#EEE7DB", "#E2D9CA", "#47413A", height=34, padding=12),
+    "ghost": ButtonLook(CLEAR_COLOR, "#EEE7DB", "#E2D9CA", "#47413A", height=34, padding=12),
+    "danger": ButtonLook(CLEAR_COLOR, "#FBEAE5", "#F6D9D0", "#B94534", height=34, padding=12),
+    "link": ButtonLook(CLEAR_COLOR, "#ECEDF5", "#DFE2F1", "#3C488E", height=28, padding=9, size=13),
+    "chip": ButtonLook("#FFFCF7", "#F8F4ED", "#EEE7DB", "#47413A", "#E5DCCD", 30, 13, 13,
+                       checked_background=INK, checked_text="#FFFCF7"),
+    "check": ButtonLook("#FFFCF7", "#FFFCF7", "#F3F3F8", INK, "#E2D9CA", 30, 13, 13, hover_border=ACCENT),
     "segment": ButtonLook(CLEAR_COLOR, CLEAR_COLOR, CLEAR_COLOR, MUTED, height=30, padding=18, size=13,
                           checked_text=INK),
-    "heroChip": ButtonLook(CLEAR_COLOR, "#EFEFF3", "#E4E4E9", MUTED, height=28, padding=10, size=13),
-    "heroGhost": ButtonLook("#F2F2F5", "#E8E8ED", "#DCDCE2", INK, height=30, padding=16, size=13),
+    "heroChip": ButtonLook(CLEAR_COLOR, "#F1EBE1", "#E8E0D3", MUTED, height=28, padding=10, size=13),
+    "heroGhost": ButtonLook("#F2ECE2", "#EEE7DB", "#E2D9CA", INK, height=30, padding=16, size=13),
 }
 
 
@@ -572,8 +585,8 @@ def repolish(widget: QWidget):
     widget.update()
 
 
-OK_GREEN = "#34C759"
-FAIL_RED = "#FF3B30"
+OK_GREEN = "#5A9E6F"
+FAIL_RED = "#E5654F"
 
 
 def fade_in(widget: QWidget, duration: int = 200, start: float = 0.0):
@@ -617,7 +630,7 @@ class Spinner(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(2, 2, -2, -2)
-        painter.setPen(QPen(QColor("#E8E8ED"), 1.8))
+        painter.setPen(QPen(QColor("#EEE7DB"), 1.8))
         painter.drawEllipse(rect)
         pen = QPen(self.color, 1.8)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -657,7 +670,7 @@ class ResultMark(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(OK_GREEN if self.ok else FAIL_RED))
         painter.drawEllipse(rect)
-        draw_icon(painter, "check" if self.ok else "cancel", rect.adjusted(3, 3, -3, -3), "#FFFFFF", 3.2)
+        draw_icon(painter, "check" if self.ok else "cancel", rect.adjusted(3, 3, -3, -3), "#FFFCF7", 3.2)
 
 
 class CheckStatus(QWidget):
@@ -746,18 +759,18 @@ class Toast(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(29, 29, 31, 236))
+        painter.setBrush(QColor(29, 34, 64, 236))
         painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
-        draw_icon(painter, self.icon, QRectF(18, (self.height() - 16) / 2, 16, 16), "#FFFFFF")
+        draw_icon(painter, self.icon, QRectF(18, (self.height() - 16) / 2, 16, 16), "#FFFCF7")
         font = QFont(self.font())
         font.setPixelSize(13)
         painter.setFont(font)
-        painter.setPen(QColor("#FFFFFF"))
+        painter.setPen(QColor("#FFFCF7"))
         painter.drawText(QRectF(18 + 16 + 8, 0, self.width(), self.height()), Qt.AlignmentFlag.AlignVCenter, self.text)
 
 
 class Segmented(QFrame):
-    """Segmented control whose white thumb glides to the chosen segment and settles with a
+    """Segmented control whose paper thumb glides to the chosen segment and settles with a
     slight spring; the labels cross-fade between grey and black as it passes."""
 
     changed = Signal(int)
@@ -828,15 +841,69 @@ class Segmented(QFrame):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#E8E8ED"))
+        painter.setBrush(QColor("#EEE7DB"))
         rect = QRectF(self.rect())
         painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
         if not self.thumb.isNull():
             thumb = QRectF(self.thumb)
             painter.setBrush(QColor(0, 0, 0, 16))
             painter.drawRoundedRect(thumb.adjusted(0, 1, 0, 1.5), thumb.height() / 2, thumb.height() / 2)
-            painter.setBrush(QColor("#FFFFFF"))
+            painter.setBrush(QColor("#FFFCF7"))
             painter.drawRoundedRect(thumb, thumb.height() / 2, thumb.height() / 2)
+
+
+class KeyHint(QWidget):
+    """A key drawn as a small keycap, then what it does: [右 Ctrl] 按住说话."""
+
+    def __init__(self, key: str = "", action: str = ""):
+        super().__init__()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(7)
+        self.key = label(key, "keycap")
+        self.action = label(action, "heroMeta")
+        row.addWidget(self.key, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.action, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def set_hint(self, key: str, action: str):
+        self.key.setText(key)
+        self.action.setText(action)
+
+    def text(self) -> str:
+        return f"{self.key.text()} {self.action.text()}"
+
+
+def vrule(height: int = 14) -> QFrame:
+    """A short upright hairline between things on one line."""
+    line = QFrame()
+    line.setObjectName("vrule")
+    line.setFixedHeight(height)
+    return line
+
+
+class TabBar(Segmented):
+    """The app's pages as plain words; the chosen one is in ink with a short coral line under it,
+    and the line glides to the next one. Same API as Segmented."""
+
+    def __init__(self, labels: tuple[str, ...] | list[str], parent=None):
+        super().__init__(labels, parent)
+        self.layout().setContentsMargins(0, 0, 0, 6)
+        self.layout().setSpacing(6)
+        for button in self.buttons:
+            button.look = replace(BUTTON_LOOKS["segment"], height=34, padding=14, size=15, checked_text=ACCENT)
+            button.setMinimumWidth(0)
+            button.updateGeometry()
+
+    def paintEvent(self, _event):
+        if self.thumb.isNull():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(CORAL))
+        width = min(22.0, self.thumb.width() - 20)
+        line = QRectF(self.thumb.center().x() - width / 2, self.thumb.bottom() + 2, width, 2.5)
+        painter.drawRoundedRect(line, 1.25, 1.25)
 
 
 class Task(QObject):
@@ -887,6 +954,14 @@ ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
 
 
 TRAY_SIZES = (16, 20, 24, 32, 40, 48, 64)
+_fonts_loaded: list[bool] = []
+
+
+def load_fonts() -> None:
+    """The serif for headings and large numbers ships with the app (see THIRD_PARTY_NOTICES)."""
+    if not _fonts_loaded:
+        QFontDatabase.addApplicationFont(str(ASSETS / "fonts" / "SaywellSerif-Bold.ttf"))
+        _fonts_loaded.append(True)
 _icons: dict[str, QIcon] = {}
 
 
@@ -943,7 +1018,7 @@ def blend(colors: tuple[str, ...], t: float) -> QColor:
 class LevelBars(QWidget):
     """A scrolling voice-level visualizer with a QProgressBar-like setValue API."""
 
-    def __init__(self, bars: int = 36, colors: tuple[str, ...] = AURORA[:3], rest: str = "#D1D1D6", parent=None):
+    def __init__(self, bars: int = 36, colors: tuple[str, ...] = (INDIGO, ACCENT), rest: str = "#DCD3C4", parent=None):
         super().__init__(parent)
         self.levels = deque([0.0] * bars, maxlen=bars)
         self.colors = colors
@@ -1006,13 +1081,6 @@ class LevelBars(QWidget):
             painter.setBrush(color)
             painter.drawRoundedRect(QRectF(x, middle - height / 2, width, height), width / 2, width / 2)
             x += width + gap
-
-
-def aurora_gradient(center, angle: float) -> QConicalGradient:
-    gradient = QConicalGradient(center, angle)
-    for index, color in enumerate((*AURORA, AURORA[0])):
-        gradient.setColorAt(index / len(AURORA), QColor(color))
-    return gradient
 
 
 class MicButton(QPushButton):
@@ -1116,11 +1184,11 @@ class MicButton(QPushButton):
             ring.setAlphaF(0.28 * (1 - self.phase) * recording * (1 - working))
             painter.setBrush(ring)
             painter.drawEllipse(QRectF(center_x - radius, center_y - radius, radius * 2, radius * 2))
-        idle_fill = mix(QColor(ACCENT), QColor("#1A80EC"), hover)
-        record_fill = mix(QColor(RECORD), QColor("#FF5A50"), hover)
-        # Straight blue → red goes through a muddy purple; the aurora's violet and pink keep it bright.
-        path = (idle_fill.name(), AURORA[1], AURORA[2], record_fill.name())
-        fill = mix(blend(path, recording), QColor("#F2F2F5"), working)
+        idle_fill = mix(QColor(ACCENT), QColor("#26336E"), hover)
+        record_fill = mix(QColor(RECORD), QColor("#EE7A66"), hover)
+        # Straight ink → coral goes through mud; a dusty violet and rose keep it clean.
+        path = (idle_fill.name(), "#4B3F7A", "#B45E73", record_fill.name())
+        fill = mix(blend(path, recording), QColor("#F2ECE2"), working)
         if not self.busy:
             fill = mix(fill, fill.darker(112), max(0.0, min(1.0, self.press.value)))
         painter.setBrush(fill)
@@ -1136,13 +1204,13 @@ class MicButton(QPushButton):
         if mic > 0.01:
             size = 30 * (0.6 + 0.4 * mic)
             painter.setOpacity(base * mic)
-            draw_icon(painter, "mic", QRectF(center_x - size / 2, center_y - size / 2, size, size), "#FFFFFF", 2.0)
+            draw_icon(painter, "mic", QRectF(center_x - size / 2, center_y - size / 2, size, size), "#FFFCF7", 2.0)
         stop = recording * (1 - working)
         if stop > 0.01:
             size = 22 * (0.5 + 0.5 * stop)
             painter.setOpacity(base * stop)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#FFFFFF"))
+            painter.setBrush(QColor("#FFFCF7"))
             painter.drawRoundedRect(QRectF(center_x - size / 2, center_y - size / 2, size, size), 5, 5)
         if working > 0.01:
             painter.setOpacity(base * working)
@@ -1194,8 +1262,8 @@ class SpinBox(QSpinBox):
 
 
 class HeroCard(QFrame):
-    """The recording card: plain white at rest. While listening a slow aurora light runs
-    along its edge; while processing a single blue light does."""
+    """The recording card: plain paper at rest. While listening its edge breathes in coral;
+    while processing a single ink light runs along it."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1235,35 +1303,39 @@ class HeroCard(QFrame):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         radius = 20
-        painter.setPen(QPen(QColor("#E5E5EA"), 1))
-        painter.setBrush(QColor("#FFFFFF"))
+        painter.setPen(QPen(QColor(LINE), 1))
+        painter.setBrush(QColor(SHEET))
         painter.drawRoundedRect(rect, radius, radius)
-        busy = QConicalGradient(rect.center(), -self.phase * 360)
-        busy.setColorAt(0.0, QColor(0, 113, 227, 220))
-        busy.setColorAt(0.25, QColor(0, 113, 227, 0))
-        busy.setColorAt(0.75, QColor(0, 113, 227, 0))
-        busy.setColorAt(1.0, QColor(0, 113, 227, 220))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        for strength, gradient in (
-            (self.listening.value, aurora_gradient(rect.center(), -self.phase * 360)),
-            (self.working.value, busy),
-        ):
-            if strength <= 0.001:
-                continue
-            for inset, width, alpha in ((1.0, 2.0, 1.0), (3.5, 4, 0.16)):
-                painter.setOpacity(alpha * strength)
-                painter.setPen(QPen(QBrush(gradient), width))
+        listening = self.listening.value
+        if listening > 0.001:
+            breath = 0.5 + 0.5 * math.sin(self.phase * 2 * math.pi * 2)  # Two slow breaths a loop.
+            for inset, width, alpha in ((0.75, 1.5, 0.55 + 0.3 * breath), (3.0, 4.0, 0.06 + 0.06 * breath)):
+                edge = QColor(CORAL)
+                edge.setAlphaF(alpha * listening)
+                painter.setPen(QPen(edge, width))
+                painter.drawRoundedRect(rect.adjusted(inset, inset, -inset, -inset), radius - inset, radius - inset)
+        working = self.working.value
+        if working > 0.001:
+            light = QConicalGradient(rect.center(), -self.phase * 360)
+            light.setColorAt(0.0, QColor(25, 36, 87, 200))
+            light.setColorAt(0.25, QColor(25, 36, 87, 0))
+            light.setColorAt(0.75, QColor(25, 36, 87, 0))
+            light.setColorAt(1.0, QColor(25, 36, 87, 200))
+            for inset, width, alpha in ((0.75, 1.5, 1.0), (3.0, 4.0, 0.12)):
+                painter.setOpacity(alpha * working)
+                painter.setPen(QPen(QBrush(light), width))
                 painter.drawRoundedRect(rect.adjusted(inset, inset, -inset, -inset), radius - inset, radius - inset)
         painter.setOpacity(1.0)
 
 
 class Switch(QCheckBox):
     """A toggle switch that keeps the QCheckBox API. The knob springs across while the track
-    fills with blue; holding it down stretches the knob toward where it is going, as on iOS."""
+    fills with ink; holding it down stretches the knob toward where it is going, as on iOS."""
 
-    TRACK_OFF = "#E5E5EA"
-    TRACK_OFF_HOVER = "#DADADF"
-    TRACK_ON_HOVER = "#1A80EC"
+    TRACK_OFF = "#E8E0D3"
+    TRACK_OFF_HOVER = "#E2D9CA"
+    TRACK_ON_HOVER = "#26336E"
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(text, parent)
@@ -1327,7 +1399,7 @@ class Switch(QCheckBox):
         painter.drawRoundedRect(knob.adjusted(-0.5, 0.5, 0.5, 1.5), 10.5, 10.5)
         painter.setBrush(QColor(0, 0, 0, 12))
         painter.drawRoundedRect(knob.adjusted(-1, 1.5, 1, 3), 11, 11)
-        painter.setBrush(QColor("#FFFFFF"))
+        painter.setBrush(QColor("#FFFCF7"))
         painter.drawRoundedRect(knob, 10, 10)
         if self.hasFocus() and self.keyboard_focus:
             ring = QColor(ACCENT)
@@ -1345,11 +1417,11 @@ class Switch(QCheckBox):
 
 
 class CheckBox(QCheckBox):
-    """A small square checkbox in the macOS manner: white with a grey edge, filling blue as a white
+    """A small square checkbox in the macOS manner: paper with a warm edge, filling with ink as a
     tick draws itself when checked. For options too minor for a switch."""
 
-    BORDER = "#C7C7CC"
-    BORDER_HOVER = "#A1A1A6"
+    BORDER = "#CFC6B8"
+    BORDER_HOVER = "#A69D90"
     TICK = ((4.0, 8.4), (6.8, 11.1), (12.2, 5.3))
 
     def __init__(self, text: str = "", parent=None):
@@ -1400,9 +1472,9 @@ class CheckBox(QCheckBox):
         fill = max(0.0, min(1.0, self.fill.value))
         hover = self.hover.value if self.isEnabled() else 0.0
         edge = mix(QColor(self.BORDER), QColor(self.BORDER_HOVER), hover)
-        accent = mix(QColor(ACCENT), QColor("#1A80EC"), hover)
+        accent = mix(QColor(ACCENT), QColor("#26336E"), hover)
         painter.setPen(QPen(mix(edge, accent, fill), 1))
-        painter.setBrush(mix(QColor("#FFFFFF"), accent, fill))
+        painter.setBrush(mix(QColor("#FFFCF7"), accent, fill))
         painter.drawRoundedRect(box, 4.5, 4.5)
         if self.tick.value > 0.01:
             # Drawn stroke by stroke as far as the animation has got.
@@ -1415,7 +1487,7 @@ class CheckBox(QCheckBox):
                 left -= length
                 if left <= 0:
                     break
-            pen = QPen(QColor("#FFFFFF"), 1.8)
+            pen = QPen(QColor("#FFFCF7"), 1.8)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
@@ -1427,7 +1499,7 @@ class CheckBox(QCheckBox):
             painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(box.adjusted(-3, -3, 3, 3), 7, 7)
-        painter.setPen(QColor("#3A3A3C"))
+        painter.setPen(QColor("#47413A"))
         painter.setFont(self.label_font())
         painter.drawText(
             QRectF(box.right() + 8, 0, self.width() - box.right() - 8, self.height()),
@@ -1437,7 +1509,7 @@ class CheckBox(QCheckBox):
 
 
 class RecordingOverlay(QWidget):
-    TONES = {"rec": "#FF453A", "busy": "#FF9F0A", "done": "#30D158", "warn": "#FF9F0A"}
+    TONES = {"rec": "#EC7360", "busy": "#E0A040", "done": "#66AE7C", "warn": "#E0A040"}
 
     def __init__(self):
         super().__init__(
@@ -1476,14 +1548,14 @@ class RecordingOverlay(QWidget):
         text.setSpacing(3)
         self.label = QLabel("正在听  00:00")
         self.label.setTextFormat(Qt.TextFormat.PlainText)
-        self.label.setStyleSheet("color: #FFFFFF; font-size: 15px; font-weight: 700; background: transparent;")
+        self.label.setStyleSheet("color: #FFFCF7; font-size: 15px; font-weight: 700; background: transparent;")
         self.hint = QLabel("松开快捷键结束，Esc 取消")
         self.hint.setTextFormat(Qt.TextFormat.PlainText)
-        self.hint.setStyleSheet("color: #98989D; font-size: 12px; background: transparent;")
+        self.hint.setStyleSheet("color: #9D9487; font-size: 12px; background: transparent;")
         text.addWidget(self.label)
         text.addWidget(self.hint)
         layout.addLayout(text, 1)
-        self.level = LevelBars(14, AURORA[:3], "#48484A")
+        self.level = LevelBars(14, VOICE, "#534C43")
         self.level.setFixedWidth(104)
         layout.addWidget(self.level)
 
@@ -1558,8 +1630,8 @@ class RecordingOverlay(QWidget):
             painter.setBrush(shadow)
             painter.drawRoundedRect(body.adjusted(-step, -step + 3, step, step + 3), 22 + step, 22 + step)
         gradient = QLinearGradient(body.topLeft(), body.bottomLeft())
-        gradient.setColorAt(0, QColor(44, 44, 46, 245))
-        gradient.setColorAt(1, QColor(28, 28, 30, 245))
+        gradient.setColorAt(0, QColor(36, 43, 82, 245))
+        gradient.setColorAt(1, QColor(23, 28, 58, 245))
         painter.setBrush(gradient)
         painter.setPen(QPen(QColor(255, 255, 255, 34), 1))
         painter.drawRoundedRect(body, 22, 22)

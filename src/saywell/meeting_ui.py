@@ -112,8 +112,8 @@ from .ui import (
     run_task,
 )
 
-TONES = {"idle": "#AEAEB2", "rec": "#FF3B30", "busy": "#FF9F0A", "done": "#34C759"}
-FAINT = "#8E8E93"
+TONES = {"idle": "#B5AC9F", "rec": "#E5654F", "busy": "#E0A040", "done": "#5A9E6F"}
+FAINT = "#958C7F"
 WAITING = "开始记录后，会议里说的话会实时出现在这里。"
 
 
@@ -191,13 +191,13 @@ class PickerRow(QAbstractButton):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
         if self.hover.value > 0.01:
-            painter.setBrush(mix(QColor("#FFFFFF"), QColor("#F0F0F4"), self.hover.value))
+            painter.setBrush(mix(QColor("#FFFCF7"), QColor("#F1EBE1"), self.hover.value))
             painter.drawRoundedRect(QRectF(self.rect()).adjusted(4, 1, -4, -1), 10, 10)
         icon = QRectF(16, (self.height() - 28) / 2, 28, 28)
         if self.picture:
             painter.drawPixmap(icon, self.picture, QRectF(self.picture.rect()))
         else:
-            painter.setBrush(QColor("#F2F2F7"))
+            painter.setBrush(QColor("#F2ECE2"))
             painter.drawRoundedRect(icon, 8, 8)
             if self.glyph:
                 draw_icon(painter, self.glyph, icon.adjusted(6, 6, -6, -6), MUTED)
@@ -242,7 +242,7 @@ class AppPicker(QFrame):
         outer.setContentsMargins(14, 10, 14, 18)
         panel = QFrame()
         panel.setObjectName("pickerPanel")
-        panel.setStyleSheet("QFrame#pickerPanel { background: #FFFFFF; border: 1px solid #E3E3E8; border-radius: 14px; }")
+        panel.setStyleSheet("QFrame#pickerPanel { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }")
         shadow = QGraphicsDropShadowEffect(panel)
         shadow.setBlurRadius(30)
         shadow.setOffset(0, 8)
@@ -270,7 +270,7 @@ class AppPicker(QFrame):
             layout.addWidget(row)
         rule = QFrame()
         rule.setFixedHeight(1)
-        rule.setStyleSheet("background: #EDEDF0; margin: 0 16px;")
+        rule.setStyleSheet("background: #EEE7DB; margin: 0 16px;")
         layout.addSpacing(5)
         layout.addWidget(rule)
         layout.addSpacing(5)
@@ -308,7 +308,7 @@ class EdgeFade(QWidget):
     def paintEvent(self, _event):
         painter = QPainter(self)
         gradient = QLinearGradient(0, 0, 0, self.height())
-        solid, clear = QColor(255, 255, 255, 255), QColor(255, 255, 255, 0)
+        solid, clear = QColor(255, 252, 247, 255), QColor(255, 252, 247, 0)  # The card's paper.
         gradient.setColorAt(0.0, solid if self.top else clear)
         gradient.setColorAt(1.0, clear if self.top else solid)
         painter.fillRect(self.rect(), gradient)
@@ -459,7 +459,7 @@ class TranscriptView(GuardedEdit):
         super().__init__()
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setStyleSheet("QTextEdit { background: transparent; border: none; padding: 0 10px 10px 14px;"
-                           " selection-background-color: #CCE0FA; }")
+                           " selection-background-color: #D8DBEE; }")
         self.document().setDocumentMargin(4)
         self.lines: list[Line] = []
         self.shown: list[Paragraph] = []  # What the document holds, a block each.
@@ -627,7 +627,7 @@ class TranscriptView(GuardedEdit):
                 who = LABELS.get(paragraph.who, "") if self.labels else ""
                 if who:
                     painter.setFont(name_font)
-                    painter.setPen(QColor(ACCENT if paragraph.who == ME else "#3A3A3C"))
+                    painter.setPen(QColor(ACCENT if paragraph.who == ME else "#47413A"))
                     painter.drawText(head, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, who)
                     head.setLeft(head.left() + QFontMetrics(name_font).horizontalAdvance(who) + 8)
                 painter.setFont(time_font)
@@ -760,7 +760,7 @@ class MinutesView(GuardedEdit):
         self.size = size  # Of the text, in pixels; previews are smaller.
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setStyleSheet("QTextEdit { background: transparent; border: none; padding: 0 10px 10px 14px;"
-                           f" font-size: {size}px; selection-background-color: #CCE0FA; }}")
+                           f" font-size: {size}px; selection-background-color: #D8DBEE; }}")
         self.document().setIndentWidth(16)
         self.showing = False  # Minutes, not an explanation in their place.
         self.empty(self.EMPTY)
@@ -840,7 +840,7 @@ class MinutesView(GuardedEdit):
             "heading": (base, INK, QFont.Weight.Bold),
             "time": (base, ACCENT, QFont.Weight.DemiBold),
             "bold": (base, INK, QFont.Weight.Bold),
-            "points": (base, "#3A3A3C", QFont.Weight.Normal),
+            "points": (base, "#47413A", QFont.Weight.Normal),
         }.get(kind, (base, INK, QFont.Weight.Normal))
         text.setProperty(QTextFormat.Property.FontPixelSize, size)
         text.setForeground(QColor(color))
@@ -974,7 +974,7 @@ class TemplateRow(PickerRow):
         painter.setPen(Qt.PenStyle.NoPen)
         shade = max(self.hover.value, 1.0 if self.current else 0.0)
         if shade > 0.01:
-            painter.setBrush(mix(QColor("#FFFFFF"), QColor("#F0F0F4"), shade))
+            painter.setBrush(mix(QColor("#FFFCF7"), QColor("#F1EBE1"), shade))
             painter.drawRoundedRect(QRectF(self.rect()).adjusted(4, 1, -4, -1), 10, 10)
         left, right = 16, self.width() - (40 if self.chosen else 16)
         title = QFont(self.font())
@@ -1008,7 +1008,7 @@ class TemplatePicker(QFrame):
         outer.setContentsMargins(14, 10, 14, 18)
         panel = QFrame()
         panel.setObjectName("pickerPanel")
-        panel.setStyleSheet("QFrame#pickerPanel { background: #FFFFFF; border: 1px solid #E3E3E8; border-radius: 14px; }")
+        panel.setStyleSheet("QFrame#pickerPanel { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }")
         shadow = QGraphicsDropShadowEffect(panel)
         shadow.setBlurRadius(30)
         shadow.setOffset(0, 8)
@@ -1035,7 +1035,7 @@ class TemplatePicker(QFrame):
         columns.addLayout(listing)
         rule = QFrame()
         rule.setFixedWidth(1)
-        rule.setStyleSheet("background: #EDEDF0;")
+        rule.setStyleSheet("background: #EEE7DB;")
         columns.addWidget(rule)
         side = QVBoxLayout()
         side.setContentsMargins(18, 2, 12, 8)
@@ -1049,7 +1049,7 @@ class TemplatePicker(QFrame):
         # The sample on a sheet of its own, so it reads as an example.
         sheet = QFrame()
         sheet.setObjectName("templateSheet")
-        sheet.setStyleSheet("QFrame#templateSheet { background: #F7F7F9; border-radius: 10px; }")
+        sheet.setStyleSheet("QFrame#templateSheet { background: #F8F4ED; border-radius: 10px; }")
         inside = QVBoxLayout(sheet)
         inside.setContentsMargins(14, 10, 8, 6)
         inside.setSpacing(0)
@@ -1106,10 +1106,10 @@ class TemplateBox(ComboBox):
 
 # What each format is good for, and how its badge looks: the extension on a tint.
 FORMAT_NOTES = {
-    "docx": ("方便继续修改、发给别人", "#2F6FD6", "#E8F0FC"),
-    "pdf": ("版式固定，适合打印", "#D2453B", "#FCEBEA"),
-    "md": ("适合 Obsidian 等笔记", "#3A3A3C", "#EDEDF0"),
-    "txt": ("不带格式，哪里都能打开", "#6E6E73", "#F2F2F5"),
+    "docx": ("方便继续修改、发给别人", "#2F6FD6", "#ECEDF5"),
+    "pdf": ("版式固定，适合打印", "#C9533F", "#FAE9E4"),
+    "md": ("适合 Obsidian 等笔记", "#47413A", "#EEE7DB"),
+    "txt": ("不带格式，哪里都能打开", "#776F63", "#F2ECE2"),
 }
 
 
@@ -1148,10 +1148,10 @@ class FormatTile(QAbstractButton):
         box = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         if self.isChecked():
             painter.setPen(QPen(QColor(ACCENT), 1.5))
-            painter.setBrush(QColor("#F5F9FF"))
+            painter.setBrush(QColor("#F3F3F8"))
         else:
-            painter.setPen(QPen(QColor("#E3E3E8"), 1))
-            painter.setBrush(mix(QColor("#FFFFFF"), QColor("#F7F7F9"), self.hover.value))
+            painter.setPen(QPen(QColor("#E8E0D3"), 1))
+            painter.setBrush(mix(QColor("#FFFCF7"), QColor("#F8F4ED"), self.hover.value))
         painter.drawRoundedRect(box, 11, 11)
         badge = QRectF(12, (self.height() - 36) / 2, 36, 36)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -1193,7 +1193,7 @@ class ExportPanel(QFrame):
         outer.setContentsMargins(14, 10, 14, 18)
         panel = QFrame()
         panel.setObjectName("pickerPanel")
-        panel.setStyleSheet("QFrame#pickerPanel { background: #FFFFFF; border: 1px solid #E3E3E8; border-radius: 14px; }")
+        panel.setStyleSheet("QFrame#pickerPanel { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }")
         shadow = QGraphicsDropShadowEffect(panel)
         shadow.setBlurRadius(30)
         shadow.setOffset(0, 8)
@@ -1303,12 +1303,12 @@ class MeetingEvents(QObject):
 
 
 class Waveform(QWidget):
-    """What is being heard, as bars scrolling to the left, mirrored about the middle: blue while
-    the user speaks, violet while the others do. Fed a level per source about twenty times a
+    """What is being heard, as bars scrolling to the left, mirrored about the middle: indigo while
+    the user speaks, coral while the others do. Fed a level per source about twenty times a
     second while recording."""
 
     STEP = 6  # A bar and the gap after it, in pixels.
-    COLORS = {ME: QColor("#3B82F6"), OTHERS: QColor("#8B5CF6")}
+    COLORS = {ME: QColor("#3C488E"), OTHERS: QColor("#F2755F")}
 
     def __init__(self):
         super().__init__()
@@ -1380,7 +1380,7 @@ class ChipMeter(QWidget):
     and grey while it is quiet. Takes levels like a QProgressBar (0 to 100)."""
 
     WEIGHTS = (0.62, 1.0, 0.8)
-    REST = QColor("#C7C7CC")
+    REST = QColor("#CFC6B8")
 
     def __init__(self, color: str):
         super().__init__()
@@ -1437,11 +1437,11 @@ class SourceChip(QAbstractButton):
     whether the sound check heard it. A source in use is filled, one left out is only outlined.
     The app's chip opens a list; the microphone's is switched on and off by clicking it."""
 
-    FILL = "#F2F2F5"
-    FILL_HOVER = "#E9E9EE"
-    OUTLINE = "#DCDCE1"
-    OUTLINE_HOVER = "#F7F7F9"
-    PRESSED = "#E1E1E7"
+    FILL = "#F2ECE2"
+    FILL_HOVER = "#EEE7DB"
+    OUTLINE = "#E2D9CA"
+    OUTLINE_HOVER = "#F8F4ED"
+    PRESSED = "#E7DFD1"
 
     def __init__(self, text: str, glyph: str, color: str, off_glyph: str = "", menu: bool = False,
                  checkable: bool = False):
@@ -1546,7 +1546,7 @@ class SourceChip(QAbstractButton):
         hover = self.hover.value if live else 0.0
         press = max(0.0, min(1.0, self.press.value)) if live else 0.0
         fill = max(0.0, min(1.0, self.fill.value))
-        idle = mix(QColor("#FFFFFF"), QColor(self.OUTLINE_HOVER), hover)
+        idle = mix(QColor("#FFFCF7"), QColor(self.OUTLINE_HOVER), hover)
         busy = mix(QColor(self.FILL), QColor(self.FILL_HOVER), hover)
         background = mix(mix(idle, busy, fill), QColor(self.PRESSED), press)
         border = QColor(self.OUTLINE)
