@@ -1519,6 +1519,16 @@ def main() -> int:
         if not hook.start():
             raise RuntimeError("The keyboard hook cannot be installed in this build.")
         hook.stop()
+        # Selection translation: the mouse hook, and a UI Automation client to read selections.
+        from .capture import com_thread
+        from .selection import Automation, MouseWatcher
+
+        mouse = MouseWatcher()
+        if not mouse.start():
+            raise RuntimeError("The mouse hook cannot be installed in this build.")
+        mouse.stop()
+        with com_thread():
+            Automation().close()
         # What is new after an update comes from the release notes bundled with the program.
         if not shipped_notes()[0]:
             raise RuntimeError("This version's release notes are missing from this build.")
