@@ -134,6 +134,10 @@ class Settings:
     selection_foreign: str = "英语"
     selection_style: str = "natural"
     selection_excluded: list[str] = field(default_factory=list)
+    # The translation popup as last resized by hand: its width, and the most its text may take
+    # before it scrolls. 0 means the built-in size.
+    selection_popup_width: int = 0
+    selection_popup_height: int = 0
 
     @property
     def download_root(self) -> Path:

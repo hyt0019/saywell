@@ -12,7 +12,7 @@ import threading
 import time
 from dataclasses import replace
 
-from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFontMetrics,
@@ -37,7 +37,9 @@ from .translation import LANGUAGES, STYLES, Translation, target_language
 from .ui import INK, Glyph, Segmented, Spinner, Tween, app_icon, label, make_button
 
 FAINT = "#958C7F"
-WIDTH = 384
+WIDTH = 384  # The panel's width until it is resized by hand.
+MIN_WIDTH, MIN_ROOM = 320, 60
+EDGE = 8  # How close to the panel's right or bottom edge the pointer resizes it.
 ICON_SECONDS = 4.0  # The button goes away unless it is used or hovered.
 NEAR = 120  # How close (physical pixels) the mouse must be to the selection for it to count.
 STYLE_KEYS = tuple(STYLES)
@@ -166,9 +168,29 @@ class SelectionIcon(Floating):
         draw_swallow(painter, bird_rect(box))
 
 
+class ResizeGrip(QWidget):
+    """Three faint dots in the panel's bottom-right corner, saying it can be pulled bigger.
+    Only drawn: the panel's own edges take the drag."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setFixedSize(14, 14)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#CFC6B8"))
+        for x, y in ((9, 4), (4, 9), (9, 9)):
+            painter.drawEllipse(QRectF(x - 1.2, y - 1.2, 2.4, 2.4))
+
+
 class TranslationPopup(Floating):
     """The translation beside the selection: where it goes, the original in brief, the
-    translation (with senses for a single word), and copy and replace."""
+    translation (with senses for a single word), and copy and replace. Its right and bottom
+    edges resize it: the width is kept as set, the height becomes the most the translation
+    may take before it scrolls."""
 
     copy = Signal()
     replace_selection = Signal()
@@ -176,9 +198,13 @@ class TranslationPopup(Floating):
     style = Signal(str)  # Another style was chosen.
     retry = Signal()
     closed = Signal()
+    resized = Signal(int, int)  # Width and room, once a resize by hand is let go.
 
     def __init__(self):
         super().__init__()
+        self.panel_width = WIDTH
+        self.room = 0  # 0: grow to about half the screen.
+        self.resizing: tuple | None = None  # (right, bottom, where it began, width, room)
         self.setFixedWidth(WIDTH + 28)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(14, 8, 14, 20)
@@ -192,7 +218,10 @@ class TranslationPopup(Floating):
         shadow.setOffset(0, 8)
         shadow.setColor(QColor(0, 0, 0, 40))
         self.panel.setGraphicsEffect(shadow)
+        self.panel.setMouseTracking(True)
+        self.panel.installEventFilter(self)
         outer.addWidget(self.panel)
+        self.grip = ResizeGrip(self.panel)
         layout = QVBoxLayout(self.panel)
         layout.setContentsMargins(16, 10, 10, 12)
         layout.setSpacing(0)
@@ -332,7 +361,7 @@ class TranslationPopup(Floating):
         # Two lines of it at most: enough to see what is being translated.
         brief = " ".join(original.split())
         metrics = QFontMetrics(self.original.font())
-        self.original.setText(metrics.elidedText(brief, Qt.TextElideMode.ElideRight, 2 * (WIDTH - 40) - 30))
+        self.original.setText(metrics.elidedText(brief, Qt.TextElideMode.ElideRight, 2 * (self.panel_width - 40) - 30))
         self.result.clear()
         self.senses.clear()
         self.senses.hide()
@@ -396,8 +425,9 @@ class TranslationPopup(Floating):
         """Grow with the translation up to about half the screen, then scroll."""
         screen = (self.screen() or QGuiApplication.primaryScreen()).availableGeometry()
         if self.scroll.isVisible():
-            room = max(160, screen.height() // 2 - 160)
-            width = WIDTH - 32
+            room = self.room or max(160, screen.height() // 2 - 160)
+            room = max(MIN_ROOM, min(room, screen.height() - 200))
+            width = self.panel_width - 32
             needed = self._height(width - 6)
             if needed > room:  # Scrolling: the bar takes some of the width.
                 width -= 8
@@ -421,6 +451,71 @@ class TranslationPopup(Floating):
             self.senses.setFixedHeight(senses)
             height += 8 + senses
         return height
+
+    # Resized by hand
+
+    def set_size(self, width: int, room: int):
+        """The size kept from last time (0, 0 for the built-in one)."""
+        screen = (self.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+        self.panel_width = max(MIN_WIDTH, min(width or WIDTH, screen.width() - 80))
+        self.room = max(MIN_ROOM, room) if room else 0
+        self.setFixedWidth(self.panel_width + 28)
+        if self.isVisible():
+            self._fit()
+
+    def _edges(self, position: QPoint) -> tuple[bool, bool]:
+        """Whether a point in the panel is on its right edge, its bottom edge, or both."""
+        right = position.x() >= self.panel.width() - EDGE
+        bottom = position.y() >= self.panel.height() - EDGE and self.scroll.isVisible()
+        corner = position.x() >= self.panel.width() - 16 and position.y() >= self.panel.height() - 16
+        return right or corner, bottom or (corner and self.scroll.isVisible())
+
+    def eventFilter(self, watched, event):
+        if watched is not self.panel:
+            return False
+        kind = event.type()
+        if kind == QEvent.Type.Resize:
+            self.grip.move(self.panel.width() - self.grip.width() - 3, self.panel.height() - self.grip.height() - 3)
+        elif kind == QEvent.Type.MouseMove:
+            position = event.position().toPoint()
+            if self.resizing is not None:
+                self._resize_to(event.globalPosition().toPoint())
+                return True
+            right, bottom = self._edges(position)
+            shapes = {(True, True): Qt.CursorShape.SizeFDiagCursor, (True, False): Qt.CursorShape.SizeHorCursor,
+                      (False, True): Qt.CursorShape.SizeVerCursor}
+            if (right, bottom) in shapes:
+                self.panel.setCursor(shapes[right, bottom])
+            else:
+                self.panel.unsetCursor()
+        elif kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            right, bottom = self._edges(event.position().toPoint())
+            if right or bottom:
+                self.resizing = (right, bottom, event.globalPosition().toPoint(), self.panel_width,
+                                 self.scroll.height() if self.scroll.isVisible() else 0)
+                self.anchor = None  # Sized by hand: it stays where it is.
+                return True
+        elif kind == QEvent.Type.MouseButtonRelease and self.resizing is not None:
+            self.resizing = None
+            self.resized.emit(self.panel_width, self.room)
+            return True
+        elif kind == QEvent.Type.Leave and self.resizing is None:
+            self.panel.unsetCursor()
+        return False
+
+    def _resize_to(self, pointer: QPoint):
+        right, bottom, start, width, room = self.resizing
+        moved = pointer - start
+        screen = (self.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+        if right:
+            self.panel_width = max(MIN_WIDTH, min(width + moved.x(), screen.right() - self.x() - 40))
+            self.setFixedWidth(self.panel_width + 28)
+        if bottom and room:
+            self.room = max(MIN_ROOM, min(room + moved.y(), screen.bottom() - self.y() - 140))
+        self._fit()
+        if bottom and room:
+            self.scroll.setFixedHeight(self.room)  # Follows the pointer, even past the text.
+            self.adjustSize()
 
     # Where it goes
 
@@ -483,6 +578,8 @@ class SelectionTranslate:
         self.popup.style.connect(self._restyle)
         self.popup.retry.connect(lambda: self.translate(self.target_language))
         self.popup.closed.connect(self._closed)
+        self.popup.resized.connect(self._resized)
+        self.popup.set_size(window.settings.selection_popup_width, window.settings.selection_popup_height)
         self.pending = None  # The Selection shown in the icon, waiting for a click.
         self.current = None  # The Selection in the popup.
         self.target = None  # Where it was selected, for 替换.
@@ -724,6 +821,15 @@ class SelectionTranslate:
             self.popup.show_waiting(self.current.text, language, self.current.editable, self.current.cut,
                                     self.settings.selection_style)
             self.translate(language)
+
+    def _resized(self, width: int, room: int):
+        """The popup was resized by hand: the next ones open at that size."""
+        window = self.window
+        window.settings = replace(window.settings, selection_popup_width=width, selection_popup_height=room)
+        try:
+            window.settings.save()
+        except OSError:
+            pass
 
     def _restyle(self, style: str):
         """Another style from the popup: kept for next time, like the one in the settings."""

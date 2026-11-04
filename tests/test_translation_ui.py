@@ -243,6 +243,35 @@ def test_the_translation_key_cannot_be_the_recording_key(run, monkeypatch):
     assert FakeSoloHook.made == [] and window.hotkeys.registered == set()
 
 
+def test_the_popup_is_resized_by_its_edges_and_opens_at_that_size_next_time(run):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    from saywell.translation_ui import WIDTH
+
+    window, controller = run(selection_trigger="direct")
+    controller._read(("mouse", (260, 118)), replace(PAGE, text="A long paragraph. " * 40))
+    assert wait_for(lambda: controller.translation is not None)
+    popup, panel = controller.popup, controller.popup.panel
+    QApplication.processEvents()
+    edge = QPoint(panel.width() - 3, panel.height() // 2)
+    QTest.mouseMove(panel, edge)
+    assert panel.cursor().shape() == Qt.CursorShape.SizeHorCursor
+    QTest.mousePress(panel, Qt.MouseButton.LeftButton, pos=edge)
+    QTest.mouseMove(panel, edge + QPoint(120, 0))
+    QTest.mouseRelease(panel, Qt.MouseButton.LeftButton, pos=edge + QPoint(120, 0))
+    assert popup.panel_width == WIDTH + 120 and popup.width() == WIDTH + 148
+    corner = QPoint(panel.width() - 4, panel.height() - 4)
+    before = popup.scroll.height()
+    QTest.mousePress(panel, Qt.MouseButton.LeftButton, pos=corner)
+    QTest.mouseMove(panel, corner + QPoint(0, 60))
+    QTest.mouseRelease(panel, Qt.MouseButton.LeftButton, pos=corner + QPoint(0, 60))
+    assert popup.room == before + 60 and popup.scroll.height() == before + 60
+    assert (window.settings.selection_popup_width, window.settings.selection_popup_height) == (WIDTH + 120, before + 60)
+    again = SelectionTranslate(window)
+    assert again.popup.panel_width == WIDTH + 120 and again.popup.room == before + 60
+
+
 def test_the_style_can_be_changed_in_the_popup_and_is_kept(run):
     window, controller = run(selection_trigger="direct")
     controller._read(("mouse", (260, 118)), PAGE)
