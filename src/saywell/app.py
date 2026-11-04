@@ -48,6 +48,7 @@ from .settings import Settings, data_dir, read_key
 from .shortcuts import DEFAULT_HOTKEY, INSERT_HOTKEY, SOLO_HOLD_MS, SOLO_TAP_MS, parse_shortcut, shortcut_label
 from .startup import StartupError, migrate_legacy_entry, save_settings_with_startup, startup_enabled
 from .stats import StatsStore
+from .translate_page import TranslatePage
 from .ui import (
     ACCENT,
     RECORD,
@@ -258,7 +259,7 @@ class MainWindow(QMainWindow):
         brand.addWidget(label("保留你的意思，整理你的表达。", "muted"))
         header.addLayout(brand)
         header.addStretch()
-        self.page_switch = TabBar(("概览", "文字", "会议"))
+        self.page_switch = TabBar(("概览", "文字", "会议", "翻译"))
         self.page_group, self.page_buttons = self.page_switch.group, self.page_switch.buttons
         self.page_switch.changed.connect(self.show_page)
         header.addWidget(self.page_switch)
@@ -425,6 +426,12 @@ class MainWindow(QMainWindow):
         self.meeting.recording_changed.connect(self.meeting_changed)
         self.pages.addWidget(self.meeting)
         self.hero_stack.addWidget(self.meeting.hero)
+        # 翻译: the guide to selection translation in place of the recording card, and long texts.
+        self.translate_page = TranslatePage(self)
+        self.translate_page.guide.open_settings.connect(self.open_settings)
+        self.translate_page.guide.turn_on.connect(self.turn_on_selection_translation)
+        self.pages.addWidget(self.translate_page)
+        self.hero_stack.addWidget(self.translate_page.guide)
         self.toast = Toast(central)
         self.show_page(0)
 
@@ -453,7 +460,7 @@ class MainWindow(QMainWindow):
         changed = self.pages.currentIndex() != index
         self.pages.setCurrentIndex(index)
         self.page_switch.set_current(index)
-        hero = 1 if index == 2 else 0
+        hero = {2: 1, 3: 2}.get(index, 0)
         if self.hero_stack.currentIndex() != hero:
             self.hero_stack.setCurrentIndex(hero)
             if self.isVisible():
@@ -462,8 +469,21 @@ class MainWindow(QMainWindow):
             fade_in(self.pages.currentWidget(), 200)
         if index == 1:
             self.original.setFocus()
+        if index == 3 and not self.translate_page.original.toPlainText():
+            self.translate_page.original.setFocus()
         if index == 2 and self.native:
             self.meeting.remember_app()
+
+    def turn_on_selection_translation(self):
+        """From the 翻译 page: on, with the rest of its settings as they are."""
+        self.settings = replace(self.settings, selection_translate=True)
+        try:
+            self.settings.save()
+        except OSError:
+            self.set_notice("无法写入本地设置，请检查用户目录权限。")
+        self.configure_hotkeys()
+        self.translate_page.refresh()
+        self.toast.show_text("已开启划词翻译")
 
     def meeting_changed(self, recording: bool):
         """A meeting being recorded shows on its tab and in the tray, whatever page is open."""
@@ -1371,6 +1391,7 @@ class MainWindow(QMainWindow):
                 self.configure_hotkeys()
                 self.refresh_controls()
                 self.refresh_overview()
+                self.translate_page.refresh()
                 self.toast.show_text("设置已保存")
                 if self.native:
                     self.update_balance(force=True)
@@ -1470,6 +1491,7 @@ class MainWindow(QMainWindow):
 
     def shutdown(self):
         self.meeting.shutdown()  # Before the model goes: the meeting may be using it.
+        self.translate_page.shutdown()
         self.downloads.cancel(wait=2, discard=False)  # The unfinished file is resumed next time.
         self.update_cancel.set()  # Likewise an update's installer.
         self.update_timer.stop()

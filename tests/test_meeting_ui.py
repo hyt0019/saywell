@@ -268,10 +268,15 @@ def test_a_sound_check_listens_to_both_sources_and_says_what_it_heard(window, no
     assert wait_for(lambda: page.state in ("idle", "done"))
 
 
-def test_meeting_tab_shows_its_own_card(window):
-    assert [button.text() for button in window.page_buttons] == ["概览", "文字", "会议"]
+def test_meeting_and_translate_tabs_show_their_own_cards(window):
+    assert [button.text() for button in window.page_buttons] == ["概览", "文字", "会议", "翻译"]
     window.show_page(2)
     assert window.hero_stack.currentWidget() is window.meeting.hero
+    window.show_page(3)
+    guide = window.translate_page.guide
+    assert window.hero_stack.currentWidget() is guide and not guide.on_button.isHidden()
+    guide.on_button.click()  # Turned on from the page, the rest of its settings as they were.
+    assert window.settings.selection_translate and guide.on_button.isHidden()
     window.show_page(0)
     assert window.hero_stack.currentWidget() is window.hero
 

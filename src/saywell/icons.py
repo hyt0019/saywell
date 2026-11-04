@@ -247,6 +247,12 @@ def _headphones(p):
     _rounded(p, 15.8, 13.5, 4.2, 6.8, 2.1)
 
 
+def _paste(p):
+    # A clipboard: the board, and the clip at its top.
+    _rounded(p, 5, 5.5, 14, 15, 2.6)
+    _rounded(p, 9, 3, 6, 4, 1.6)
+
+
 def _stop(p):
     _rounded(p, 6.5, 6.5, 11, 11, 2.6)
 
@@ -256,6 +262,7 @@ PATHS = {
     "mic_off": _mic_off,
     "headphones": _headphones,
     "stop": _stop,
+    "paste": _paste,
     "translate": _translate,
     "swap": _swap,
     "mic": _mic,

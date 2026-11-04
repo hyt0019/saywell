@@ -110,6 +110,7 @@ GPU 加速：`AsrModel.gpu=True` 的模型（Qwen3-ASR）同时带有 llama.cpp 
 - **坐标**：钩子和 UI Automation 给的是物理像素，Qt 摆窗口用逻辑像素。Qt 6 把每块屏幕的左上角保留为物理坐标，从那里按缩放比例换算，`to_logical` 照此计算，和 `QCursor.pos()` 一致（125% 缩放下实测）。
 - **翻译**（`translation.py`）：方向按文字的书写系统判断（汉字、假名、谚文、西里尔字母、拉丁字母），只要有假名就算日语；汉字按 4 倍计，夹几个英文词的中文仍算中文。是用户的语言就译成另一种，其他都译成用户的语言。提示词要求保留段落、换行、列表、代码和网址，原文里的指令也只翻译；`glossary` 只带原文里出现的词库词。三个词以内的字母词（单词或短语）另要 1 到 3 个词义。请求走 `ApiCleaner._complete`，和整理共用重试和报错。用 deepseek-flash 实测一次约 0.8 秒、300 tokens。
 - **窗口**（`translation_ui.py`）：小按钮和弹窗都是 `Tool | WindowStaysOnTopHint | WindowDoesNotAcceptFocus`，Qt 在 Windows 上因此加上 `WS_EX_NOACTIVATE`（已核对窗口样式），点它们不会把焦点从原来的程序拿走，“替换原文”才能直接 `paste_text`（`single_line=False` 保留换行）到原来的选区。弹窗里的语言选择是内嵌的按钮组，不用 `QMenu`，菜单会抢输入；风格是顶部一个缩小的 `Segmented`，换风格写回 `selection_style`，同一个选区已经译过的（按语言和风格）直接取回。小按钮就是应用图标里的燕子（`brand.draw_tile` 和 `draw_swallow`），让人一眼认出是好好说的。弹窗打开时注册全局 Esc（编号 5），关闭时注销；划词翻译快捷键是编号 4。文字高度用字体度量按实际宽度算好、直接设给标签，自动换行的 `QLabel` 自己报的高度偏大，还会把文字竖直居中。翻译用掉的 tokens 记进概览页的统计（`record_api_usage`）。
+- **翻译页**（`translate_page.py`）：`TranslateGuide` 在这一页代替录音卡片，三步图示按 `selection_trigger` 和 `selection_hotkey` 换说明。`pieces` 把长文先按段落、超长的段落再按句子切成不超过 `CHUNK`（1500）字的几份，每份带上原文里跟在它后面的空白，译文按这些空白接回去，段落和换行不变；`Job` 记下原文、语言、风格和已译的部分，输入没变时“继续翻译”从第一份没译的接着请求。每份是一次 `translation.translate`（`source` 是用户指定的原文语言，写进提示词），译文在文档末尾用单独的 `QTextCursor` 追加，不动用户正在看的位置。停止、清空和重新开始都让 `generation` 加一，晚到的结果直接丢弃。
 - **设置**：`selection_*` 几项，默认关闭；读取时校验触发方式、风格、语言和快捷键，排除的程序一律转成小写的文件名。设置页里划词翻译快捷键不能和录音快捷键相同；两种语言是互译的一对，不能相同，也不能用同一种文字书写（方向按书写系统判断，英语和法语这样的一对分不出来）。
 
 ## 动效

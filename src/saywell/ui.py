@@ -239,6 +239,7 @@ class Glyph:
     MIC_OFF = "mic_off"
     HEADPHONES = "headphones"
     STOP = "stop"
+    PASTE = "paste"
 
 
 def glyph_pixmap(glyph: str, color: str, size: int = 16) -> QPixmap:
