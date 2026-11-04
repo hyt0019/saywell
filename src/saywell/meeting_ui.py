@@ -18,7 +18,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QFileInfo, QObject, QPoint, QPointF, QRectF, QSize, QStandardPaths, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QFileInfo, QObject, QPoint, QPointF, QRectF, QSize, QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -98,12 +98,10 @@ from .ui import (
     ComboBox,
     Glyph,
     HeroCard,
-    LevelBars,
     MicButton,
     ResultMark,
     Segmented,
     Spinner,
-    Switch,
     Tween,
     card,
     dialog_header,
@@ -1352,6 +1350,218 @@ class Waveform(QWidget):
             painter.drawRoundedRect(QRectF(x, middle - height / 2, 3, height), 1.5, 1.5)
 
 
+class SourceIcon(QWidget):
+    """A source chip's leading picture: the app's own icon, or a line glyph."""
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(16, 16)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.picture: QPixmap | None = None
+        self.glyph = ""
+        self.color = MUTED
+
+    def show_picture(self, picture: QPixmap | None, glyph: str, color: str):
+        self.picture, self.glyph, self.color = picture, glyph, color
+        self.update()
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        if self.picture is not None:
+            painter.drawPixmap(QRectF(self.rect()), self.picture, QRectF(self.picture.rect()))
+        elif self.glyph:
+            draw_icon(painter, self.glyph, QRectF(self.rect()), self.color)
+
+
+class ChipMeter(QWidget):
+    """Three bars that move with a source's level, as on a participant's tile in a call. Short
+    and grey while it is quiet. Takes levels like a QProgressBar (0 to 100)."""
+
+    WEIGHTS = (0.62, 1.0, 0.8)
+    REST = QColor("#C7C7CC")
+
+    def __init__(self, color: str):
+        super().__init__()
+        self.color = QColor(color)
+        self.setFixedSize(15, 14)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._value = 0
+        self.level = 0.0
+        self.target = 0.0
+        self.phase = 0.0
+        self.timer = QTimer(self)
+        self.timer.setInterval(33)
+        self.timer.timeout.connect(self._advance)
+
+    def setValue(self, value: int):
+        self._value = max(0, min(100, int(value)))
+        self.target = max(self.target, math.sqrt(self._value / 100))  # Quiet talkers stay visible.
+        if (self.target or self.level) and not self.timer.isActive():
+            self.timer.start()
+
+    def value(self) -> int:
+        return self._value
+
+    def _advance(self):
+        rising = self.target > self.level
+        self.level += (self.target - self.level) * (0.6 if rising else 0.22)
+        self.target *= 0.6
+        self.phase += 0.35
+        if self.level < 0.01 and self.target < 0.01:
+            self.level = self.target = 0.0
+            self.timer.stop()
+        self.update()
+
+    def hideEvent(self, event):
+        self.timer.stop()
+        self.level = self.target = 0.0
+        super().hideEvent(event)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(mix(self.REST, self.color, min(1.0, self.level * 3)))
+        full, rest = float(self.height()), 5.0
+        for index, weight in enumerate(self.WEIGHTS):
+            wobble = 0.78 + 0.22 * math.sin(self.phase * (1 + 0.37 * index) + index * 1.9)
+            height = min(full, rest + (full - rest) * self.level * weight * wobble)
+            x = index * 6.0
+            painter.drawRoundedRect(QRectF(x, (full - height) / 2, 3, height), 1.5, 1.5)
+
+
+class SourceChip(QAbstractButton):
+    """One source of a meeting's sound: what it is, how loud it is while trying or recording, and
+    whether the sound check heard it. A source in use is filled, one left out is only outlined.
+    The app's chip opens a list; the microphone's is switched on and off by clicking it."""
+
+    FILL = "#F2F2F5"
+    FILL_HOVER = "#E9E9EE"
+    OUTLINE = "#DCDCE1"
+    OUTLINE_HOVER = "#F7F7F9"
+    PRESSED = "#E1E1E7"
+
+    def __init__(self, text: str, glyph: str, color: str, off_glyph: str = "", menu: bool = False,
+                 checkable: bool = False):
+        super().__init__()
+        self.glyph, self.off_glyph, self.tint = glyph, off_glyph or glyph, color
+        self.picture: QPixmap | None = None
+        self.active = False
+        self.locked = False
+        self.keyboard_focus = False
+        self.setCheckable(checkable)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(32)
+        self.hover = Tween(self)
+        self.press = Tween(self)
+        self.fill = Tween(self, duration=200)
+        self.pressed.connect(lambda: self.press.to(1.0, 90))
+        self.released.connect(lambda: self.press.to(0.0, 300))
+        self.toggled.connect(self.set_active)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(11, 0, 12, 0)
+        layout.setSpacing(7)
+        self.icon = SourceIcon()
+        layout.addWidget(self.icon)
+        self.title = QLabel(text)
+        self.title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self.title)
+        # While trying or recording: how loud this source is, in its waveform color.
+        self.meter = ChipMeter(color)
+        self.meter.hide()
+        layout.addWidget(self.meter)
+        self.mark = ResultMark(15)
+        self.mark.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.mark.hide()
+        layout.addWidget(self.mark)
+        self.chevron = SourceIcon() if menu else None
+        if self.chevron is not None:
+            self.chevron.setFixedSize(11, 11)
+            self.chevron.show_picture(None, Glyph.CHEVRON_DOWN, MUTED)
+            layout.addSpacing(-2)
+            layout.addWidget(self.chevron)
+        super().setText(text)
+        self._restyle()
+
+    def setText(self, text: str):
+        super().setText(text)
+        self.title.setText(text)
+
+    def set_picture(self, picture: QPixmap | None):
+        self.picture = picture
+        self._restyle()
+
+    def set_active(self, on: bool):
+        self.active = bool(on)
+        self.fill.to(float(self.active), animate=self.isVisible())
+        self._restyle()
+
+    def set_locked(self, locked: bool):
+        """While recording the chips say what is being recorded, but cannot be changed."""
+        self.locked = locked
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, locked)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus if locked else Qt.FocusPolicy.TabFocus)
+        if locked:
+            self.hover.to(0.0, animate=False)
+        if self.chevron is not None:
+            self.chevron.setVisible(not locked)
+
+    def _restyle(self):
+        enabled = self.isEnabled()
+        on = self.active and enabled
+        color = self.tint if on else (MUTED if enabled else DISABLED)
+        self.icon.show_picture(self.picture if enabled else None, self.glyph if on else self.off_glyph, color)
+        text = INK if on else (MUTED if enabled else DISABLED)
+        self.title.setStyleSheet(f"color: {text}; font-size: 13px; background: transparent;")
+        self.update()
+
+    def enterEvent(self, event):
+        self.hover.to(1.0, 140)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hover.to(0.0, 260)
+        super().leaveEvent(event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.EnabledChange:
+            self.press.to(0.0, animate=False)
+            self._restyle()
+        super().changeEvent(event)
+
+    def focusInEvent(self, event):
+        self.keyboard_focus = event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason)
+        super().focusInEvent(event)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = rect.height() / 2
+        live = self.isEnabled() and not self.locked
+        hover = self.hover.value if live else 0.0
+        press = max(0.0, min(1.0, self.press.value)) if live else 0.0
+        fill = max(0.0, min(1.0, self.fill.value))
+        idle = mix(QColor("#FFFFFF"), QColor(self.OUTLINE_HOVER), hover)
+        busy = mix(QColor(self.FILL), QColor(self.FILL_HOVER), hover)
+        background = mix(mix(idle, busy, fill), QColor(self.PRESSED), press)
+        border = QColor(self.OUTLINE)
+        border.setAlphaF(1.0 - fill)
+        painter.setPen(QPen(border, 1) if border.alpha() else Qt.PenStyle.NoPen)
+        painter.setBrush(background)
+        painter.drawRoundedRect(rect, radius, radius)
+        if self.hasFocus() and self.keyboard_focus:
+            ring = QColor(ACCENT)
+            ring.setAlphaF(0.55)
+            painter.setPen(QPen(ring, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(1.5, 1.5, -1.5, -1.5), radius - 1.5, radius - 1.5)
+
+
 class MeetingHero(HeroCard):
     def __init__(self):
         super().__init__()
@@ -1374,33 +1584,16 @@ class MeetingHero(HeroCard):
         row = QHBoxLayout(sources)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
-        self.app_chip = make_button("选择会议软件", None, "heroChip")
-        self.app_chip.set_trailing(Glyph.CHEVRON_DOWN)
+        # The two sources, alike: the meeting app's sound and the user's microphone.
+        self.app_chip = SourceChip("选择会议软件", Glyph.SPEAKER, Waveform.COLORS[OTHERS].name(), menu=True)
         self.app_chip.setToolTip("选择要记录哪个应用的声音")
         row.addWidget(self.app_chip)
-        self.app_meter = LevelBars(7)
-        self.app_meter.setFixedSize(46, 22)
-        self.app_meter.setMinimumHeight(22)
-        row.addWidget(self.app_meter)
-        self.app_mark = ResultMark(16)
-        self.app_mark.hide()
-        row.addWidget(self.app_mark)
+        self.mic_chip = SourceChip("我的麦克风", Glyph.MIC, Waveform.COLORS[ME].name(), Glyph.MIC_OFF, checkable=True)
+        row.addWidget(self.mic_chip)
+        self.app_meter, self.app_mark = self.app_chip.meter, self.app_chip.mark
+        self.mic_meter, self.mic_mark = self.mic_chip.meter, self.mic_chip.mark
         row.addSpacing(6)
-        self.dot = label("·", "heroMeta")
-        row.addWidget(self.dot)
-        row.addSpacing(6)
-        self.mic_switch = Switch("我的麦克风")
-        self.mic_switch.setToolTip("同时记录你自己说的话")
-        row.addWidget(self.mic_switch)
-        self.mic_meter = LevelBars(7)
-        self.mic_meter.setFixedSize(46, 22)
-        self.mic_meter.setMinimumHeight(22)
-        row.addWidget(self.mic_meter)
-        self.mic_mark = ResultMark(16)
-        self.mic_mark.hide()
-        row.addWidget(self.mic_mark)
-        row.addSpacing(10)
-        self.check_button = make_button("试音", Glyph.CONNECT, "heroGhost")
+        self.check_button = make_button("试音", Glyph.HEADPHONES, "link")
         self.check_button.setToolTip("听几秒，确认会议软件的声音和你的麦克风都能录到")
         row.addWidget(self.check_button)
         row.addStretch()
@@ -1535,8 +1728,8 @@ class MeetingPage(QWidget):
         layout.addLayout(actions)
 
         self.hero.app_chip.clicked.connect(self.pick_app)
-        self.hero.mic_switch.setChecked(main.settings.meeting_microphone)
-        self.hero.mic_switch.toggled.connect(self.mic_toggled)
+        self.hero.mic_chip.setChecked(main.settings.meeting_microphone)
+        self.hero.mic_chip.toggled.connect(self.mic_toggled)
         self.hero.button.clicked.connect(self.toggle)
         self.hero.check_button.clicked.connect(self.toggle_check)
         # Trying the sources before a meeting.
@@ -1587,8 +1780,8 @@ class MeetingPage(QWidget):
         self.end_check(None)
         self.app = app
         self.chose = True
-        if app is None and not self.hero.mic_switch.isChecked():
-            self.hero.mic_switch.setChecked(True)  # The microphone alone was chosen.
+        if app is None and not self.hero.mic_chip.isChecked():
+            self.hero.mic_chip.setChecked(True)  # The microphone alone was chosen.
         self._save(meeting_app=app.exe if app else "-")
         self.refresh()
 
@@ -1607,14 +1800,14 @@ class MeetingPage(QWidget):
 
     def start_check(self):
         """Listen to the chosen sources for a few seconds; the meters show what comes in."""
-        if self.state not in ("idle", "done") or (self.app is None and not self.hero.mic_switch.isChecked()):
+        if self.state not in ("idle", "done") or (self.app is None and not self.hero.mic_chip.isChecked()):
             return
         self.end_check(None)
         check = SoundCheck()
         try:
             if self.app is not None:
                 check.add_app(self.app.pids)
-            if self.hero.mic_switch.isChecked():
+            if self.hero.mic_chip.isChecked():
                 check.add_microphone(self.main.settings.microphone)
         except AudioError as error:
             check.stop()
@@ -1702,7 +1895,7 @@ class MeetingPage(QWidget):
         settings = self.main.settings
         if not models_ready(settings.models, model=settings.asr_model):
             return False, f"先在“语音模型”里下载 {get_model(settings.asr_model).name}，会议文字在本机识别。"
-        if self.app is None and not self.hero.mic_switch.isChecked():
+        if self.app is None and not self.hero.mic_chip.isChecked():
             return False, "先选择会议软件，或打开“我的麦克风”。"
         return True, ""
 
@@ -1722,7 +1915,7 @@ class MeetingPage(QWidget):
         from .vocabulary import Vocabulary
 
         window = self.main
-        mic = self.hero.mic_switch.isChecked()
+        mic = self.hero.mic_chip.isChecked()
         app = self.app
         labels = bool(app and mic)
         settings = window.settings
@@ -1880,7 +2073,7 @@ class MeetingPage(QWidget):
 
     def refresh(self):
         hero = self.hero
-        mic = hero.mic_switch.isChecked()
+        mic = hero.mic_chip.isChecked()
         app = self.app
         if app:
             hero.app_chip.setText(app.name)
@@ -1893,14 +2086,18 @@ class MeetingPage(QWidget):
         # While recording the sources stay as they look, as a statement of what is recorded, but
         # cannot be changed.
         hero.app_chip.setEnabled(self.supported)
-        for widget in (hero.app_chip, hero.mic_switch):
-            widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not editable)
-            widget.setFocusPolicy(Qt.FocusPolicy.TabFocus if editable else Qt.FocusPolicy.NoFocus)
-        hero.app_meter.setVisible(app is not None)
-        hero.mic_meter.setVisible(mic)
+        hero.app_chip.set_active(app is not None)
+        hero.mic_chip.setToolTip("同时记录你自己说的话。点一下关闭" if mic else "点一下打开，同时记录你自己说的话")
+        for chip in (hero.app_chip, hero.mic_chip):
+            chip.set_locked(not editable)
+        # The meters only while there is something to hear: trying the sources or recording.
         checking = self.check is not None
+        listening = checking or self.state == "recording"
+        hero.app_meter.setVisible(listening and app is not None)
+        hero.mic_meter.setVisible(listening and mic)
         hero.check_button.setVisible(editable and (app is not None or mic))
         hero.check_button.setText("停止试音" if checking else "试音")
+        hero.check_button.set_icon(Glyph.STOP if checking else Glyph.HEADPHONES)
         hero.check_button.setEnabled(editable)
         if self.state == "recording" and not hero.wave_column.isVisible():
             hero.wave.clear()

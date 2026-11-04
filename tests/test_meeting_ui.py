@@ -225,12 +225,15 @@ def test_a_sound_check_listens_to_both_sources_and_says_what_it_heard(window, no
     monkeypatch.setattr(SoundCheck, "add_microphone", lambda self, device: self._sink(ME))
     page, hero = window.meeting, window.meeting.hero
     page.app = WEMEET
-    hero.mic_switch.setChecked(True)
+    hero.mic_chip.setChecked(True)
     window.show()
+    page.refresh()
     assert not hero.check_button.isHidden() and hero.check_button.text() == "试音"
+    assert hero.app_chip.active and hero.mic_chip.active and hero.app_meter.isHidden()  # Quiet at rest.
     hero.check_button.click()
     check = page.check
     assert check.sources == [OTHERS, ME] and hero.check_button.text() == "停止试音"
+    assert not hero.app_meter.isHidden() and not hero.mic_meter.isHidden()
     assert "正在试音" in hero.pill.text() and "腾讯会议里有人说话" in hero.hint.text()
     voice = np.full(1600, 0.05, dtype=np.float32)
     check._sink(OTHERS)(voice)
@@ -250,8 +253,11 @@ def test_a_sound_check_listens_to_both_sources_and_says_what_it_heard(window, no
     check.started -= 2
     page.check_tick()
     assert page.check is None and hero.hint.text() == "试音通过：听到了腾讯会议的声音和你的声音，可以开始记录。"
-    hero.mic_switch.setChecked(False)  # Another choice of sources: the result no longer holds.
+    hero.mic_chip.setChecked(False)  # Another choice of sources: the result no longer holds.
     assert hero.mic_mark.isHidden() and hero.app_mark.isHidden() and "试音" not in hero.hint.text()
+    assert not hero.mic_chip.active and hero.mic_meter.isHidden()
+    hero.mic_chip.click()  # The chip itself switches the microphone back on.
+    assert hero.mic_chip.isChecked() and window.settings.meeting_microphone
 
     hero.check_button.click()
     assert page.check is not None
@@ -273,7 +279,7 @@ def test_meeting_tab_shows_its_own_card(window):
 def test_meeting_records_both_sources_and_keeps_only_text(window, no_devices, monkeypatch):
     page = window.meeting
     page.app = WEMEET
-    page.hero.mic_switch.setChecked(True)
+    page.hero.mic_chip.setChecked(True)
     monkeypatch.setattr(window.pipeline, "recognize_clip", lambda settings, clip, vocabulary=None: "好的")
     assert page.hero.wave_column.isHidden()
     page.start()
@@ -309,7 +315,7 @@ def test_meeting_records_both_sources_and_keeps_only_text(window, no_devices, mo
 def test_a_meeting_where_nothing_was_said_leaves_nothing_behind(window, no_devices):
     page = window.meeting
     page.app = None
-    page.hero.mic_switch.setChecked(True)
+    page.hero.mic_chip.setChecked(True)
     page.start()
     assert no_devices == [("mic", ROOM)]  # The microphone alone hears the whole room.
     folder = page.store.folder
@@ -335,9 +341,9 @@ def test_choosing_sources_is_remembered(window, monkeypatch):
     monkeypatch.setattr(Settings, "save", lambda self, path=None: None)
     page.choose_app(WEMEET)
     assert window.settings.meeting_app == "wemeetapp.exe"
-    page.hero.mic_switch.setChecked(False)
+    page.hero.mic_chip.setChecked(False)
     page.choose_app(None)  # The microphone alone: the switch comes back on.
-    assert window.settings.meeting_app == "-" and page.hero.mic_switch.isChecked()
+    assert window.settings.meeting_app == "-" and page.hero.mic_chip.isChecked()
     assert window.settings.meeting_microphone
 
 
@@ -346,7 +352,7 @@ def test_nothing_to_record_keeps_the_button_off(window):
     del page.ready  # The real check.
     window.settings.asr_model = window.settings.asr_model
     page.app = None
-    page.hero.mic_switch.setChecked(False)
+    page.hero.mic_chip.setChecked(False)
     page.refresh()
     assert not page.hero.button.isEnabled()
 

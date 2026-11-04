@@ -206,6 +206,10 @@ class Glyph:
     REFRESH = "refresh"
     VERIFY = "verify"
     TRANSLATE = "translate"
+    SPEAKER = "speaker"
+    MIC_OFF = "mic_off"
+    HEADPHONES = "headphones"
+    STOP = "stop"
 
 
 def glyph_pixmap(glyph: str, color: str, size: int = 16) -> QPixmap:

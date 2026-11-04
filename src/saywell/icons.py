@@ -208,7 +208,41 @@ def _translate(p):
     _lines(p, (3.5, 12), (20.5, 12))
 
 
+def _speaker(p):
+    # A speaker and two waves leaving it: sound played by an app.
+    p.moveTo(3.5, 9.6)
+    p.lineTo(6.8, 9.6)
+    p.lineTo(11, 5.6)
+    p.lineTo(11, 18.4)
+    p.lineTo(6.8, 14.4)
+    p.lineTo(3.5, 14.4)
+    p.closeSubpath()
+    _arc(p, 11, 12, 4.2, -48, 96)
+    _arc(p, 11, 12, 8.2, -50, 100)
+
+
+def _mic_off(p):
+    _mic(p)
+    _lines(p, (4.5, 3.5), (19.5, 20.5))
+
+
+def _headphones(p):
+    _arc(p, 12, 13, 8, 180, -180)
+    _lines(p, (4, 13), (4, 15))
+    _lines(p, (20, 13), (20, 15))
+    _rounded(p, 4, 13.5, 4.2, 6.8, 2.1)
+    _rounded(p, 15.8, 13.5, 4.2, 6.8, 2.1)
+
+
+def _stop(p):
+    _rounded(p, 6.5, 6.5, 11, 11, 2.6)
+
+
 PATHS = {
+    "speaker": _speaker,
+    "mic_off": _mic_off,
+    "headphones": _headphones,
+    "stop": _stop,
     "translate": _translate,
     "mic": _mic,
     "history": _history,
