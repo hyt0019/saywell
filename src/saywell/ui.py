@@ -1863,11 +1863,11 @@ class SettingsDialog(QDialog):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        outer.addWidget(dialog_header("设置", "调整文字整理服务、录音方式和个人词库。保存后立即生效。"))
+        outer.addWidget(dialog_header("设置", "保存后立即生效。"))
         area, layout = scroll_body()
         outer.addWidget(area, 1)
 
-        api = Section("文字整理服务", "录音在本机识别后，只把文字发送到这里填写的 API 进行整理。", Glyph.GLOBE)
+        api = Section("文字整理服务", "录音在本机识别，只有文字会发到这里的 API 整理。", Glyph.GLOBE)
         form = api.form()
         self.base_url = QLineEdit(settings.api_base_url)
         self.base_url.setPlaceholderText("例如 https://api.example.com/v1")
@@ -1946,7 +1946,7 @@ class SettingsDialog(QDialog):
         self.keep_in_clipboard.setChecked(settings.keep_in_clipboard)
         keep.addWidget(self.keep_in_clipboard)
         keep.addWidget(
-            label("适合游戏等说话时打不开输入框的场合，之后按 Ctrl+V 粘贴。关闭时会恢复原来的剪贴板内容。", "muted", wrap=True)
+            label("适合游戏等打不开输入框的场合，之后按 Ctrl+V 粘贴。关闭时恢复原来的剪贴板。", "muted", wrap=True)
         )
         form.addRow(field_label("剪贴板"), keep)
         self.voice_translation = Switch("说完加一句“翻译成英文”，直接输入译文")
@@ -1957,13 +1957,13 @@ class SettingsDialog(QDialog):
         self.no_punctuation = Switch("去掉中文标点和语气词")
         self.no_punctuation.setChecked(settings.no_punctuation)
         plain.addWidget(self.no_punctuation)
-        plain.addWidget(label("逗号、句号、问号等中文标点和“啊、呢、吧”这类语气词都去掉。", "muted", wrap=True))
+        plain.addWidget(label("如逗号、句号、问号和“啊、呢、吧”。", "muted", wrap=True))
         plain.addSpacing(8)
         self.no_english_punctuation = Switch("去掉英文标点")
         self.no_english_punctuation.setChecked(settings.no_english_punctuation)
         plain.addWidget(self.no_english_punctuation)
         plain.addWidget(
-            label("英文的逗号、句号、问号、引号等去掉；3.5、10:30、网址里的点和冒号保留。", "muted", wrap=True)
+            label("3.5、10:30 和网址里的点、冒号会保留。", "muted", wrap=True)
         )
         form.addRow(field_label("标点"), plain)
         gpu = QVBoxLayout()
@@ -1977,7 +1977,7 @@ class SettingsDialog(QDialog):
 
         translating = Section(
             "划词翻译",
-            "在其他程序里选中文字就能翻译。读取选中的文字在本机完成，只有要翻译的文字会发送到上面的 API。",
+            "在其他程序里选中文字就能翻译，只有要翻译的文字会发到上面的 API。",
             Glyph.TRANSLATE,
         )
         self.selection_on = Switch("开启划词翻译")
@@ -2013,7 +2013,7 @@ class SettingsDialog(QDialog):
         self.selection_hotkey.setMaximumWidth(200)
         keys.addWidget(self.selection_hotkey)
         keys.addWidget(label(
-            "选中文字后按一下，任何触发方式下都能用。读不到文字的程序会用 Ctrl+C 复制一次，剪贴板随后恢复；终端里不会这样做。",
+            "选中文字后按一下，任何触发方式下都能用。读不到文字时会用 Ctrl+C 复制一次，随后恢复剪贴板；终端里不会。",
             "muted", wrap=True,
         ))
         form.addRow(field_label("快捷键"), keys)
@@ -2054,7 +2054,7 @@ class SettingsDialog(QDialog):
         self.selection_excluded = QLineEdit(", ".join(settings.selection_excluded))
         self.selection_excluded.setPlaceholderText("程序文件名，用逗号分开，如 WeChat.exe")
         excluded.addWidget(self.selection_excluded)
-        excluded.addWidget(label("在这些程序里不弹出翻译按钮，也不响应快捷键。密码框和常见的密码管理器总是不读取。", "muted", wrap=True))
+        excluded.addWidget(label("这些程序里不弹按钮，也不响应快捷键。密码框和常见的密码管理器从不读取。", "muted", wrap=True))
         form.addRow(field_label("不翻译的程序"), excluded)
         translating.body.addWidget(self.selection_options)
         self.selection_on.toggled.connect(self.selection_options.setEnabled)
@@ -2094,7 +2094,7 @@ class SettingsDialog(QDialog):
 
         words = Section(
             "个人词库",
-            "每行一个常用人名、项目名或英文术语，最多 100 个。整理时用于纠正拼写，用 Qwen3-ASR 时识别也会参考。",
+            "每行一个人名、项目名或英文术语，最多 100 个。整理时用来纠正写法，Qwen3-ASR 识别时也会参考。",
             Glyph.EDIT,
         )
         self.glossary = QPlainTextEdit("\n".join(settings.glossary))
@@ -2105,8 +2105,8 @@ class SettingsDialog(QDialog):
 
         lexicons = Section(
             "专业词库",
-            "导入输入法或其他工具的词库。只在本机比对读音，和你说的话读音相近的词才会用于识别和整理；"
-            "中文词三个字及以上才参与比对，两个字的词请加到个人词库。",
+            "导入输入法等工具的词库，在本机按读音比对，读音相近的词才用于识别和整理。"
+            "两个字的中文词不参与比对，请加到个人词库。",
             Glyph.IMPORT,
         )
         # Edited here and saved with the other settings; files of unsaved imports are deleted afterwards.
@@ -2236,7 +2236,7 @@ class SettingsDialog(QDialog):
         if native == foreign:
             self.selection_back.setText("两种语言相同，请换一种。")
         elif TRANSLATION_SCRIPTS.get(native) == TRANSLATION_SCRIPTS.get(foreign):
-            self.selection_back.setText(f"{native}和{foreign}写法相同，分不出选中的是哪一种，没法自动互译。请把其中一种换成别的语言。")
+            self.selection_back.setText(f"{native}和{foreign}写法相同，分不出选中的是哪种，请把其中一种换成别的语言。")
         else:
             self.selection_back.setText(
                 f"选中{native}译成{foreign}，选中{foreign}译成{native}；其他语言都译成{native}。弹窗里可以临时换一种。"
@@ -2560,7 +2560,7 @@ class ModelDialog(QDialog):
         outer.setSpacing(0)
         outer.addWidget(
             dialog_header(
-                "语音模型", "全部在本机识别，录音不会上传。按需下载或导入模型包，随时切换；正在用的模型不会被自动替换。"
+                "语音模型", "全部在本机识别，录音不会上传。可以随时下载、导入或切换，正在用的模型不会被自动替换。"
             )
         )
         tabs = QHBoxLayout()
