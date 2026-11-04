@@ -82,3 +82,16 @@ def test_models_beside_executable_take_precedence(tmp_path, monkeypatch):
     monkeypatch.setattr(settings.sys, "frozen", True, raising=False)
     monkeypatch.setattr(settings.sys, "executable", str(binary))
     assert settings.Settings().models == local
+
+
+def test_selection_translation_is_off_until_turned_on_and_bad_choices_fall_back(tmp_path):
+    assert not settings.Settings().selection_translate
+    path = tmp_path / "settings.json"
+    saved = {"selection_translate": True, "selection_trigger": "always", "selection_style": "formal",
+             "selection_native": "火星文", "selection_hotkey": "Alt+Nope",
+             "selection_excluded": ["  KeePass.exe ", 3, "", "WeChat.exe"]}
+    path.write_text(json.dumps(saved), encoding="utf-8")
+    loaded = settings.Settings.load(path)
+    assert loaded.selection_translate and loaded.selection_style == "formal"
+    assert (loaded.selection_trigger, loaded.selection_native, loaded.selection_hotkey) == ("icon", "简体中文", "Alt+T")
+    assert loaded.selection_excluded == ["keepass.exe", "wechat.exe"]

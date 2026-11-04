@@ -122,6 +122,18 @@ class Settings:
     meeting_export_dir: str = ""
     meeting_export_transcript: bool = False
     meeting_export_format: str = "docx"
+    # Selection translation, off until turned on. How it starts: "icon" shows a small button
+    # after a mouse selection, "direct" translates at once, "hotkey" only on the shortcut (which
+    # works in every mode). Text in selection_native goes to selection_foreign and anything else
+    # comes to selection_native. The style is a translation.STYLES key; programs in
+    # selection_excluded (executables, lower case) are left alone.
+    selection_translate: bool = False
+    selection_trigger: str = "icon"
+    selection_hotkey: str = "Alt+T"
+    selection_native: str = "简体中文"
+    selection_foreign: str = "英语"
+    selection_style: str = "natural"
+    selection_excluded: list[str] = field(default_factory=list)
 
     @property
     def download_root(self) -> Path:
@@ -183,6 +195,9 @@ class Settings:
                 elif key == "glossary":
                     if isinstance(value, list) and all(isinstance(word, str) for word in value):
                         values[key] = [word[:80] for word in value[:100]]
+                elif key == "selection_excluded":
+                    if isinstance(value, list):
+                        values[key] = [name.strip().lower()[:80] for name in value[:100] if isinstance(name, str) and name.strip()]
                 elif key == "lexicons":
                     if isinstance(value, list):
                         values[key] = [
@@ -212,6 +227,14 @@ class Settings:
                     values[key] = value
             if "hotkey" in values and parse_shortcut(values["hotkey"]) is None:
                 values.pop("hotkey")
+            if "selection_hotkey" in values and parse_shortcut(values["selection_hotkey"]) is None:
+                values.pop("selection_hotkey")
+            from .translation import LANGUAGES, STYLES
+
+            for name, allowed in (("selection_trigger", ("icon", "direct", "hotkey")), ("selection_style", STYLES),
+                                  ("selection_native", LANGUAGES), ("selection_foreign", LANGUAGES)):
+                if name in values and values[name] not in allowed:
+                    values.pop(name)
             if not 1 <= values.get("api_timeout", 25) <= 120:
                 values.pop("api_timeout", None)
             return cls(**values)
