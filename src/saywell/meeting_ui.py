@@ -72,6 +72,7 @@ from .meeting import (
     MeetingRecorder,
     MeetingStore,
     Paragraph,
+    SoundCheck,
     clock,
     list_meetings,
     paragraphs,
@@ -99,6 +100,7 @@ from .ui import (
     HeroCard,
     LevelBars,
     MicButton,
+    ResultMark,
     Segmented,
     Spinner,
     Switch,
@@ -1380,6 +1382,9 @@ class MeetingHero(HeroCard):
         self.app_meter.setFixedSize(46, 22)
         self.app_meter.setMinimumHeight(22)
         row.addWidget(self.app_meter)
+        self.app_mark = ResultMark(16)
+        self.app_mark.hide()
+        row.addWidget(self.app_mark)
         row.addSpacing(6)
         self.dot = label("·", "heroMeta")
         row.addWidget(self.dot)
@@ -1391,6 +1396,13 @@ class MeetingHero(HeroCard):
         self.mic_meter.setFixedSize(46, 22)
         self.mic_meter.setMinimumHeight(22)
         row.addWidget(self.mic_meter)
+        self.mic_mark = ResultMark(16)
+        self.mic_mark.hide()
+        row.addWidget(self.mic_mark)
+        row.addSpacing(10)
+        self.check_button = make_button("试音", Glyph.CONNECT, "heroGhost")
+        self.check_button.setToolTip("听几秒，确认会议软件的声音和你的麦克风都能录到")
+        row.addWidget(self.check_button)
         row.addStretch()
         column.addWidget(sources)
         layout.addLayout(column, 3)
@@ -1526,6 +1538,14 @@ class MeetingPage(QWidget):
         self.hero.mic_switch.setChecked(main.settings.meeting_microphone)
         self.hero.mic_switch.toggled.connect(self.mic_toggled)
         self.hero.button.clicked.connect(self.toggle)
+        self.hero.check_button.clicked.connect(self.toggle_check)
+        # Trying the sources before a meeting.
+        self.check: SoundCheck | None = None
+        self.check_note = ""
+        self.check_all_heard: float | None = None  # When every source had been heard.
+        self.check_timer = QTimer(self)
+        self.check_timer.setInterval(50)
+        self.check_timer.timeout.connect(self.check_tick)
         self.timer = QTimer(self)
         self.timer.setInterval(50)
         self.timer.timeout.connect(self.tick)
@@ -1564,6 +1584,7 @@ class MeetingPage(QWidget):
         picker.show_below(self.hero.app_chip)
 
     def choose_app(self, app: AudioApp | None):
+        self.end_check(None)
         self.app = app
         self.chose = True
         if app is None and not self.hero.mic_switch.isChecked():
@@ -1572,8 +1593,100 @@ class MeetingPage(QWidget):
         self.refresh()
 
     def mic_toggled(self, on: bool):
+        self.end_check(None)
         self._save(meeting_microphone=on)
         self.refresh()
+
+    # Trying the sources
+
+    def toggle_check(self):
+        if self.check is not None:
+            self.end_check(self.check)
+        else:
+            self.start_check()
+
+    def start_check(self):
+        """Listen to the chosen sources for a few seconds; the meters show what comes in."""
+        if self.state not in ("idle", "done") or (self.app is None and not self.hero.mic_switch.isChecked()):
+            return
+        self.end_check(None)
+        check = SoundCheck()
+        try:
+            if self.app is not None:
+                check.add_app(self.app.pids)
+            if self.hero.mic_switch.isChecked():
+                check.add_microphone(self.main.settings.microphone)
+        except AudioError as error:
+            check.stop()
+            self.main.set_notice(str(error))
+            return
+        self.main.set_notice("")
+        self.check = check
+        self.check_all_heard = None
+        self.check_timer.start()
+        self.refresh()
+
+    def check_tick(self):
+        check = self.check
+        if check is None:
+            return
+        hero = self.hero
+        if OTHERS in check.sources:
+            hero.app_meter.setValue(int(check.take_level(OTHERS) * 100))
+        if ME in check.sources:
+            hero.mic_meter.setValue(int(check.take_level(ME) * 100))
+        # Done once every source was heard (shown a moment longer, so the meters can be seen), or
+        # when the time is up.
+        if all(check.heard(who) for who in check.sources):
+            if self.check_all_heard is None:
+                self.check_all_heard = check.elapsed
+            if check.elapsed - self.check_all_heard >= 1.5:
+                self.end_check(check)
+                return
+        if check.elapsed >= check.SECONDS:
+            self.end_check(check)
+            return
+        left = max(1, math.ceil(check.SECONDS - check.elapsed))
+        hero.set_pill("busy", f"正在试音 · {left} 秒")
+
+    def end_check(self, check: SoundCheck | None):
+        """Stop listening; with the check given, say what was heard, else just stop."""
+        hero = self.hero
+        running, self.check = self.check, None
+        if running is not None:
+            running.stop()
+            self.check_timer.stop()
+            hero.app_meter.setValue(0)
+            hero.mic_meter.setValue(0)
+        hero.app_mark.hide()
+        hero.mic_mark.hide()
+        self.check_note = ""
+        if check is not None and check is running:
+            self.check_note = self.check_result(check)
+            if OTHERS in check.sources:
+                hero.app_mark.play(check.heard(OTHERS))
+            if ME in check.sources:
+                hero.mic_mark.play(check.heard(ME))
+        self.refresh()
+
+    def check_result(self, check: SoundCheck) -> str:
+        name = self.app.name if self.app else "会议软件"
+        app_ok = check.heard(OTHERS) if OTHERS in check.sources else None
+        mic_ok = check.heard(ME) if ME in check.sources else None
+        if app_ok is not False and mic_ok is not False:
+            heard = "和".join(
+                part for part, on in ((f"{name}的声音", app_ok), ("你的声音", mic_ok)) if on
+            )
+            return f"试音通过：听到了{heard}，可以开始记录。"
+        advice = []
+        if app_ok is False:
+            advice.append(
+                f"没听到{name}的声音。请让会议里有人说话，或在{name}的设置里点“测试扬声器”，"
+                "并确认它没有在 Windows 音量合成器里静音。"
+            )
+        if mic_ok is False:
+            advice.append("没听到你的声音。请对着麦克风说句话再试；还是不行的话，在“设置”里换一个麦克风，或检查 Windows 的麦克风权限。")
+        return "".join(advice)
 
     def _save(self, **changes):
         window = self.main
@@ -1604,6 +1717,7 @@ class MeetingPage(QWidget):
         if not ok:
             self.main.set_notice(why)
             return
+        self.end_check(None)  # Its captures close before the meeting's open.
         self.save_edits()
         from .vocabulary import Vocabulary
 
@@ -1710,6 +1824,7 @@ class MeetingPage(QWidget):
 
     def shutdown(self):
         """Quitting: stop now; lines already heard are on disk, speech still waiting is dropped."""
+        self.end_check(None)
         self.save_edits()
         self.stopping.set()
         if self.writing is not None:
@@ -1783,6 +1898,10 @@ class MeetingPage(QWidget):
             widget.setFocusPolicy(Qt.FocusPolicy.TabFocus if editable else Qt.FocusPolicy.NoFocus)
         hero.app_meter.setVisible(app is not None)
         hero.mic_meter.setVisible(mic)
+        checking = self.check is not None
+        hero.check_button.setVisible(editable and (app is not None or mic))
+        hero.check_button.setText("停止试音" if checking else "试音")
+        hero.check_button.setEnabled(editable)
         if self.state == "recording" and not hero.wave_column.isVisible():
             hero.wave.clear()
         hero.wave_column.setVisible(self.state == "recording")
@@ -1825,6 +1944,16 @@ class MeetingPage(QWidget):
                     hero.hint.setText(f"录下{app.name}的声音{sources}，实时转成文字。不保存录音；开始前请告知参会人。")
                 else:
                     hero.hint.setText("录下麦克风听到的声音，适合线下会议。不保存录音；开始前请告知参会人。")
+            if checking:
+                hero.set_pill("busy", f"正在试音 · {math.ceil(SoundCheck.SECONDS - self.check.elapsed)} 秒")
+                if app and mic:
+                    hero.hint.setText(f"正在试音：请让{app.name}里有人说话或播放一段声音，你也对着麦克风说句话。")
+                elif app:
+                    hero.hint.setText(f"正在试音：请让{app.name}里有人说话或播放一段声音。")
+                else:
+                    hero.hint.setText("正在试音：请对着麦克风说句话。")
+            elif self.check_note:
+                hero.hint.setText(self.check_note)
         self.refresh_count()
 
     # Minutes

@@ -82,6 +82,21 @@ def test_paragraphs_hold_one_speaker_until_a_silence_or_a_minute():
     assert paragraphs(lines[:3], False) == [Paragraph(1, OTHERS, "第一句，接着说。好。")]
 
 
+def test_a_sound_check_tells_sound_from_silence_and_the_room_from_a_voice():
+    from saywell.meeting import SoundCheck
+
+    check = SoundCheck()
+    app, mic = check._sink(OTHERS), check._sink(ME)
+    assert check.sources == [OTHERS, ME] and not check.heard(OTHERS) and not check.heard(ME)
+    mic(np.full(SECOND, 0.003, dtype=np.float32))  # -50 dB: a quiet room, nobody speaking.
+    app(np.zeros(SECOND, dtype=np.float32))  # Muted in the volume mixer.
+    assert not check.heard(ME) and not check.heard(OTHERS)
+    app(np.full(SECOND // 10, 0.01, dtype=np.float32))  # Quiet, but the app is playing.
+    mic(np.full(SECOND // 10, 0.05, dtype=np.float32))  # A voice.
+    assert check.heard(OTHERS) and check.heard(ME)
+    assert check.take_level(ME) == pytest.approx(0.4) and check.take_level(ME) == 0.0  # Taken once.
+
+
 def test_clock():
     assert clock(65) == "01:05" and clock(3725) == "1:02:05" and clock(-3) == "00:00"
 

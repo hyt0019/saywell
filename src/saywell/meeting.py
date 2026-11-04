@@ -169,6 +169,70 @@ def meetings_dir() -> Path:
     return data_dir() / "meetings"
 
 
+class SoundCheck:
+    """A few seconds of listening before a meeting: is the app's sound, and the user's voice,
+    actually coming in? It opens the captures a meeting would, keeps no audio, only how loud
+    each source has been."""
+
+    SECONDS = 8.0
+    # Anything the app plays counts; from the microphone, a voice rather than the room.
+    HEARD = {OTHERS: -55.0, ME: -42.0}
+
+    def __init__(self):
+        self.captures = []
+        self.loudest: dict[str, float] = {}
+        self.latest: dict[str, float] = {}
+        self.started = time.monotonic()
+
+    def _sink(self, who: str):
+        self.loudest.setdefault(who, -200.0)
+        self.latest.setdefault(who, 0.0)
+
+        def sink(samples: np.ndarray) -> None:  # On the capture's thread.
+            if samples.size:
+                self.loudest[who] = max(self.loudest[who], peak_level(samples))
+                self.latest[who] = max(self.latest[who], float(np.sqrt(np.mean(np.square(samples)))))
+
+        return sink
+
+    def add_app(self, pids: tuple[int, ...]) -> None:
+        from .capture import AppAudio, Timeline
+
+        sink = self._sink(OTHERS)
+        for pid in pids:
+            capture = AppAudio(pid, Timeline(sink))
+            capture.start()
+            self.captures.append(capture)
+
+    def add_microphone(self, device: int | None) -> None:
+        from .capture import MicAudio, Timeline
+
+        capture = MicAudio(Timeline(self._sink(ME)), device)
+        capture.start()
+        self.captures.append(capture)
+
+    @property
+    def sources(self) -> list[str]:
+        return list(self.loudest)
+
+    def heard(self, who: str) -> bool:
+        return self.loudest.get(who, -200.0) >= self.HEARD[who]
+
+    def take_level(self, who: str) -> float:
+        """How loud the source was since last asked, as a meter shows it."""
+        level, self.latest[who] = self.latest.get(who, 0.0), 0.0
+        return min(1.0, level * 8)
+
+    @property
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started
+
+    def stop(self) -> None:
+        for capture in self.captures:
+            capture.stop()
+        self.captures = []
+
+
 class MeetingStore:
     """One meeting's folder: info.dat (title, times, sources), transcript.dat with one encrypted
     line per recognized utterance, appended as the meeting goes, and minutes.dat and parts.dat

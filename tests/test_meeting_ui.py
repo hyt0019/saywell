@@ -216,6 +216,52 @@ def test_the_template_picker_explains_and_previews_each_template(window):
     assert QApplication.activePopupWidget() is None
 
 
+def test_a_sound_check_listens_to_both_sources_and_says_what_it_heard(window, no_devices, monkeypatch):
+    import numpy as np
+
+    from saywell.meeting import SoundCheck
+
+    monkeypatch.setattr(SoundCheck, "add_app", lambda self, pids: self._sink(OTHERS))
+    monkeypatch.setattr(SoundCheck, "add_microphone", lambda self, device: self._sink(ME))
+    page, hero = window.meeting, window.meeting.hero
+    page.app = WEMEET
+    hero.mic_switch.setChecked(True)
+    window.show()
+    assert not hero.check_button.isHidden() and hero.check_button.text() == "试音"
+    hero.check_button.click()
+    check = page.check
+    assert check.sources == [OTHERS, ME] and hero.check_button.text() == "停止试音"
+    assert "正在试音" in hero.pill.text() and "腾讯会议里有人说话" in hero.hint.text()
+    voice = np.full(1600, 0.05, dtype=np.float32)
+    check._sink(OTHERS)(voice)
+    page.check_tick()
+    assert hero.app_meter.value() == 40 and page.check is check  # Shown a moment longer.
+    check.started -= SoundCheck.SECONDS  # Time is up; the microphone heard nothing.
+    page.check_tick()
+    assert page.check is None and hero.check_button.text() == "试音"
+    assert hero.hint.text().startswith("没听到你的声音") and "腾讯会议" not in hero.hint.text()
+    assert hero.app_mark.ok and not hero.mic_mark.ok and not hero.mic_mark.isHidden()
+
+    hero.check_button.click()  # Again, and both are heard: done soon after.
+    check = page.check
+    check._sink(OTHERS)(voice)
+    check._sink(ME)(voice)
+    page.check_tick()
+    check.started -= 2
+    page.check_tick()
+    assert page.check is None and hero.hint.text() == "试音通过：听到了腾讯会议的声音和你的声音，可以开始记录。"
+    hero.mic_switch.setChecked(False)  # Another choice of sources: the result no longer holds.
+    assert hero.mic_mark.isHidden() and hero.app_mark.isHidden() and "试音" not in hero.hint.text()
+
+    hero.check_button.click()
+    assert page.check is not None
+    monkeypatch.setattr(page, "ready", lambda: (True, ""))
+    page.start()  # Starting the meeting ends the check first.
+    assert page.check is None and page.state == "recording" and hero.check_button.isHidden()
+    page.stop()
+    assert wait_for(lambda: page.state in ("idle", "done"))
+
+
 def test_meeting_tab_shows_its_own_card(window):
     assert [button.text() for button in window.page_buttons] == ["概览", "文字", "会议"]
     window.show_page(2)
