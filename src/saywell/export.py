@@ -124,19 +124,19 @@ STYLES = (
     '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
     "<w:docDefaults><w:rPrDefault><w:rPr>"
     f'<w:rFonts w:ascii="{LATIN}" w:hAnsi="{LATIN}" w:eastAsia="{FONT}" w:cs="{LATIN}"/>'
-    '<w:color w:val="1D1D1F"/><w:sz w:val="21"/><w:szCs w:val="21"/><w:lang w:eastAsia="zh-CN"/>'
+    '<w:color w:val="1D2240"/><w:sz w:val="21"/><w:szCs w:val="21"/><w:lang w:eastAsia="zh-CN"/>'
     "</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>"
     '<w:spacing w:after="80" w:line="336" w:lineRule="auto"/>'
     "</w:pPr></w:pPrDefault></w:docDefaults>"
     + style("Normal", "Normal", "", based="")
     + style("Title", "Title", '<w:b/><w:sz w:val="36"/><w:szCs w:val="36"/>', '<w:spacing w:after="60"/>')
-    + style("Subtitle", "Subtitle", '<w:color w:val="8E8E93"/><w:sz w:val="18"/>', '<w:spacing w:after="240"/>')
+    + style("Subtitle", "Subtitle", '<w:color w:val="958C7F"/><w:sz w:val="18"/>', '<w:spacing w:after="240"/>')
     + style(
         "Heading1", "heading 1", '<w:b/><w:sz w:val="26"/><w:szCs w:val="26"/>',
         '<w:keepNext/><w:spacing w:before="320" w:after="100"/><w:outlineLvl w:val="0"/>',
     )
     + style("ListItem", "List Paragraph", "", '<w:ind w:left="360" w:hanging="240"/>')
-    + style("Points", "Chapter Points", '<w:color w:val="3A3A3C"/>', '<w:spacing w:after="140"/>')
+    + style("Points", "Chapter Points", '<w:color w:val="47413A"/>', '<w:spacing w:after="140"/>')
     + style("Line", "Transcript", "", '<w:spacing w:after="160"/>')
     + "</w:styles>"
 )
@@ -164,7 +164,7 @@ def docx_body(blocks: list[tuple[str, object]]) -> str:
             out.append(paragraph("Normal", run(value)))
         elif kind == "chapter":
             when, title, points = value
-            out.append(paragraph("Normal", run(when + "  ", True, "0071E3"), run(title, True)))
+            out.append(paragraph("Normal", run(when + "  ", True, "3C488E"), run(title, True)))
             if points:
                 out.append(paragraph("Points", run(points)))
         elif kind == "item":
@@ -174,7 +174,7 @@ def docx_body(blocks: list[tuple[str, object]]) -> str:
         elif kind == "line":
             when, who, text = value
             head = f"{when} {who}" if who else when
-            out.append(paragraph("Line", run(head + "  ", True, "8E8E93"), run(text)))
+            out.append(paragraph("Line", run(head + "  ", True, "958C7F"), run(text)))
     return "".join(out)
 
 
@@ -211,7 +211,7 @@ def print_html(blocks: list[tuple[str, object]]) -> str:
         if kind == "title":
             out.append(f"<p style='font-size:18pt; font-weight:700; margin:0 0 4px 0'>{html.escape(value)}</p>")
         elif kind == "meta":
-            out.append(f"<p style='font-size:9pt; color:#8E8E93; margin:0 0 8px 0'>{html.escape(value)}</p>")
+            out.append(f"<p style='font-size:9pt; color:#958C7F; margin:0 0 8px 0'>{html.escape(value)}</p>")
         elif kind == "heading":
             out.append(f"<p style='font-size:13pt; font-weight:700; margin:22px 0 8px 0'>{html.escape(value)}</p>")
         elif kind == "paragraph":
@@ -220,9 +220,9 @@ def print_html(blocks: list[tuple[str, object]]) -> str:
             when, title, points = value
             out.append(
                 f"<p style='margin:0 0 2px 0; {body}'>"
-                f"<span style='color:#0071E3; font-weight:600'>{html.escape(when)}</span>&nbsp;&nbsp;"
+                f"<span style='color:#3C488E; font-weight:600'>{html.escape(when)}</span>&nbsp;&nbsp;"
                 f"<b>{html.escape(title)}</b></p>"
-                + (f"<p style='margin:0 0 10px 0; color:#3A3A3C; {body}'>{html.escape(points)}</p>" if points else "")
+                + (f"<p style='margin:0 0 10px 0; color:#47413A; {body}'>{html.escape(points)}</p>" if points else "")
             )
         elif kind == "item":
             out.append(f"<p style='margin:0 0 6px 0; {body}'>•&nbsp;&nbsp;{html.escape(value)}</p>")
@@ -232,7 +232,7 @@ def print_html(blocks: list[tuple[str, object]]) -> str:
             when, who, text = value
             head = html.escape(f"{when} {who}" if who else when)
             out.append(
-                f"<p style='margin:0 0 9px 0; {body}'><span style='color:#8E8E93; font-weight:600'>"
+                f"<p style='margin:0 0 9px 0; {body}'><span style='color:#958C7F; font-weight:600'>"
                 f"{head}</span>&nbsp;&nbsp;{html.escape(text)}</p>"
             )
     return "\n".join(out)

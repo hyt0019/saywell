@@ -189,7 +189,9 @@ QListWidget::item:hover { background: #F6F1E8; }
 QListWidget::item:selected { background: #ECEDF5; color: #1D2240; }
 QMenu { background: #FFFCF7; border: 1px solid #E5DCCD; border-radius: 10px; padding: 6px; }
 QMenu::item { padding: 7px 26px 7px 14px; border-radius: 6px; }
-QMenu::item:selected { background: #192457; color: #FFFCF7; }
+QMenu::item:selected { background: #EEE7DB; color: #1D2240; }
+QMenu::item:disabled { color: #B5AC9F; }
+QMenu::separator { height: 1px; background: #E8E0D3; margin: 5px 8px; }
 QToolTip { background: #1D2240; color: #FFFCF7; border: none; padding: 6px 9px; border-radius: 6px; }
 """
 

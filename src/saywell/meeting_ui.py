@@ -1104,7 +1104,7 @@ class TemplateBox(ComboBox):
 
 # What each format is good for, and how its badge looks: the extension on a tint.
 FORMAT_NOTES = {
-    "docx": ("方便继续修改、发给别人", "#2F6FD6", "#ECEDF5"),
+    "docx": ("方便继续修改、发给别人", "#3C488E", "#ECEDF5"),
     "pdf": ("版式固定，适合打印", "#C9533F", "#FAE9E4"),
     "md": ("适合 Obsidian 等笔记", "#47413A", "#EEE7DB"),
     "txt": ("不带格式，哪里都能打开", "#776F63", "#F2ECE2"),
