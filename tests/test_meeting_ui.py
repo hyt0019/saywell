@@ -229,16 +229,30 @@ def test_meeting_records_both_sources_and_keeps_only_text(window, no_devices, mo
     page.app = WEMEET
     page.hero.mic_switch.setChecked(True)
     monkeypatch.setattr(window.pipeline, "recognize_clip", lambda settings, clip, vocabulary=None: "好的")
+    assert page.hero.wave_column.isHidden()
     page.start()
     assert page.state == "recording" and page.recorder is not None
     assert no_devices == [("app", (4242,), "wemeetapp.exe"), ("mic", ME)]
     assert window.page_buttons[2].badge == RECORD
     assert page.hero.button.text() == "结束记录"
+    # The sound as it is heard, colored by who: the others, then the user louder.
+    assert not page.hero.wave_column.isHidden() and not page.hero.legend.isHidden()
+    page.recorder.level = lambda who: {OTHERS: 0.25, ME: 0.0, ROOM: 0.0}[who]
+    page.tick()
+    page.recorder.level = lambda who: {OTHERS: 0.1, ME: 0.64, ROOM: 0.0}[who]
+    page.tick()
+    assert list(page.hero.wave.bars)[-2:] == [(0.5, OTHERS), (0.8, ME)]
+    page.hero.wave.grab()  # Paints without trouble.
+    page.recorder.recognizing = True  # Words on their way: dots below the transcript.
+    page.tick()
+    assert page.transcript.pending and page.transcript.pulse.isActive()
+    page.recorder.recognizing = False
     page.recorder._publish(Line(1, 2, OTHERS, "大家好"))  # As the recorder's thread would.
     assert wait_for(lambda: page.transcript.lines)
     page.stop()
     assert page.state == "finishing"
     assert wait_for(lambda: page.state == "done")
+    assert page.hero.wave_column.isHidden() and not page.transcript.pending
     assert window.page_buttons[2].badge == ""
     info = page.store.info()
     assert info["app"] == "腾讯会议" and info["labels"] and info["ended"] >= info["started"]

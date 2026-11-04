@@ -8,15 +8,17 @@ from __future__ import annotations
 
 import bisect
 import html
+import math
 import re
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QFileInfo, QObject, QPoint, QRectF, QSize, QStandardPaths, Qt, QTimer, Signal
+from PySide6.QtCore import QFileInfo, QObject, QPoint, QPointF, QRectF, QSize, QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QActionGroup,
     QColor,
@@ -47,6 +49,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMessageBox,
+    QSizePolicy,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
@@ -459,6 +462,12 @@ class TranscriptView(GuardedEdit):
         self.shown: list[Paragraph] = []  # What the document holds, a block each.
         self.edits: set[int] = set()  # Paragraphs the user changed, not yet taken by take_edits.
         self.labels = True
+        # Words on their way: three dots pulse below the last paragraph.
+        self.pending = False
+        self.phase = 0
+        self.pulse = QTimer(self)
+        self.pulse.setInterval(110)
+        self.pulse.timeout.connect(self._pulse)
         self.fades = (EdgeFade(self, True), EdgeFade(self, False))
         bar = self.verticalScrollBar()
         bar.valueChanged.connect(self._place_fades)
@@ -493,6 +502,28 @@ class TranscriptView(GuardedEdit):
         self.lines = sorted(lines, key=lambda line: (line.start, line.end))
         self._render()
         self.verticalScrollBar().setValue(0)
+
+    def set_pending(self, on: bool) -> None:
+        if on == self.pending:
+            return
+        self.pending = on
+        frame = self.document().rootFrame()
+        spaced = frame.frameFormat()
+        spaced.setBottomMargin(self.document().documentMargin() + (26 if on else 0))
+        with self.quietly():
+            frame.setFrameFormat(spaced)
+        if on:
+            self.pulse.start()
+            bar = self.verticalScrollBar()
+            if bar.value() >= bar.maximum() - 30:
+                bar.setValue(bar.maximum())
+        else:
+            self.pulse.stop()
+        self.viewport().update()
+
+    def _pulse(self):
+        self.phase += 1
+        self.viewport().update()
 
     def characters(self) -> int:
         """What the paragraphs hold, as shown (edits included)."""
@@ -568,6 +599,8 @@ class TranscriptView(GuardedEdit):
 
     def paintEvent(self, event):
         super().paintEvent(event)
+        if self.pending:
+            self._paint_dots()
         if not self.shown:
             return
         painter = QPainter(self.viewport())
@@ -598,6 +631,27 @@ class TranscriptView(GuardedEdit):
                 painter.setPen(QColor(FAINT))
                 painter.drawText(head, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, clock(paragraph.start))
             block = block.next()
+
+    def _paint_dots(self):
+        """Below the last paragraph, or the placeholder: a wave running through three dots."""
+        last = self.document().lastBlock()
+        if self.shown:
+            layout = last.layout()
+            top = layout.position().y() + layout.boundingRect().height() + 12
+            left = layout.position().x()
+        else:
+            top, left = 34.0, self.document().documentMargin()
+        top -= self.verticalScrollBar().value()
+        left -= self.horizontalScrollBar().value()
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        for index in range(3):
+            lift = (math.sin((self.phase - index * 2) * 0.55) + 1) / 2
+            color = QColor(FAINT)
+            color.setAlphaF(0.35 + 0.65 * lift)
+            painter.setBrush(color)
+            painter.drawEllipse(QPointF(left + 4 + index * 11, top + 6 - 3 * lift), 3.2, 3.2)
 
     # Editing
 
@@ -1087,6 +1141,54 @@ class MeetingEvents(QObject):
     finished = Signal()
 
 
+class Waveform(QWidget):
+    """What is being heard, as bars scrolling to the left, mirrored about the middle: blue while
+    the user speaks, violet while the others do. Fed a level per source about twenty times a
+    second while recording."""
+
+    STEP = 6  # A bar and the gap after it, in pixels.
+    COLORS = {ME: QColor("#3B82F6"), OTHERS: QColor("#8B5CF6")}
+
+    def __init__(self):
+        super().__init__()
+        self.bars: deque[tuple[float, str]] = deque(maxlen=200)
+        self.setMinimumWidth(120)
+        self.setFixedHeight(56)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def clear(self):
+        self.bars.clear()
+        self.update()
+
+    def push(self, others: float, mine: float) -> None:
+        level, who = (mine, ME) if mine >= others else (others, OTHERS)
+        self.bars.append((math.sqrt(max(0.0, min(1.0, level))), who))  # Quiet speech stays visible.
+        self.update()
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        middle, room = self.height() / 2, self.height() - 4
+        count = int(self.width() // self.STEP)
+        fade = max(1, count // 4)  # The oldest quarter fades out to the left.
+        shown = list(self.bars)[-count:]
+        start = count - len(shown)
+        for index in range(count):
+            level, who = shown[index - start] if index >= start else (0.0, ME)
+            x = self.width() - (count - index) * self.STEP + 1.5
+            alpha = min(1.0, (index + 1) / fade)
+            if level > 0.03:
+                color = QColor(self.COLORS[who])
+                height = max(4.0, level * room)
+            else:
+                color = QColor(DISABLED)
+                height = 3.0
+            color.setAlphaF(alpha * (0.95 if level > 0.03 else 0.7))
+            painter.setBrush(color)
+            painter.drawRoundedRect(QRectF(x, middle - height / 2, 3, height), 1.5, 1.5)
+
+
 class MeetingHero(HeroCard):
     def __init__(self):
         super().__init__()
@@ -1130,7 +1232,29 @@ class MeetingHero(HeroCard):
         row.addWidget(self.mic_meter)
         row.addStretch()
         column.addWidget(sources)
-        layout.addLayout(column, 1)
+        layout.addLayout(column, 3)
+        # While recording: the sound as it is heard, and whose it is.
+        self.wave_column = QWidget()
+        waves = QVBoxLayout(self.wave_column)
+        waves.setContentsMargins(0, 0, 0, 0)
+        waves.setSpacing(4)
+        waves.addStretch()
+        self.wave = Waveform()
+        waves.addWidget(self.wave)
+        self.legend = QWidget()
+        keys = QHBoxLayout(self.legend)
+        keys.setContentsMargins(0, 0, 0, 0)
+        keys.setSpacing(14)
+        keys.addStretch()
+        for who, color in Waveform.COLORS.items():
+            key = label(f"<span style='color:{color.name()}'>●</span>&nbsp;{LABELS[who]}", "caption")
+            key.setTextFormat(Qt.TextFormat.RichText)
+            keys.addWidget(key)
+        keys.addStretch()
+        waves.addWidget(self.legend)
+        waves.addStretch()
+        self.wave_column.hide()
+        layout.addWidget(self.wave_column, 2)
         controls = QVBoxLayout()
         controls.setSpacing(4)
         controls.addStretch()
@@ -1244,7 +1368,7 @@ class MeetingPage(QWidget):
         self.hero.mic_switch.toggled.connect(self.mic_toggled)
         self.hero.button.clicked.connect(self.toggle)
         self.timer = QTimer(self)
-        self.timer.setInterval(80)
+        self.timer.setInterval(50)
         self.timer.timeout.connect(self.tick)
         # Edits are saved once the user pauses typing, and before anything reads them.
         self.save_timer = QTimer(self)
@@ -1417,6 +1541,7 @@ class MeetingPage(QWidget):
                 self._discard_store()  # Nothing was said: no empty meeting in the history.
         self.state = "done" if self.transcript.lines else "idle"
         self.timer.stop()
+        self.transcript.set_pending(False)
         self.hero.app_meter.setValue(0)
         self.hero.mic_meter.setValue(0)
         if not self.transcript.lines:
@@ -1447,8 +1572,12 @@ class MeetingPage(QWidget):
         recorder = self.recorder
         if recorder is None:
             return
-        self.hero.app_meter.setValue(int(recorder.level(OTHERS) * 100))
-        self.hero.mic_meter.setValue(int(max(recorder.level(ME), recorder.level(ROOM)) * 100))
+        others, mine = recorder.level(OTHERS), max(recorder.level(ME), recorder.level(ROOM))
+        self.hero.app_meter.setValue(int(others * 100))
+        self.hero.mic_meter.setValue(int(mine * 100))
+        if self.state == "recording":
+            self.hero.wave.push(others, mine)
+        self.transcript.set_pending(recorder.pending)
         if self.state == "recording":
             self.hero.set_pill("rec", f"记录中&nbsp;&nbsp;{clock(recorder.elapsed)}")
         backlog = recorder.backlog
@@ -1495,6 +1624,10 @@ class MeetingPage(QWidget):
             widget.setFocusPolicy(Qt.FocusPolicy.TabFocus if editable else Qt.FocusPolicy.NoFocus)
         hero.app_meter.setVisible(app is not None)
         hero.mic_meter.setVisible(mic)
+        if self.state == "recording" and not hero.wave_column.isVisible():
+            hero.wave.clear()
+        hero.wave_column.setVisible(self.state == "recording")
+        hero.legend.setVisible(bool(app and mic))  # One color only, with one source.
         ok, why = self.ready()
         hero.button.setEnabled(self.state == "recording" or (editable and ok))
         hero.button.setText("结束记录" if self.state == "recording" else "开始记录")

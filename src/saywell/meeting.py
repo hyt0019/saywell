@@ -265,6 +265,9 @@ class Source:
     level: float = 0.0
     # Any sound at all so far; an app muted in the volume mixer records as silence.
     heard: bool = False
+    # Someone is speaking, or what was said is still being gathered (set by the listener thread,
+    # which alone may touch the VAD).
+    hearing: bool = False
     # For an app: its executable, to find it again after it was restarted, and whether it is gone.
     exe: str = ""
     gone: bool = False
@@ -319,6 +322,7 @@ class MeetingRecorder:
         self.theirs: deque[Line] = deque(maxlen=200)
         # Quitting mid-meeting: recognize no more of what is waiting.
         self.abandoned = False
+        self.recognizing = False
 
     # Sources
 
@@ -412,6 +416,11 @@ class MeetingRecorder:
     def heard(self, who: str) -> bool:
         return any(source.heard for source in self.sources if source.who == who)
 
+    @property
+    def pending(self) -> bool:
+        """Words are on their way: being said, waiting to be recognized, or being recognized."""
+        return self.recognizing or bool(self.waiting) or any(source.hearing for source in self.sources)
+
     # Listening
 
     def _listen(self) -> None:
@@ -436,6 +445,7 @@ class MeetingRecorder:
             for source in ordered:
                 for found in source.stream.finish():
                     self._heard(source, *found)
+                source.hearing = False
                 source.settled = source.stream.total
         except Exception:
             # Never leave the recognizer waiting: stop, and keep what was already recognized.
@@ -465,6 +475,7 @@ class MeetingRecorder:
         # Shown as a meter: jumps up, falls back gently.
         source.level = max(min(1.0, loudest * 8), source.level * 0.7)
         source.heard = source.heard or loudest > 1e-4
+        source.hearing = source.stream.speaking or bool(source.stream.group)
 
     def _heard(self, source: Source, start: int, end: int, clip: np.ndarray) -> None:
         with self.condition:
@@ -531,6 +542,7 @@ class MeetingRecorder:
                     break
                 item = heapq.heappop(self.waiting)
                 self.waiting_samples -= item.clip.size
+            self.recognizing = True
             try:
                 text = self.recognize(item.clip).strip()
                 failures = 0
@@ -544,6 +556,7 @@ class MeetingRecorder:
                 continue
             finally:
                 item.clip = None
+                self.recognizing = False
             if text:
                 line = Line(item.start / SAMPLE_RATE, item.end / SAMPLE_RATE, item.who, text)
                 if item.who == ME:

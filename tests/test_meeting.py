@@ -147,6 +147,20 @@ def test_falling_far_behind_drops_the_oldest_speech(tmp_path, monkeypatch):
     assert any("跟不上" in problem for problem in run.problems)
 
 
+def test_the_recorder_says_while_words_are_on_their_way(tmp_path):
+    seen = []
+    run = None
+
+    def recognize(clip):
+        seen.append((run.recorder.pending, run.recorder.recognizing))
+        return recognize_level(clip)
+
+    run = Recording(tmp_path, recognize)
+    run.play({ROOM: track((1, 2, 0.3), total=3)})
+    assert seen == [(True, True)]
+    assert not run.recorder.pending and not run.recorder.recognizing
+
+
 def test_recognition_that_keeps_failing_stops_the_meeting(tmp_path):
     def broken(clip):
         raise RuntimeError("引擎没有响应")
