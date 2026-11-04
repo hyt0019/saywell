@@ -1,4 +1,7 @@
-"""Build assets/app.ico (exe and installer icon) from src/saywell/assets/icon.png.
+"""Build the icon files from the swallow's geometry (src/saywell/brand.py):
+
+- assets/app.ico: the exe and installer icon, every size drawn on its own;
+- src/saywell/assets/icon.png: a 1024 px copy for documents and the website.
 
 Run: .venv\\Scripts\\python.exe scripts\\make_icon.py
 """
@@ -13,7 +16,8 @@ from PySide6.QtWidgets import QApplication
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from saywell.ui import ASSETS, ICON_SIZES, scaled_image  # noqa: E402
+from saywell.brand import icon_image  # noqa: E402
+from saywell.ui import ASSETS, ICON_SIZES  # noqa: E402
 
 
 def png_bytes(image: QImage) -> bytes:
@@ -25,10 +29,7 @@ def png_bytes(image: QImage) -> bytes:
 
 def main() -> None:
     app = QApplication.instance() or QApplication([])  # noqa: F841 - image plugins need an app
-    source = QImage(str(ASSETS / "icon.png"))
-    if source.isNull():
-        raise SystemExit("找不到 icon.png")
-    images = [png_bytes(scaled_image(source, size)) for size in ICON_SIZES]
+    images = [png_bytes(icon_image(size)) for size in ICON_SIZES]
     header = struct.pack("<HHH", 0, 1, len(images))
     offset = len(header) + 16 * len(images)
     entries, data = b"", b""
@@ -39,6 +40,9 @@ def main() -> None:
     target = ROOT / "assets" / "app.ico"
     target.write_bytes(header + entries + data)
     print(f"{target}  {len(images)} 个尺寸  {target.stat().st_size / 1024:.0f} KB")
+    large = ASSETS / "icon.png"
+    icon_image(1024).save(str(large))
+    print(f"{large}  1024 px")
 
 
 if __name__ == "__main__":

@@ -11,17 +11,12 @@ from __future__ import annotations
 import threading
 from dataclasses import replace
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QBrush,
     QColor,
-    QFont,
     QFontMetrics,
     QGuiApplication,
-    QLinearGradient,
     QPainter,
-    QPainterPath,
-    QPen,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -36,18 +31,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .brand import bird_rect, draw_swallow, draw_tile, squircle
 from .translation import LANGUAGES, STYLES, Translation, target_language
-from .ui import INK, Glyph, Segmented, Spinner, Tween, app_icon, label, make_button, mix
+from .ui import INK, Glyph, Segmented, Spinner, Tween, app_icon, label, make_button
 
 FAINT = "#8E8E93"
 WIDTH = 384
 ICON_SECONDS = 4.0  # The button goes away unless it is used or hovered.
 NEAR = 120  # How close (physical pixels) the mouse must be to the selection for it to count.
-# The app icon's colors, so the button beside a selection is plainly Saywell's: its periwinkle
-# tile, its deep violet mark and its cream sparkle.
-BRAND_TOP, BRAND_BOTTOM = "#98AFFC", "#6984ED"
-BRAND_INK = "#2F1F48"
-BRAND_SPARKLE = "#FFF6E6"
 STYLE_KEYS = tuple(STYLES)
 
 
@@ -114,29 +105,9 @@ class Floating(QWidget):
         return self.isVisible() and self.frameGeometry().contains(to_logical(x, y))
 
 
-def sparkle(center: QPointF, radius: float) -> QPainterPath:
-    """The four-pointed star of the app icon."""
-    waist = 0.16  # How far in the sides curve, as a share of the radius.
-    points = (
-        QPointF(center.x(), center.y() - radius),
-        QPointF(center.x() + radius, center.y()),
-        QPointF(center.x(), center.y() + radius),
-        QPointF(center.x() - radius, center.y()),
-    )
-    path = QPainterPath(points[0])
-    for index in range(4):
-        start, end = points[index], points[(index + 1) % 4]
-        # Curved in toward the middle, as the icon's star is.
-        control = QPointF(center.x() + (start.x() + end.x() - 2 * center.x()) * waist,
-                          center.y() + (start.y() + end.y() - 2 * center.y()) * waist)
-        path.quadTo(control, end)
-    path.closeSubpath()
-    return path
-
-
 class SelectionIcon(Floating):
-    """A small button beside the selection, in the app icon's colors so it is plainly ours:
-    click it to translate."""
+    """A small button beside the selection: the app's own swallow, so it is plainly ours. Click it
+    to translate."""
 
     clicked = Signal()
     SIZE = 30
@@ -182,35 +153,16 @@ class SelectionIcon(Floating):
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        box = QRectF(self.MARGIN, self.MARGIN, self.SIZE, self.SIZE)
+        lift = 1.2 * self.hover.value  # Rises a little under the mouse.
+        box = QRectF(self.MARGIN, self.MARGIN - lift, self.SIZE, self.SIZE)
         painter.setPen(Qt.PenStyle.NoPen)
-        # A soft shadow, a little lower, tinted like the tile: many faint layers, so it has no edge.
+        # A soft warm shadow on whatever is below: many faint layers, so it has no edge.
         for step in range(7):
-            spread = 0.8 + step * 0.9
-            painter.setBrush(QColor(52, 64, 140, 9))
-            painter.drawRoundedRect(box.adjusted(-spread, -spread + 2.5, spread, spread + 2.5), 8 + spread, 8 + spread)
-        lift = 0.14 * self.hover.value  # A little brighter under the mouse.
-        gradient = QLinearGradient(box.topLeft(), box.bottomRight())
-        gradient.setColorAt(0.0, mix(QColor(BRAND_TOP), QColor("#FFFFFF"), lift))
-        gradient.setColorAt(1.0, mix(QColor(BRAND_BOTTOM), QColor("#FFFFFF"), lift))
-        painter.setBrush(gradient)
-        painter.drawRoundedRect(box, 8, 8)
-        edge = QLinearGradient(box.topLeft(), box.bottomLeft())  # A fine light rim, brightest on top.
-        edge.setColorAt(0.0, QColor(255, 255, 255, 120))
-        edge.setColorAt(1.0, QColor(255, 255, 255, 20))
-        painter.setPen(QPen(QBrush(edge), 1))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), 7.5, 7.5)
-        font = QFont(self.font())
-        font.setFamilies(["Microsoft YaHei UI", "Microsoft YaHei"])
-        font.setPixelSize(15)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.setPen(QColor(BRAND_INK))
-        painter.drawText(box.adjusted(0, 2, -3, 0), Qt.AlignmentFlag.AlignCenter, "译")
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(BRAND_SPARKLE))
-        painter.drawPath(sparkle(QPointF(box.right() - 6.6, box.top() + 6.6), 3.9))
+            spread = 0.6 + step * 0.85
+            painter.setBrush(QColor(60, 42, 20, 8 + round(3 * self.hover.value)))
+            painter.drawPath(squircle(box.adjusted(-spread, -spread + 2.2 + lift, spread, spread + 2.2 + lift)))
+        draw_tile(painter, box, rim=36)  # The shadow already sets it apart.
+        draw_swallow(painter, bird_rect(box))
 
 
 class TranslationPopup(Floating):

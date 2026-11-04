@@ -30,7 +30,6 @@ from PySide6.QtGui import (
     QFont,
     QFontMetrics,
     QIcon,
-    QImage,
     QBrush,
     QConicalGradient,
     QLinearGradient,
@@ -887,26 +886,29 @@ ASSETS = Path(__file__).resolve().parent / "assets"
 ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
 
 
-def scaled_image(image: QImage, size: int) -> QImage:
-    """Halve step by step before the final resize so small icons stay crisp instead of aliased."""
-    while image.width() >= size * 4:
-        image = image.scaled(
-            image.width() // 2, image.height() // 2, Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-    return image.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-
-
-def image_icon(name: str) -> QIcon:
-    source = QImage(str(ASSETS / name))
-    icon = QIcon()
-    for size in ICON_SIZES:
-        icon.addPixmap(QPixmap.fromImage(scaled_image(source, size)))
-    return icon
+TRAY_SIZES = (16, 20, 24, 32, 40, 48, 64)
+_icons: dict[str, QIcon] = {}
 
 
 def app_icon() -> QIcon:
-    return image_icon("icon.png")
+    """The swallow on its tile, drawn for each size (see brand.py)."""
+    if "app" not in _icons:
+        from .brand import icon_image
+
+        icon = QIcon()
+        for size in ICON_SIZES:
+            icon.addPixmap(QPixmap.fromImage(icon_image(size)))
+        _icons["app"] = icon
+    return _icons["app"]
+
+
+def tray_image_icon(color: str | None) -> QIcon:
+    from .brand import tray_image
+
+    icon = QIcon()
+    for size in TRAY_SIZES:
+        icon.addPixmap(QPixmap.fromImage(tray_image(size, color)))
+    return icon
 
 
 def taskbar_is_light() -> bool:
@@ -922,8 +924,8 @@ def taskbar_is_light() -> bool:
 
 
 def tray_icon() -> QIcon:
-    """White glyph on a dark taskbar like other tray icons; the colored icon stays visible on a light one."""
-    return app_icon() if taskbar_is_light() else image_icon("tray-white.png")
+    """The bird alone, as tray icons are: white on a dark taskbar, in its own colours on a light one."""
+    return tray_image_icon(None if taskbar_is_light() else "#FFFFFF")
 
 
 def blend(colors: tuple[str, ...], t: float) -> QColor:

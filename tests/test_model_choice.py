@@ -727,13 +727,13 @@ def test_model_dialog_opens_on_plaza_when_a_plaza_model_is_active(qt_app, tmp_pa
 
 
 def test_tray_uses_white_glyph_on_dark_taskbar(qt_app, monkeypatch):
-    used = []
-    monkeypatch.setattr(ui, "image_icon", lambda name: used.append(name) or name)
+    monkeypatch.setattr(ui, "tray_image_icon", lambda color: color)
     monkeypatch.setattr(ui, "taskbar_is_light", lambda: False)
-    assert ui.tray_icon() == "tray-white.png"
+    assert ui.tray_icon() == "#FFFFFF"
     monkeypatch.setattr(ui, "taskbar_is_light", lambda: True)
-    assert ui.tray_icon() == "icon.png"
-    assert (ui.ASSETS / "icon.png").is_file() and (ui.ASSETS / "tray-white.png").is_file()
+    assert ui.tray_icon() is None  # The bird in its own colours.
+    sizes = {pixmap.width() for pixmap in (ui.app_icon().pixmap(size, size) for size in (16, 32, 256))}
+    assert sizes == {16, 32, 256}
 
 
 def test_every_card_states_speed_the_same_way():

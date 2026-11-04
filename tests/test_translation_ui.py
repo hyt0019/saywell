@@ -200,14 +200,16 @@ def test_the_style_can_be_changed_in_the_popup_and_is_kept(run):
     assert controller.popup.styles.current() == 0  # 自然 was the last one chosen.
 
 
-def test_the_button_is_drawn_in_the_app_icons_colors(run):
+def test_the_button_is_the_apps_own_swallow(run):
     from PySide6.QtGui import QColor
 
-    from saywell.translation_ui import BRAND_BOTTOM, BRAND_TOP
+    from saywell import brand
 
     window, controller = run()
     image = controller.icon.grab().toImage()
-    middle = QColor(image.pixel(image.width() * 12 // 46, image.height() * 30 // 46))  # Beside 译.
-    top, bottom = QColor(BRAND_TOP), QColor(BRAND_BOTTOM)
-    assert min(top.blue(), bottom.blue()) - 12 <= middle.blue() <= max(top.blue(), bottom.blue()) + 12
-    assert middle.blue() > middle.red() + 40  # Periwinkle, not the old white.
+    colours = {QColor(image.pixel(x, y)).name() for x in range(image.width()) for y in range(image.height())}
+
+    def near(target: str) -> bool:
+        return any(sum(abs(int(c[i:i + 2], 16) - int(target[i:i + 2], 16)) for i in (1, 3, 5)) < 24 for c in colours)
+
+    assert near(brand.INK) and near(brand.CORAL) and near(brand.IVORY_TOP)
