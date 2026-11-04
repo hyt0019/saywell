@@ -90,7 +90,7 @@ SENSE_VOICE = AsrModel(
     name="SenseVoice Small",
     kind="sense_voice",
     folder="",
-    tagline="均衡默认",
+    tagline="小巧轻快",
     strengths=("中文准确，自带标点", "支持中、英、日、韩、粤语", "体积小，老电脑也流畅"),
     caveat="中文里的英文词和人名偶尔听成近音词，例如 DeepSeek、王五。",
     languages="中 · 英 · 日 · 韩 · 粤",
@@ -191,7 +191,7 @@ QWEN3_ASR = AsrModel(
     name="Qwen3-ASR 0.6B",
     kind="llama_server",
     folder="qwen3-asr-0.6b-q8",
-    tagline="准确抗噪",
+    tagline="推荐默认",
     strengths=("中文准确，自带标点", "嘈杂环境、语速快时也较稳", "支持 52 种语言和方言"),
     caveat="精选模型中体积最大；偶尔把“呃”听成“而”。",
     languages="多语言 · 方言",
@@ -477,10 +477,12 @@ PLAZA = (
     WHISPER_TURBO,
 )
 
-CATALOG = (SENSE_VOICE, X_ASR, QWEN3_ASR, CANARY)
+CATALOG = (QWEN3_ASR, SENSE_VOICE, X_ASR, CANARY)
 # Every model the app can download and load: the curated models plus the plaza.
 ALL_MODELS = CATALOG + PLAZA
-DEFAULT_MODEL = SENSE_VOICE.id
+# The most accurate of the curated models, and steady in noise. SenseVoice was the default
+# before 0.8.0; Settings.load keeps it for those who have it and never chose a model.
+DEFAULT_MODEL = QWEN3_ASR.id
 # Kept for callers that predate the model catalog.
 FILES = SENSE_VOICE.files
 
@@ -489,7 +491,7 @@ def get_model(model_id: str) -> AsrModel:
     for model in ALL_MODELS:
         if model.id == model_id:
             return model
-    return SENSE_VOICE
+    return QWEN3_ASR
 
 
 class ModelError(RuntimeError):

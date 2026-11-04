@@ -71,7 +71,7 @@ def test_packaged_build_finds_project_models_without_saved_config(tmp_path, monk
     models.mkdir()
     monkeypatch.setattr(settings.sys, "frozen", True, raising=False)
     monkeypatch.setattr(settings.sys, "executable", str(binary))
-    assert settings.Settings().models == models
+    assert settings.Settings().download_root == models
 
 
 def test_models_beside_executable_take_precedence(tmp_path, monkeypatch):
@@ -81,7 +81,7 @@ def test_models_beside_executable_take_precedence(tmp_path, monkeypatch):
     (tmp_path / "models").mkdir()
     monkeypatch.setattr(settings.sys, "frozen", True, raising=False)
     monkeypatch.setattr(settings.sys, "executable", str(binary))
-    assert settings.Settings().models == local
+    assert settings.Settings().download_root == local
 
 
 def test_selection_translation_is_off_until_turned_on_and_bad_choices_fall_back(tmp_path):

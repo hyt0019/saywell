@@ -32,8 +32,8 @@ def qt_app():
 
 
 def test_catalog_keeps_sensevoice_in_place_and_every_model_is_self_contained():
-    assert [model.id for model in CATALOG] == ["sensevoice", "xasr", "qwen3-asr", "canary"]
-    assert SENSE_VOICE.folder == "" and Settings().asr_model == "sensevoice"
+    assert [model.id for model in CATALOG] == ["qwen3-asr", "sensevoice", "xasr", "canary"]
+    assert SENSE_VOICE.folder == "" and Settings().asr_model == "qwen3-asr"
     assert models.FILES == SENSE_VOICE.files
     folders = [model.folder for model in CATALOG]
     assert len(set(folders)) == len(folders)
@@ -43,7 +43,7 @@ def test_catalog_keeps_sensevoice_in_place_and_every_model_is_self_contained():
         assert all(spec.url.startswith("https://") and spec.size > 0 for spec in model.files)
         # Pinned revisions keep the verified digests valid.
         assert all("/resolve/main/" not in spec.url for spec in model.files)
-    assert get_model("missing") is SENSE_VOICE
+    assert get_model("missing").id == "qwen3-asr"
 
 
 def test_changing_download_location_keeps_downloaded_models_in_place(tmp_path, monkeypatch):
@@ -68,7 +68,7 @@ def test_model_settings_roundtrip_and_reject_unknown_values(tmp_path):
         encoding="utf-8",
     )
     loaded = Settings.load(path)
-    assert loaded.asr_model == "sensevoice"
+    assert loaded.asr_model == "qwen3-asr"  # The default.
     assert loaded.model_paths == {"xasr": "E:/x"}
 
 
@@ -297,7 +297,7 @@ def drop_model(folder: Path, model_id: str) -> Path:
 
 def test_model_folders_put_into_the_download_location_are_used_under_any_name(tmp_path, monkeypatch):
     use_marker_models(monkeypatch)
-    value = Settings(download_dir=str(tmp_path))
+    value = Settings(download_dir=str(tmp_path), asr_model="sensevoice")
     assert value.with_found_models() is value
     pack = tmp_path / "好好说 Saywell 语音模型合集"
     canary = drop_model(pack / "Canary 180M Flash", "canary")
@@ -310,6 +310,21 @@ def test_model_folders_put_into_the_download_location_are_used_under_any_name(tm
     drop_model(tmp_path, "sensevoice")
     kept = value.with_found_models()
     assert kept.asr_model == "sensevoice" and set(kept.model_paths) == {"qwen3-asr", "canary"}
+
+
+def test_someone_who_has_sensevoice_and_never_chose_a_model_keeps_it(tmp_path, monkeypatch):
+    use_marker_models(monkeypatch)
+    path = tmp_path / "settings.json"
+    folder = tmp_path / "models"
+    path.write_text(json.dumps({"download_dir": str(folder)}), encoding="utf-8")
+    assert Settings.load(path).asr_model == "qwen3-asr"  # A new install: nothing downloaded yet.
+    drop_model(folder, "sensevoice")  # The default before 0.8.0, downloaded long ago.
+    assert Settings.load(path).asr_model == "sensevoice"
+    drop_model(folder / "qwen3-asr-0.6b-q8", "qwen3-asr")
+    assert Settings.load(path).asr_model == "qwen3-asr"
+    path.write_text(json.dumps({"download_dir": str(folder), "asr_model": "qwen3-asr"}), encoding="utf-8")
+    (folder / "qwen3-asr-0.6b-q8" / "qwen3-asr.ok").unlink()
+    assert Settings.load(path).asr_model == "qwen3-asr"  # Chosen, so kept while it downloads.
 
 
 @pytest.mark.parametrize("discard", [True, False])
@@ -379,7 +394,7 @@ def model_dialog(qt_app, tmp_path, monkeypatch):
     monkeypatch.setattr(
         downloads, "start", lambda model_id, directory, sources=(): starts.append((model_id, directory)) or True
     )
-    value = Settings(download_dir=str(tmp_path), model_paths={"sensevoice": str(tmp_path / "legacy")})
+    value = Settings(download_dir=str(tmp_path), asr_model="sensevoice", model_paths={"sensevoice": str(tmp_path / "legacy")})
     dialog = ModelDialog(value, downloads, lambda new: applied.append(new) or True)
     yield SimpleNamespace(dialog=dialog, ready=ready, applied=applied, starts=starts, root=tmp_path)
     dialog.close()
@@ -582,10 +597,10 @@ def test_pipeline_loads_selected_model_and_reloads_after_switch(monkeypatch):
     monkeypatch.setattr("saywell.asr.LocalRecognizer", Recognizer)
     monkeypatch.setattr("saywell.pipeline.read_key", lambda **kwargs: "")
     pipeline = Pipeline(events)
-    pipeline.recognizer = Recognizer(Settings().models, "sensevoice")
+    pipeline.recognizer = Recognizer(Settings(asr_model="sensevoice").models, "sensevoice")
     created.clear()
     samples = SimpleNamespace(size=16000)
-    pipeline._run(1, threading.Event(), Settings(), samples, "audio")
+    pipeline._run(1, threading.Event(), Settings(asr_model="sensevoice"), samples, "audio")
     assert created == []  # Same model stays loaded.
     pipeline._run(2, threading.Event(), Settings(asr_model="xasr"), samples, "audio")
     assert created == ["xasr"]

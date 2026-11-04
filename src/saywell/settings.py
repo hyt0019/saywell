@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from .api_config import DEFAULT_API_BASE_URL, chat_completion_url, credential_account, is_deepseek_api
-from .models import ALL_MODELS, DEFAULT_MODEL, find_models, get_model, models_ready
+from .models import ALL_MODELS, DEFAULT_MODEL, SENSE_VOICE, find_models, get_model, models_ready
 from .shortcuts import DEFAULT_HOTKEY, parse_shortcut
 
 MODEL_IDS = {model.id for model in ALL_MODELS}
@@ -179,11 +179,27 @@ class Settings:
 
     @classmethod
     def load(cls, path: Path | None = None) -> Settings:
-        path = path or data_dir() / "settings.json"
+        loaded, chosen = cls._read(path or data_dir() / "settings.json")
+        return loaded if chosen else loaded.keeping_old_default()
+
+    def keeping_old_default(self) -> Settings:
+        """Someone who never chose a model and already has SenseVoice, the default before
+        Qwen3-ASR, goes on using it rather than being asked to download another."""
+        if (
+            self.asr_model == DEFAULT_MODEL
+            and not models_ready(self.model_path(DEFAULT_MODEL), model=DEFAULT_MODEL)
+            and models_ready(self.model_path(SENSE_VOICE.id), model=SENSE_VOICE)
+        ):
+            return replace(self, asr_model=SENSE_VOICE.id)
+        return self
+
+    @classmethod
+    def _read(cls, path: Path) -> tuple[Settings, bool]:
+        """The settings in the file, and whether a model was chosen in them."""
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
-                return cls()
+                return cls(), False
             defaults = cls()
             values = {}
             for key, value in raw.items():
@@ -237,9 +253,9 @@ class Settings:
                     values.pop(name)
             if not 1 <= values.get("api_timeout", 25) <= 120:
                 values.pop("api_timeout", None)
-            return cls(**values)
+            return cls(**values), "asr_model" in values
         except (OSError, ValueError, TypeError):
-            return cls()
+            return cls(), False
 
     def save(self, path: Path | None = None) -> None:
         path = path or data_dir() / "settings.json"
