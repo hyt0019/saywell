@@ -182,3 +182,32 @@ def test_esc_is_only_taken_while_the_popup_is_open(run):
     window.settings = replace(window.settings, selection_translate=False)
     controller.configure()  # Turned off with the popup open.
     assert window.hotkeys.registered == set() and not controller.popup.isVisible()
+
+
+def test_the_style_can_be_changed_in_the_popup_and_is_kept(run):
+    window, controller = run(selection_trigger="direct")
+    controller._read(("mouse", (260, 118)), PAGE)
+    assert wait_for(lambda: controller.translation is not None)
+    assert controller.popup.styles.current() == 0 and controller.asked[-1][2] == "natural"
+    controller.popup.styles.buttons[1].click()  # 正式
+    assert wait_for(lambda: controller.asked[-1][2] == "formal" and controller.translation is not None)
+    assert window.settings.selection_style == "formal"  # Next time too.
+    asked = len(controller.asked)
+    controller.popup.styles.buttons[0].click()  # Back to 自然: already made, not asked again.
+    assert controller.translation.text == "[简体中文] The budget is final." and len(controller.asked) == asked
+    controller.popup.dismiss()
+    controller._read(("mouse", (260, 118)), replace(PAGE, text="Another one."))
+    assert controller.popup.styles.current() == 0  # 自然 was the last one chosen.
+
+
+def test_the_button_is_drawn_in_the_app_icons_colors(run):
+    from PySide6.QtGui import QColor
+
+    from saywell.translation_ui import BRAND_BOTTOM, BRAND_TOP
+
+    window, controller = run()
+    image = controller.icon.grab().toImage()
+    middle = QColor(image.pixel(image.width() * 12 // 46, image.height() * 30 // 46))  # Beside 译.
+    top, bottom = QColor(BRAND_TOP), QColor(BRAND_BOTTOM)
+    assert min(top.blue(), bottom.blue()) - 12 <= middle.blue() <= max(top.blue(), bottom.blue()) + 12
+    assert middle.blue() > middle.red() + 40  # Periwinkle, not the old white.

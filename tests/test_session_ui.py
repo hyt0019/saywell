@@ -743,3 +743,19 @@ def test_the_new_version_reports_how_the_update_went(window):
     assert window.status.text() == f"已更新到 {__version__}"
     window.report_update("99.0")
     assert f"更新到 99.0 没有完成，仍是 {__version__}" in window.notice.text()
+
+
+def test_the_two_languages_translate_into_each_other_and_can_be_swapped(window):
+    from dataclasses import replace
+
+    dialog = SettingsDialog(replace(Settings(), selection_translate=True), window)
+    assert dialog.selection_back.text().startswith("选中简体中文译成英语，选中英语译成简体中文")
+    dialog.selection_swap.click()
+    assert (dialog.selection_native.currentData(), dialog.selection_foreign.currentData()) == ("英语", "简体中文")
+    assert "其他语言都译成英语" in dialog.selection_back.text()
+    dialog.selection_foreign.setCurrentIndex(dialog.selection_foreign.findData("法语"))
+    assert "分不出" in dialog.selection_back.text()  # Both written in Latin letters.
+    dialog.selection_foreign.setCurrentIndex(dialog.selection_foreign.findData("日语"))
+    dialog.save()
+    assert (dialog.updated.selection_native, dialog.updated.selection_foreign) == ("英语", "日语")
+    dialog.close()

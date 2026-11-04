@@ -69,7 +69,8 @@ def script_of(text: str) -> str:
 
 
 def target_language(text: str, native: str, foreign: str) -> str:
-    """Text in the user's own language goes to the other one; everything else comes home."""
+    """The two languages translate into each other: text in the user's own language goes to the
+    other one, and text in the other one, or in any third language, comes home."""
     return foreign if script_of(text) == SCRIPTS.get(native) else native
 
 

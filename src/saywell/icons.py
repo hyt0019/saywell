@@ -202,10 +202,23 @@ def _keyboard(p):
 
 
 def _translate(p):
-    # A globe: rim, one meridian and the equator.
-    p.addEllipse(QPointF(12, 12), 8.5, 8.5)
-    p.addEllipse(QPointF(12, 12), 3.6, 8.5)
-    _lines(p, (3.5, 12), (20.5, 12))
+    # The usual sign for translating: 文 above on the left, A below on the right.
+    _lines(p, (7.6, 2.8), (7.6, 4.4))
+    _lines(p, (3, 5.8), (12.2, 5.8))
+    p.moveTo(10.3, 5.8)
+    p.quadTo(8.8, 10.8, 3.4, 13)
+    p.moveTo(4.9, 5.8)
+    p.quadTo(6.6, 10.6, 11.8, 13)
+    _lines(p, (12.6, 21), (16.8, 10.8), (21, 21))
+    _lines(p, (14.3, 17.2), (19.3, 17.2))
+
+
+def _swap(p):
+    # Two arrows, one each way: the two languages trade places.
+    _lines(p, (4, 8.5), (19.5, 8.5))
+    _lines(p, (16, 5), (19.5, 8.5), (16, 12))
+    _lines(p, (20, 15.5), (4.5, 15.5))
+    _lines(p, (8, 12), (4.5, 15.5), (8, 19))
 
 
 def _speaker(p):
@@ -244,6 +257,7 @@ PATHS = {
     "headphones": _headphones,
     "stop": _stop,
     "translate": _translate,
+    "swap": _swap,
     "mic": _mic,
     "history": _history,
     "import": _import,

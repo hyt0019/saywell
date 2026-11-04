@@ -11,8 +11,18 @@ from __future__ import annotations
 import threading
 from dataclasses import replace
 
-from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QPainter
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QGuiApplication,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -27,12 +37,18 @@ from PySide6.QtWidgets import (
 )
 
 from .translation import LANGUAGES, STYLES, Translation, target_language
-from .ui import ACCENT, INK, Glyph, Spinner, Tween, draw_icon, label, make_button, mix
+from .ui import INK, Glyph, Segmented, Spinner, Tween, app_icon, label, make_button, mix
 
 FAINT = "#8E8E93"
 WIDTH = 384
 ICON_SECONDS = 4.0  # The button goes away unless it is used or hovered.
 NEAR = 120  # How close (physical pixels) the mouse must be to the selection for it to count.
+# The app icon's colors, so the button beside a selection is plainly Saywell's: its periwinkle
+# tile, its deep violet mark and its cream sparkle.
+BRAND_TOP, BRAND_BOTTOM = "#98AFFC", "#6984ED"
+BRAND_INK = "#2F1F48"
+BRAND_SPARKLE = "#FFF6E6"
+STYLE_KEYS = tuple(STYLES)
 
 
 def to_logical(x: int, y: int) -> QPoint:
@@ -98,8 +114,29 @@ class Floating(QWidget):
         return self.isVisible() and self.frameGeometry().contains(to_logical(x, y))
 
 
+def sparkle(center: QPointF, radius: float) -> QPainterPath:
+    """The four-pointed star of the app icon."""
+    waist = 0.16  # How far in the sides curve, as a share of the radius.
+    points = (
+        QPointF(center.x(), center.y() - radius),
+        QPointF(center.x() + radius, center.y()),
+        QPointF(center.x(), center.y() + radius),
+        QPointF(center.x() - radius, center.y()),
+    )
+    path = QPainterPath(points[0])
+    for index in range(4):
+        start, end = points[index], points[(index + 1) % 4]
+        # Curved in toward the middle, as the icon's star is.
+        control = QPointF(center.x() + (start.x() + end.x() - 2 * center.x()) * waist,
+                          center.y() + (start.y() + end.y() - 2 * center.y()) * waist)
+        path.quadTo(control, end)
+    path.closeSubpath()
+    return path
+
+
 class SelectionIcon(Floating):
-    """A small round-cornered button beside the selection: click it to translate."""
+    """A small button beside the selection, in the app icon's colors so it is plainly ours:
+    click it to translate."""
 
     clicked = Signal()
     SIZE = 30
@@ -147,12 +184,33 @@ class SelectionIcon(Floating):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         box = QRectF(self.MARGIN, self.MARGIN, self.SIZE, self.SIZE)
         painter.setPen(Qt.PenStyle.NoPen)
-        for spread, alpha in ((5, 10), (3, 16), (1.5, 24)):  # A soft shadow, a little lower.
-            painter.setBrush(QColor(0, 0, 0, alpha))
-            painter.drawRoundedRect(box.adjusted(-spread, -spread + 2, spread, spread + 2), 9 + spread, 9 + spread)
-        painter.setBrush(mix(QColor("#FFFFFF"), QColor("#F0F5FE"), self.hover.value))
-        painter.drawRoundedRect(box, 9, 9)
-        draw_icon(painter, Glyph.TRANSLATE, box.adjusted(7, 7, -7, -7), ACCENT, 1.6)
+        # A soft shadow, a little lower, tinted like the tile: many faint layers, so it has no edge.
+        for step in range(7):
+            spread = 0.8 + step * 0.9
+            painter.setBrush(QColor(52, 64, 140, 9))
+            painter.drawRoundedRect(box.adjusted(-spread, -spread + 2.5, spread, spread + 2.5), 8 + spread, 8 + spread)
+        lift = 0.14 * self.hover.value  # A little brighter under the mouse.
+        gradient = QLinearGradient(box.topLeft(), box.bottomRight())
+        gradient.setColorAt(0.0, mix(QColor(BRAND_TOP), QColor("#FFFFFF"), lift))
+        gradient.setColorAt(1.0, mix(QColor(BRAND_BOTTOM), QColor("#FFFFFF"), lift))
+        painter.setBrush(gradient)
+        painter.drawRoundedRect(box, 8, 8)
+        edge = QLinearGradient(box.topLeft(), box.bottomLeft())  # A fine light rim, brightest on top.
+        edge.setColorAt(0.0, QColor(255, 255, 255, 120))
+        edge.setColorAt(1.0, QColor(255, 255, 255, 20))
+        painter.setPen(QPen(QBrush(edge), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), 7.5, 7.5)
+        font = QFont(self.font())
+        font.setFamilies(["Microsoft YaHei UI", "Microsoft YaHei"])
+        font.setPixelSize(15)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor(BRAND_INK))
+        painter.drawText(box.adjusted(0, 2, -3, 0), Qt.AlignmentFlag.AlignCenter, "译")
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(BRAND_SPARKLE))
+        painter.drawPath(sparkle(QPointF(box.right() - 6.6, box.top() + 6.6), 3.9))
 
 
 class TranslationPopup(Floating):
@@ -162,6 +220,7 @@ class TranslationPopup(Floating):
     copy = Signal()
     replace_selection = Signal()
     language = Signal(str)  # Another target language was chosen.
+    style = Signal(str)  # Another style was chosen.
     retry = Signal()
     closed = Signal()
 
@@ -187,12 +246,29 @@ class TranslationPopup(Floating):
 
         head = QHBoxLayout()
         head.setSpacing(6)
+        mark = QLabel()
+        mark.setPixmap(app_icon().pixmap(36, 36))
+        mark.setScaledContents(True)
+        mark.setFixedSize(18, 18)
+        mark.setToolTip("好好说 · 划词翻译")
+        head.addWidget(mark)
+        head.addSpacing(-2)
         self.route = make_button("", None, "heroChip")
         self.route.set_trailing(Glyph.CHEVRON_DOWN)
         self.route.setToolTip("换一种目标语言")
         self.route.clicked.connect(self.toggle_languages)
         head.addWidget(self.route)
         head.addStretch()
+        # The style, one click away; small, so the head stays one line.
+        self.styles = Segmented(tuple(name for name, _rule in STYLES.values()))
+        for button in self.styles.buttons:
+            button.look = replace(button.look, height=24, padding=9, size=12)
+            button.setMinimumWidth(0)
+            button.updateGeometry()
+        self.styles.setToolTip("自然：地道通顺；正式：适合邮件和文档；直译：贴近原文，方便对照学习")
+        self.styles.changed.connect(lambda index: self.style.emit(STYLE_KEYS[index]))
+        head.addWidget(self.styles, 0, Qt.AlignmentFlag.AlignVCenter)
+        head.addSpacing(2)
         self.close_button = make_button("", Glyph.CANCEL, "heroChip")
         self.close_button.setFixedWidth(30)
         self.close_button.setToolTip("关闭（Esc）")
@@ -294,9 +370,10 @@ class TranslationPopup(Floating):
 
     # What it shows
 
-    def show_waiting(self, original: str, target: str, editable: bool | None, cut: bool):
+    def show_waiting(self, original: str, target: str, editable: bool | None, cut: bool, style: str = "natural"):
         self.target = target
         self.route.setText(f"译成{target}")
+        self.styles.set_current(STYLE_KEYS.index(style) if style in STYLES else 0, animate=self.isVisible())
         for name, button in self.language_buttons.items():
             button.setChecked(name == target)
         # Two lines of it at most: enough to see what is being translated.
@@ -316,7 +393,7 @@ class TranslationPopup(Floating):
         self.note.setText(f"只译了前 {len(original):,} 字" if cut else "")
         self._fit()
 
-    def show_translation(self, translation: Translation, style: str):
+    def show_translation(self, translation: Translation):
         self.spinner.stop()
         self.waiting.hide()
         self.problem.hide()
@@ -331,8 +408,6 @@ class TranslationPopup(Floating):
         self.scroll.show()
         self.copy_button.setEnabled(True)
         self.replace_button.setEnabled(True)
-        if not self.note.text():
-            self.note.setText(STYLES.get(style, STYLES["natural"])[0])
         self._fit()
 
     def show_problem(self, message: str, can_retry: bool = True):
@@ -452,6 +527,7 @@ class SelectionTranslate:
         self.popup.copy.connect(self.copy)
         self.popup.replace_selection.connect(self.replace)
         self.popup.language.connect(self._retarget)
+        self.popup.style.connect(self._restyle)
         self.popup.retry.connect(lambda: self.translate(self.target_language))
         self.popup.closed.connect(self._closed)
         self.pending = None  # The Selection shown in the icon, waiting for a click.
@@ -459,6 +535,7 @@ class SelectionTranslate:
         self.target = None  # Where it was selected, for 替换.
         self.target_language = ""
         self.translation: Translation | None = None
+        self.made: dict[tuple[str, str], Translation] = {}  # This selection's, by language and style.
         self.generation = 0
         self.cancel: threading.Event | None = None
         self.mouse_timer = QTimer()
@@ -614,7 +691,8 @@ class SelectionTranslate:
         if anchor is None:
             spot = to_logical(*point)
             anchor = QRect(spot.x(), spot.y() - 10, 1, 20)
-        self.popup.show_waiting(found.text, self.target_language, found.editable, found.cut)
+        self.made = {}
+        self.popup.show_waiting(found.text, self.target_language, found.editable, found.cut, self.settings.selection_style)
         self.popup.show_near(anchor)
         self._register_escape(True)
         self._watch_for_outside_clicks()
@@ -626,6 +704,7 @@ class SelectionTranslate:
         self.popup.show_waiting("", self.target_language or self.settings.selection_foreign, False, False)
         self.popup.show_problem(text, can_retry=False)
         self.popup.route.hide()
+        self.popup.styles.hide()
         self.popup.show_near(QRect(spot.x(), spot.y() - 10, 1, 20))
         self._register_escape(True)
         self._watch_for_outside_clicks()
@@ -638,8 +717,23 @@ class SelectionTranslate:
     def _retarget(self, language: str):
         self.target_language = language
         if self.current:
-            self.popup.show_waiting(self.current.text, language, self.current.editable, self.current.cut)
+            self.popup.show_waiting(self.current.text, language, self.current.editable, self.current.cut,
+                                    self.settings.selection_style)
             self.translate(language)
+
+    def _restyle(self, style: str):
+        """Another style from the popup: kept for next time, like the one in the settings."""
+        window = self.window
+        if style != window.settings.selection_style:
+            window.settings = replace(window.settings, selection_style=style)
+            try:
+                window.settings.save()
+            except OSError:
+                pass
+        if self.current:
+            self.popup.show_waiting(self.current.text, self.target_language, self.current.editable,
+                                    self.current.cut, style)
+            self.translate(self.target_language)
 
     def translate(self, language: str):
         from .cleanup import ApiCleaner, CleanupError
@@ -652,6 +746,7 @@ class SelectionTranslate:
         from . import translation as translating
 
         self.popup.route.show()
+        self.popup.styles.show()
         self.generation += 1
         generation, text = self.generation, self.current.text
         if self.cancel:
@@ -660,6 +755,11 @@ class SelectionTranslate:
         settings = self.settings
         style = settings.selection_style
         self.translation = None
+        made = self.made.get((language, style))
+        if made is not None:  # Switched back: no need to ask again.
+            self.translation = made
+            self.popup.show_translation(made)
+            return
 
         def work(_report):
             from .checks import CheckResult
@@ -677,7 +777,8 @@ class SelectionTranslate:
                 return
             if isinstance(value, Translation):
                 self.translation = value
-                self.popup.show_translation(value, style)
+                self.made[(language, style)] = value
+                self.popup.show_translation(value)
                 self.window.record_api_usage(value.usage)
             else:
                 self.popup.show_problem(getattr(value, "message", "翻译没有完成，请重试。"))

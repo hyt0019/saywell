@@ -83,6 +83,7 @@ from .settings import Settings, read_key, save_key
 from .vocabulary import FILE_FILTER, LexiconError, import_lexicon
 from .shortcuts import KEY_NAMES, RECORDING_CHOICES, shortcut_label, shortcut_name, shortcut_problem, usage_hint
 from .translation import LANGUAGES as TRANSLATION_LANGUAGES
+from .translation import SCRIPTS as TRANSLATION_SCRIPTS
 from .translation import STYLES as TRANSLATION_STYLES
 
 INK = "#1D1D1F"
@@ -209,6 +210,7 @@ class Glyph:
     REFRESH = "refresh"
     VERIFY = "verify"
     TRANSLATE = "translate"
+    SWAP = "swap"
     SPEAKER = "speaker"
     MIC_OFF = "mic_off"
     HEADPHONES = "headphones"
@@ -1940,20 +1942,25 @@ class SettingsDialog(QDialog):
             box.setCurrentIndex(max(0, box.findData(value)))
             box.setMaximumWidth(130)
         direction.addWidget(self.selection_native)
-        direction.addWidget(label("译成", "fieldLabel"))
+        self.selection_swap = make_button("", Glyph.SWAP, "heroChip")
+        self.selection_swap.setFixedWidth(32)
+        self.selection_swap.setToolTip("对调两种语言：其他语言的文字会译成左边那一种")
+        self.selection_swap.clicked.connect(self.swap_selection_languages)
+        direction.addWidget(self.selection_swap)
         direction.addWidget(self.selection_foreign)
         direction.addStretch()
         way.addLayout(direction)
         self.selection_back = label("", "muted", wrap=True)
         way.addWidget(self.selection_back)
         self.selection_native.currentIndexChanged.connect(self.update_selection_hint)
-        form.addRow(field_label("翻译方向"), way)
+        self.selection_foreign.currentIndexChanged.connect(self.update_selection_hint)
+        form.addRow(field_label("互译语言"), way)
         style = QVBoxLayout()
         style.setSpacing(6)
         self.selection_style = Segmented(tuple(name for name, _rule in TRANSLATION_STYLES.values()))
         self.selection_style.set_current(list(TRANSLATION_STYLES).index(settings.selection_style), animate=False)
         style.addWidget(self.selection_style, 0, Qt.AlignmentFlag.AlignLeft)
-        style.addWidget(label("自然：地道通顺；正式：适合邮件和文档；直译：贴近原文，方便对照学习。", "muted", wrap=True))
+        style.addWidget(label("自然：地道通顺；正式：适合邮件和文档；直译：贴近原文。翻译弹窗里也能换。", "muted", wrap=True))
         form.addRow(field_label("译文风格"), style)
         excluded = QVBoxLayout()
         excluded.setSpacing(4)
@@ -2138,8 +2145,20 @@ class SettingsDialog(QDialog):
             "不留意鼠标，只在按快捷键时翻译选中的文字。",
         )
         self.selection_hint.setText(hints[max(0, self.selection_trigger.current())])
-        native = self.selection_native.currentData()
-        self.selection_back.setText(f"选中的是{native}时译成右边的语言，其他语言都译成{native}。弹窗里可以临时换一种。")
+        native, foreign = self.selection_native.currentData(), self.selection_foreign.currentData()
+        if native == foreign:
+            self.selection_back.setText("两种语言相同，请换一种。")
+        elif TRANSLATION_SCRIPTS.get(native) == TRANSLATION_SCRIPTS.get(foreign):
+            self.selection_back.setText(f"{native}和{foreign}写法相同，分不出选中的是哪一种，没法自动互译。请把其中一种换成别的语言。")
+        else:
+            self.selection_back.setText(
+                f"选中{native}译成{foreign}，选中{foreign}译成{native}；其他语言都译成{native}。弹窗里可以临时换一种。"
+            )
+
+    def swap_selection_languages(self):
+        native, foreign = self.selection_native.currentIndex(), self.selection_foreign.currentIndex()
+        self.selection_native.setCurrentIndex(foreign)
+        self.selection_foreign.setCurrentIndex(native)
 
     def update_usage_hint(self, *_):
         self.usage_hint.setText(usage_hint(self.hotkey_choice, self.hold.current() == 0))
@@ -2231,8 +2250,15 @@ class SettingsDialog(QDialog):
         if self.selection_on.isChecked() and selection_hotkey == self.hotkey_choice:
             QMessageBox.warning(self, "检查快捷键", "划词翻译的快捷键和录音快捷键相同，请换一个。")
             return
-        if self.selection_native.currentData() == self.selection_foreign.currentData():
-            QMessageBox.warning(self, "检查翻译方向", "两种语言相同，请换一种要译成的语言。")
+        native, foreign = self.selection_native.currentData(), self.selection_foreign.currentData()
+        if native == foreign:
+            QMessageBox.warning(self, "检查互译语言", "两种语言相同，请换一种。")
+            return
+        if self.selection_on.isChecked() and TRANSLATION_SCRIPTS.get(native) == TRANSLATION_SCRIPTS.get(foreign):
+            QMessageBox.warning(
+                self, "检查互译语言",
+                f"{native}和{foreign}写法相同，程序分不出选中的是哪一种，没法自动互译。请把其中一种换成别的语言。",
+            )
             return
         excluded = []
         for name in re.split(r"[,，;；\s]+", self.selection_excluded.text()):
