@@ -82,6 +82,9 @@ class Paragraph:
     start: float
     who: str
     text: str
+    # The lines it holds, as indices into the list it was made from.
+    first: int = field(default=0, compare=False)
+    last: int = field(default=0, compare=False)
 
 
 def skipped_text(line: Line) -> str:
@@ -93,9 +96,9 @@ def paragraphs(lines: list[Line], labels: bool) -> list[Paragraph]:
     stretch that could not be recognized stands on its own."""
     result: list[Paragraph] = []
     previous: Line | None = None
-    for line in lines:
+    for index, line in enumerate(lines):
         if line.who == SKIPPED:
-            result.append(Paragraph(line.start, SKIPPED, skipped_text(line)))
+            result.append(Paragraph(line.start, SKIPPED, skipped_text(line), index, index))
             previous = None
         elif (
             previous is not None
@@ -104,10 +107,10 @@ def paragraphs(lines: list[Line], labels: bool) -> list[Paragraph]:
             and line.start - result[-1].start < TURN
         ):
             last = result[-1]
-            result[-1] = Paragraph(last.start, last.who, run_on(last.text, line.text))
+            result[-1] = Paragraph(last.start, last.who, run_on(last.text, line.text), last.first, index)
             previous = line
         else:
-            result.append(Paragraph(line.start, line.who, line.text))
+            result.append(Paragraph(line.start, line.who, line.text, index, index))
             previous = line
     return result
 
@@ -196,6 +199,14 @@ class MeetingStore:
     def append(self, line: Line) -> None:
         with self.lock, open(self.folder / "transcript.dat", "a", encoding="ascii") as file:
             file.write(seal(asdict(line)) + "\n")
+
+    def replace_lines(self, lines: list[Line]) -> None:
+        """The whole transcript, written anew: after the user edited it."""
+        rows = "".join(seal(asdict(line)) + "\n" for line in lines)
+        with self.lock:
+            temp = self.folder / "transcript.tmp"
+            temp.write_text(rows, encoding="ascii")
+            temp.replace(self.folder / "transcript.dat")
 
     def lines(self) -> list[Line]:
         try:

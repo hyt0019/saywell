@@ -43,6 +43,15 @@ def no_devices(monkeypatch):
     return added
 
 
+def type_in(widget, text):
+    """Typed with an input method, as Chinese is (QTest only sends ASCII keys)."""
+    from PySide6.QtGui import QInputMethodEvent
+
+    event = QInputMethodEvent()
+    event.setCommitString(text)
+    QApplication.sendEvent(widget, event)
+
+
 def wait_for(condition, seconds=5.0):
     app = QApplication.instance()
     deadline = time.monotonic() + seconds
@@ -61,9 +70,10 @@ def test_transcript_puts_late_lines_in_order_with_turn_headings(qt_app):
     view.add(Line(80, 82, OTHERS, "第二个议题"))
     assert [line.text for line in view.lines] == ["大家好", "好的", "我们开始吧", "第二个议题"]
     blocks = [view.document().findBlockByNumber(index).text() for index in range(4)]
-    assert blocks[0].startswith("其他参会人") and blocks[0].endswith("大家好")
-    assert blocks[1].startswith("我") and blocks[2].startswith("其他参会人")  # A new turn after mine.
-    assert blocks[3].startswith("其他参会人   01:20")  # More than a minute on: a heading again.
+    assert blocks == ["大家好", "好的", "我们开始吧", "第二个议题"]  # Who and when are painted, not text.
+    assert [(paragraph.who, paragraph.start) for paragraph in view.shown] == [
+        (OTHERS, 1), (ME, 4), (OTHERS, 9), (OTHERS, 80)  # A new turn after mine, and a minute on.
+    ]
     assert view.plain_text().split("\n\n")[1] == "[00:04] 我：好的"
 
 
@@ -76,13 +86,11 @@ def test_transcript_runs_one_speaker_on_in_a_paragraph(qt_app):
     view.add(Line(10, 11, OTHERS, "Beta"))
     view.add(Line(12, 13, OTHERS, "test 先做。"))
     assert view.document().blockCount() == 1 and view.document().firstBlock() == first
-    assert first.text() == "其他参会人   00:01 我觉得这个方案的问题在于，它没有考虑老用户。Beta test 先做。"
+    assert first.text() == "我觉得这个方案的问题在于，它没有考虑老用户。Beta test 先做。"
     view.add(Line(30, 31, OTHERS, "下一件事。"))  # After a long silence: a new paragraph.
     view.add(Line(5, 6, ME, "嗯。"))  # Late, in the middle: the paragraph it lands in splits.
-    assert [view.document().findBlockByNumber(index).text().split(" ")[0] for index in range(4)] == [
-        "其他参会人", "我", "其他参会人", "其他参会人"
-    ]
-    assert view.document().findBlockByNumber(2).text().endswith("00:07 它没有考虑老用户。Beta test 先做。")
+    assert [(paragraph.who, paragraph.start) for paragraph in view.shown] == [(OTHERS, 1), (ME, 5), (OTHERS, 7), (OTHERS, 30)]
+    assert view.document().findBlockByNumber(2).text() == "它没有考虑老用户。Beta test 先做。"
     again = TranscriptView()
     again.load(True, list(view.lines))
     assert again.toPlainText() == view.toPlainText()
@@ -98,6 +106,93 @@ def test_transcript_without_labels_and_with_a_dropped_stretch(qt_app):
     assert "其他参会人" not in text and "约 60 秒没来得及识别" in text
     assert view.plain_text() == "[00:01] 开始\n\n[01:10] 继续"
     assert view.characters() == 4
+
+
+def test_the_transcript_is_edited_a_paragraph_at_a_time(qt_app):
+    from PySide6.QtCore import QMimeData, Qt
+    from PySide6.QtGui import QTextCursor
+    from PySide6.QtTest import QTest
+
+    view = TranscriptView()
+    lines = [Line(1, 3, OTHERS, "大家好，"), Line(4, 6, OTHERS, "开始吧。"), Line(7, 9, ME, "好的。"),
+             Line(10, 40, SKIPPED, ""), Line(41, 42, ME, "继续。")]
+    view.load(True, lines)
+    assert view.isReadOnly()
+    type_in(view, "不")  # Read-only until the meeting is over.
+    assert view.take_edits() is None
+    view.set_editable(True)
+
+    def at(block, offset=0):
+        cursor = QTextCursor(view.document().findBlockByNumber(block))
+        cursor.movePosition(QTextCursor.MoveOperation.Right, n=offset)
+        view.setTextCursor(cursor)
+
+    at(1)
+    QTest.keyClick(view, Qt.Key.Key_Backspace)  # Would join two paragraphs.
+    QTest.keyClick(view, Qt.Key.Key_Return)  # Would split one.
+    at(0, 3)
+    QTest.keyClick(view, Qt.Key.Key_Delete)
+    type_in(view, "各位")
+    at(2, 2)
+    type_in(view, "不")  # The note about a stretch that was not recognized stays.
+    at(3, 3)
+    pasted = QMimeData()
+    pasted.setText("还有\n两件事")
+    view.insertFromMimeData(pasted)
+    blocks = [view.document().findBlockByNumber(index).text() for index in range(view.document().blockCount())]
+    assert blocks == ["大家好各位开始吧。", "好的。", "（约 30 秒没来得及识别）", "继续。还有两件事"]
+    assert view.characters() == len("大家好各位开始吧。好的。继续。还有两件事")
+    edited = view.take_edits()
+    assert edited == [Line(1, 6, OTHERS, "大家好各位开始吧。"), Line(7, 9, ME, "好的。"), Line(10, 40, SKIPPED, ""),
+                      Line(41, 42, ME, "继续。还有两件事")]
+    assert view.take_edits() is None  # Taken.
+    view.selectAll()
+    QTest.keyClicks(view, "x")  # Across paragraphs: nothing happens.
+    assert view.document().blockCount() == 4
+    assert view.plain_text().startswith("[00:01] 其他参会人：大家好各位开始吧。\n\n[00:07] 我：好的。")
+
+
+def test_minutes_are_edited_in_place_and_read_back_as_blocks(qt_app):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QTextCursor
+    from PySide6.QtTest import QTest
+
+    from saywell.meeting_ui import MinutesView
+
+    view = MinutesView()
+    assert view.isReadOnly()
+    blocks = [("meta", "2026年11月3日 15:13 · 项目例会"), ("heading", "会议概要"), ("paragraph", "讨论了排期。"),
+              ("heading", "章节速览"), ("chapter", ("00:01", "排期", "按两周排。")), ("heading", "决定事项"),
+              ("item", "PDF 放到下个版本"), ("heading", "待办"), ("todo", ("发预算明细", "我", "周二"))]
+    view.show_blocks(blocks)
+    view.set_editable(True)
+    document = view.document()
+
+    def end_of(block):
+        cursor = QTextCursor(document.findBlockByNumber(block))
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        view.setTextCursor(cursor)
+
+    end_of(0)
+    type_in(view, "改")  # The meta line is the program's.
+    end_of(7)
+    QTest.keyClick(view, Qt.Key.Key_Return)  # A new item in the list.
+    type_in(view, "TXT 先做")
+    end_of(1)
+    QTest.keyClick(view, Qt.Key.Key_Return)  # After a heading: a paragraph.
+    type_in(view, "补一句")
+    assert view.dirty
+    assert view.blocks() == [
+        ("heading", "会议概要"), ("paragraph", "补一句"), ("paragraph", "讨论了排期。"), ("heading", "章节速览"),
+        ("chapter", ("00:01", "排期", "按两周排。")), ("heading", "决定事项"), ("item", "PDF 放到下个版本"),
+        ("item", "TXT 先做"), ("heading", "待办"), ("todo", ("发预算明细（负责人：我，截止：周二）", "", "")),
+    ]
+    count = document.blockCount()
+    view.setTextCursor(QTextCursor(document.findBlockByNumber(1)))
+    QTest.keyClick(view, Qt.Key.Key_Backspace)  # Would join the meta line.
+    assert document.findBlockByNumber(0).text() == "2026年11月3日 15:13 · 项目例会" and document.blockCount() == count
+    view.empty(MinutesView.EMPTY)
+    assert view.isReadOnly() and not view.dirty
 
 
 def test_meeting_tab_shows_its_own_card(window):
@@ -324,6 +419,53 @@ def test_exporting_saves_the_minutes_and_remembers_the_choices(window, no_device
     monkeypatch.setattr("saywell.export.save", fail)
     page.export_meeting("docx")
     assert "没有保存成功" in window.notice.text()
+
+
+def test_edits_are_saved_used_and_kept_from_being_written_over(window, no_devices, monkeypatch, qt_app):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtGui import QTextCursor
+
+    from saywell.minutes import minutes_from_record
+
+    api = MinutesApi()
+    page = finished_meeting(window, no_devices, monkeypatch, api)
+    assert not page.transcript.isReadOnly()  # The meeting is over.
+    page.write_minutes()
+    assert wait_for(lambda: page.minutes is not None)
+    assert not page.minutes_view.isReadOnly()
+    page.transcript.setTextCursor(QTextCursor(page.transcript.document().firstBlock()))
+    type_in(page.transcript, "嗯，")
+    cursor = QTextCursor(page.minutes_view.document().findBlockByNumber(2))
+    cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+    page.minutes_view.setTextCursor(cursor)
+    type_in(page.minutes_view, "改过")
+    assert page.save_timer.isActive()
+    page.copy_all()  # Anything that reads the edits saves them first.
+    assert qt_app.clipboard().text() == "[00:01] 其他参会人：嗯，那 PDF 先不做了，放到下个版本。"
+    assert [line.text for line in page.store.lines()] == ["嗯，那 PDF 先不做了，放到下个版本。"]
+    assert page.progress.text() == "已保存修改" and page.count.text() == f"{len('嗯，那 PDF 先不做了，放到下个版本。')} 字"
+    saved = minutes_from_record(page.store.load("minutes"))
+    assert ("paragraph", "讨论了排期。改过") in saved.edited and page.minutes_status.text() == "已修改"
+    page.copy_minutes()
+    assert "讨论了排期。改过" in qt_app.clipboard().text()
+
+    # Writing them again would replace the edits: asked first.
+    answers = []
+
+    def answer(button_text):
+        box = QApplication.activeModalWidget()
+        answers.append(box.text())
+        next(button for button in box.buttons() if button.text() == button_text).click()
+
+    QTimer.singleShot(50, lambda: answer("取消"))
+    page.write_minutes()
+    assert "你修改过" in answers[0] and page.writing is None and len(api.requests) == 1
+    QTimer.singleShot(50, lambda: answer("重新生成"))
+    page.write_minutes()
+    assert wait_for(lambda: page.writing is None) and len(api.requests) == 2
+    assert "嗯，那 PDF" in api.requests[1]["messages"][1]["content"]  # The edited transcript.
+    assert page.minutes.edited is None and page.minutes_status.text() == "整场会议"
+    assert minutes_from_record(page.store.load("minutes")).edited is None
 
 
 def test_earlier_meetings_open_as_they_were_left_and_can_be_deleted(window, no_devices, monkeypatch):

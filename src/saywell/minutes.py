@@ -12,7 +12,6 @@ to confirm. Nothing may be added that the transcript does not say.
 from __future__ import annotations
 
 import hashlib
-import html
 import json
 import re
 import threading
@@ -207,21 +206,44 @@ class Minutes:
     lines: int
     elapsed: float = 0.0
     usage: dict = field(default_factory=dict)
+    # The minutes as the user edited them on the page: outline's blocks after the title and meta.
+    edited: list[tuple[str, object]] | None = None
+
+
+# What edited minutes may hold, and how many strings each kind's content has (1: a plain string).
+EDITED_KINDS = {"heading": 1, "paragraph": 1, "chapter": 3, "item": 1, "todo": 3}
 
 
 def minutes_record(minutes: Minutes) -> dict:
     """What is kept of the minutes with the meeting (minutes.dat)."""
-    return {
+    record = {
         "template": minutes.template, "notes": minutes.notes.model_dump(), "through": minutes.through,
         "lines": minutes.lines, "written": time.time(),
     }
+    if minutes.edited is not None:
+        record["edited"] = [[kind, list(value) if isinstance(value, tuple) else value] for kind, value in minutes.edited]
+    return record
 
 
 def minutes_from_record(record) -> Minutes | None:
     try:
-        return Minutes(Notes.model_validate(record["notes"]), record["template"], record["through"], record["lines"])
+        minutes = Minutes(Notes.model_validate(record["notes"]), record["template"], record["through"], record["lines"])
     except (KeyError, TypeError, ValidationError):
         return None
+    edited = record.get("edited")
+    if isinstance(edited, list):
+        blocks = []
+        for entry in edited:
+            if not (isinstance(entry, list) and len(entry) == 2 and entry[0] in EDITED_KINDS):
+                continue
+            kind, value = entry
+            size = EDITED_KINDS[kind]
+            if size == 1 and isinstance(value, str):
+                blocks.append((kind, value))
+            elif size > 1 and isinstance(value, list) and len(value) == size and all(isinstance(v, str) for v in value):
+                blocks.append((kind, tuple(value)))
+        minutes.edited = blocks
+    return minutes
 
 
 def add_usage(total: dict, usage: dict) -> None:
@@ -364,7 +386,8 @@ def tidy(notes: Notes, template: Template) -> Notes:
 
 def outline(minutes: Minutes, info: dict) -> list[tuple[str, object]]:
     """The minutes as a list of (kind, content) blocks shared by the page and every export:
-    title, meta, heading, paragraph, chapter (time, title, points), item, todo (task, owner, due)."""
+    title, meta, heading, paragraph, chapter (time, title, points), item, todo (task, owner, due).
+    Minutes the user edited are their edited blocks after a fresh title and meta."""
     template = TEMPLATE_IDS.get(minutes.template, TEMPLATES[0])
     notes = minutes.notes
     blocks: list[tuple[str, object]] = [("title", info.get("title") or "会议纪要")]
@@ -380,6 +403,8 @@ def outline(minutes: Minutes, info: dict) -> list[tuple[str, object]]:
     if info.get("app"):
         meta.append(info["app"])
     blocks.append(("meta", " · ".join(meta)))
+    if minutes.edited is not None:
+        return blocks + list(minutes.edited)
     if notes.summary:
         blocks += [("heading", "会议概要"), ("paragraph", notes.summary)]
     if notes.chapters:
@@ -401,34 +426,6 @@ def outline(minutes: Minutes, info: dict) -> list[tuple[str, object]]:
 def todo_text(task: str, owner: str, due: str) -> str:
     extra = "，".join(part for part in (f"负责人：{owner}" if owner else "", f"截止：{due}" if due else "") if part)
     return f"{task}（{extra}）" if extra else task
-
-
-def to_html(blocks: list[tuple[str, object]]) -> str:
-    """For the page: Qt's rich text, styled to match the app."""
-    out = []
-    for kind, value in blocks:
-        if kind == "title":
-            out.append(f"<p style='font-size:19px; font-weight:700; margin:2px 0 2px 0'>{html.escape(value)}</p>")
-        elif kind == "meta":
-            out.append(f"<p style='font-size:12px; color:#8E8E93; margin:0 0 6px 0'>{html.escape(value)}</p>")
-        elif kind == "heading":
-            out.append(f"<p style='font-size:14px; font-weight:700; margin:16px 0 4px 0'>{html.escape(value)}</p>")
-        elif kind == "paragraph":
-            out.append(f"<p style='margin:0 0 2px 0; line-height:150%'>{html.escape(value)}</p>")
-        elif kind == "chapter":
-            when, title, points = value
-            out.append(
-                "<p style='margin:3px 0 3px 0; line-height:150%'>"
-                f"<span style='color:#0071E3; font-weight:600'>{html.escape(when)}</span>&nbsp;&nbsp;"
-                f"<b>{html.escape(title)}</b>"
-                + (f"<br><span style='color:#3A3A3C'>{html.escape(points)}</span>" if points else "")
-                + "</p>"
-            )
-        elif kind == "item":
-            out.append(f"<p style='margin:2px 0 2px 0; line-height:150%'>•&nbsp;&nbsp;{html.escape(value)}</p>")
-        elif kind == "todo":
-            out.append(f"<p style='margin:2px 0 2px 0; line-height:150%'>☐&nbsp;&nbsp;{html.escape(todo_text(*value))}</p>")
-    return "\n".join(out)
 
 
 def to_markdown(blocks: list[tuple[str, object]]) -> str:

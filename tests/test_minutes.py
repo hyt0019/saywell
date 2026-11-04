@@ -15,7 +15,6 @@ from saywell.minutes import (
     outline,
     split_parts,
     system_prompt,
-    to_html,
     to_markdown,
     to_text,
     transcript_text,
@@ -158,5 +157,19 @@ def test_minutes_read_the_same_in_every_format():
     assert "## 待确认" in markdown
     text = to_text(blocks)
     assert "【待办】" in text and "□ 发预算明细（负责人：我，截止：周二下班前）" in text
-    page = to_html(blocks)
-    assert "&lt;" not in page and "待确认" in page
+
+
+def test_edited_minutes_are_kept_and_take_the_place_of_the_notes():
+    from saywell.minutes import Minutes, minutes_from_record, minutes_record
+
+    minutes = Minutes(Notes.model_validate(NOTES), "general", 3000, 60)
+    minutes.edited = [("heading", "会议概要"), ("paragraph", "改过的概要"), ("chapter", ("00:03", "排期", "")),
+                      ("todo", ("发明细", "", ""))]
+    record = json.loads(json.dumps(minutes_record(minutes)))
+    record["edited"] += [["chapter", ["only", "two"]], ["script", "x"], "junk"]  # Damaged entries are left out.
+    again = minutes_from_record(record)
+    assert again.edited == minutes.edited and again.notes.summary == NOTES["summary"]
+    blocks = outline(again, {"title": "周会"})
+    assert blocks[0] == ("title", "周会") and blocks[1][0] == "meta" and blocks[2:] == minutes.edited
+    assert "□ 发明细" in to_text(blocks)
+    assert minutes_from_record(minutes_record(Minutes(Notes(), "general", 0, 0))).edited is None

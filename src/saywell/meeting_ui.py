@@ -8,14 +8,31 @@ from __future__ import annotations
 
 import bisect
 import html
+import re
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QFileInfo, QObject, QPoint, QRectF, QSize, QStandardPaths, Qt, QTimer, Signal
-from PySide6.QtGui import QActionGroup, QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPixmap, QTextBlockFormat, QTextCharFormat, QTextCursor
+from PySide6.QtGui import (
+    QActionGroup,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QGuiApplication,
+    QKeySequence,
+    QLinearGradient,
+    QPainter,
+    QPixmap,
+    QTextBlockFormat,
+    QTextCharFormat,
+    QTextCursor,
+    QTextFormat,
+    QTextListFormat,
+)
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -31,7 +48,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QSplitter,
-    QTextBrowser,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -54,6 +70,7 @@ from .meeting import (
     clock,
     list_meetings,
     paragraphs,
+    run_on,
 )
 from .minutes import (
     PREPARE_FROM,
@@ -63,8 +80,8 @@ from .minutes import (
     minutes_from_record,
     minutes_record,
     outline,
-    to_html,
     to_text,
+    todo_text,
 )
 from .models import get_model, models_ready
 from .ui import (
@@ -291,22 +308,156 @@ class EdgeFade(QWidget):
         painter.fillRect(self.rect(), gradient)
 
 
-class TranscriptView(QTextEdit):
-    """The meeting's lines in the order they were said, in paragraphs (meeting.paragraphs), each
-    led by who and when. Lines that arrive late (the microphone waits for the others to be
-    recognized) go where they belong."""
+class GuardedEdit(QTextEdit):
+    """Text the user may edit within limits: every way of changing it (keys, an input method,
+    pasting, the context menu) first asks `may_edit`. The program changes it only inside
+    `quietly()`, so that only the user's changes count as edits and undo never takes back the
+    program's."""
+
+    edited = Signal()
 
     def __init__(self):
         super().__init__()
-        self.setReadOnly(True)
+        self.quiet = 0
+        self.dirty = False  # Edited since `dirty` was last cleared.
+        self.setAcceptDrops(False)  # Dragged text could carry words across what must stay apart.
+        self.setTabChangesFocus(True)
+        self.document().contentsChange.connect(self._changed)
+        self.set_editable(False)
+
+    @contextmanager
+    def quietly(self):
+        self.quiet += 1
+        try:
+            yield
+        finally:
+            self.quiet -= 1
+            if not self.quiet:
+                self.document().clearUndoRedoStacks()
+
+    def set_editable(self, on: bool) -> None:
+        if on == (not self.isReadOnly()):
+            return
+        self.setReadOnly(not on)
+        # Read-only, it is selectable with the mouse only: the keyboard would bring a caret.
+        self.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextEditorInteraction if on else Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+
+    def may_edit(self, cursor: QTextCursor, step: int = 0) -> bool:
+        """Whether the text may change at the cursor: its selection replaced by what is typed
+        (step 0), or the character before (-1) or after (1) it deleted."""
+        return True
+
+    def may_break(self, cursor: QTextCursor) -> bool:
+        """Whether Enter may start a new paragraph here (as Qt does it)."""
+        return False
+
+    def pasted(self, text: str) -> str:
+        return text
+
+    def _changed(self, position: int, removed: int, added: int) -> None:
+        if self.quiet:
+            return
+        self.dirty = True
+        self.changed_at(position, added)
+        self.edited.emit()
+
+    def changed_at(self, position: int, added: int) -> None:
+        pass
+
+    def keyPressEvent(self, event):
+        if self.isReadOnly() or self._key_allowed(event):
+            super().keyPressEvent(event)
+        else:
+            event.accept()
+
+    def _key_allowed(self, event) -> bool:
+        cursor = self.textCursor()
+        key = event.key()
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            return self.may_break(cursor)
+        if event.matches(QKeySequence.StandardKey.Undo) or event.matches(QKeySequence.StandardKey.Redo):
+            return True
+        if key == Qt.Key.Key_Backspace:
+            return self.may_edit(cursor, 0 if cursor.hasSelection() else -1)
+        if key == Qt.Key.Key_Delete and not event.matches(QKeySequence.StandardKey.Cut):
+            return self.may_edit(cursor, 0 if cursor.hasSelection() else 1)
+        if event.matches(QKeySequence.StandardKey.Cut):
+            return cursor.hasSelection() and self.may_edit(cursor)
+        if event.matches(QKeySequence.StandardKey.Paste):
+            return self.may_edit(cursor)
+        if event.text() and event.text().isprintable():
+            return self.may_edit(cursor)
+        return True
+
+    def inputMethodEvent(self, event):
+        if self.isReadOnly():  # Qt would still take what an input method sends.
+            event.ignore()
+            return
+        if event.commitString() or event.preeditString():
+            cursor = self.textCursor()
+            if not self.may_edit(cursor) and cursor.hasSelection():
+                cursor.clearSelection()  # Typing then goes in where the cursor is.
+                self.setTextCursor(cursor)
+            if not self.may_edit(cursor):
+                event.accept()
+                return
+        super().inputMethodEvent(event)
+
+    def insertFromMimeData(self, source):
+        cursor = self.textCursor()
+        if not self.isReadOnly() and source.hasText() and self.may_edit(cursor):
+            cursor.insertText(self.pasted(source.text()))
+            self.ensureCursorVisible()
+
+    def contextMenuEvent(self, event):
+        """Qt's own menu is in English: this one in Chinese, offering only what may be done here."""
+        cursor = self.textCursor()
+        editable = not self.isReadOnly()
+        selected = cursor.hasSelection()
+        menu = QMenu(self)
+
+        def add(text: str, key, slot, enabled: bool):
+            shortcut = QKeySequence(key).toString(QKeySequence.SequenceFormat.NativeText)
+            action = menu.addAction(f"{text}\t{shortcut}" if shortcut else text)
+            action.setEnabled(enabled)
+            action.triggered.connect(slot)
+
+        if editable:
+            add("撤销", QKeySequence.StandardKey.Undo, self.undo, self.document().isUndoAvailable())
+            add("重做", QKeySequence.StandardKey.Redo, self.redo, self.document().isRedoAvailable())
+            menu.addSeparator()
+            add("剪切", QKeySequence.StandardKey.Cut, self.cut, selected and self.may_edit(cursor))
+        add("复制", QKeySequence.StandardKey.Copy, self.copy, selected)
+        if editable:
+            add("粘贴", QKeySequence.StandardKey.Paste, self.paste, self.canPaste() and self.may_edit(cursor))
+        menu.addSeparator()
+        add("全选", QKeySequence.StandardKey.SelectAll, self.selectAll, not self.document().isEmpty())
+        menu.exec(event.globalPos())
+
+
+class TranscriptView(GuardedEdit):
+    """The meeting's lines in the order they were said, in paragraphs (meeting.paragraphs). Lines
+    that arrive late (the microphone waits for the others to be recognized) go where they belong.
+    Each paragraph is a block holding only its words; who and when are painted above it, so that
+    editing never touches them. Once the meeting is over the words can be edited a paragraph at a
+    time: no paragraph is added, split or joined to another, and none of the notes about speech
+    that could not be recognized."""
+
+    HEAD = 21  # Room above a paragraph's words for who and when.
+    GAP = 14  # Between one paragraph's words and the next one's head.
+
+    def __init__(self):
+        super().__init__()
         self.setFrameShape(QFrame.Shape.NoFrame)
-        # Selectable with the mouse only: keyboard selection would show a blinking caret in it.
-        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.setStyleSheet("QTextEdit { background: transparent; border: none; padding: 0 10px 10px 14px;"
                            " selection-background-color: #CCE0FA; }")
         self.document().setDocumentMargin(4)
         self.lines: list[Line] = []
         self.shown: list[Paragraph] = []  # What the document holds, a block each.
+        self.edits: set[int] = set()  # Paragraphs the user changed, not yet taken by take_edits.
         self.labels = True
         self.fades = (EdgeFade(self, True), EdgeFade(self, False))
         bar = self.verticalScrollBar()
@@ -328,8 +479,11 @@ class TranscriptView(QTextEdit):
         self.fades[1].setVisible(bar.value() < bar.maximum())
 
     def reset(self, labels: bool, placeholder: str = ""):
-        self.clear()
+        with self.quietly():
+            self.clear()
         self.lines, self.shown = [], []
+        self.edits.clear()
+        self.dirty = False
         self.labels = labels
         self.setPlaceholderText(placeholder)
 
@@ -341,7 +495,13 @@ class TranscriptView(QTextEdit):
         self.verticalScrollBar().setValue(0)
 
     def characters(self) -> int:
-        return sum(len(line.text) for line in self.lines)
+        """What the paragraphs hold, as shown (edits included)."""
+        total, block = 0, self.document().begin()
+        for paragraph in self.shown:
+            if paragraph.who != SKIPPED:
+                total += len(block.text())
+            block = block.next()
+        return total
 
     def add(self, line: Line) -> None:
         bar = self.verticalScrollBar()
@@ -360,24 +520,26 @@ class TranscriptView(QTextEdit):
         same = 0
         while same < min(len(old), len(new)) and old[same] == new[same]:
             same += 1
-        cursor = QTextCursor(self.document())
-        if same == len(old) - 1 and same < len(new) and self._grows(old[same], new[same]):
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            cursor.insertText(new[same].text[len(old[same].text):], self._text_format(new[same]))
-            same += 1
-        elif same < len(old):
-            if same:
-                block = self.document().findBlockByNumber(same - 1)
-                cursor.setPosition(block.position() + block.length() - 1)
-            cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
-            cursor.removeSelectedText()
-        else:
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-        for index in range(same, len(new)):
-            if index:
-                cursor.insertBlock()
-            self._write(cursor, new[index], index)
+        with self.quietly():
+            cursor = QTextCursor(self.document())
+            if same == len(old) - 1 and same < len(new) and self._grows(old[same], new[same]):
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+                cursor.insertText(new[same].text[len(old[same].text):], self._text_format(new[same]))
+                same += 1
+            elif same < len(old):
+                if same:
+                    block = self.document().findBlockByNumber(same - 1)
+                    cursor.setPosition(block.position() + block.length() - 1)
+                cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+            else:
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+            for index in range(same, len(new)):
+                if index:
+                    cursor.insertBlock()
+                self._write(cursor, new[index], index)
         self.shown = new
+        self.viewport().update()
 
     @staticmethod
     def _grows(old: Paragraph, new: Paragraph) -> bool:
@@ -392,32 +554,110 @@ class TranscriptView(QTextEdit):
         return text
 
     def _write(self, cursor: QTextCursor, paragraph: Paragraph, index: int) -> None:
+        if not index:
+            # Qt drops the first block's top margin: the room for its head is the frame's.
+            frame = self.document().rootFrame()
+            spaced = frame.frameFormat()
+            spaced.setTopMargin(self.document().documentMargin() + self.HEAD)
+            frame.setFrameFormat(spaced)
         block = QTextBlockFormat()
-        block.setTopMargin(14 if index else 2)
+        block.setTopMargin(self.HEAD + self.GAP if index else 0)
         block.setLineHeight(150, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
         cursor.setBlockFormat(block)
-        who = LABELS.get(paragraph.who, "") if self.labels else ""
-        if who:
-            name = QTextCharFormat()
-            name.setFontPointSize(9.5)
-            name.setFontWeight(QFont.Weight.DemiBold)
-            name.setForeground(QColor(ACCENT if paragraph.who == ME else "#3A3A3C"))
-            cursor.insertText(who + "   ", name)
-        when = QTextCharFormat()
-        when.setFontPointSize(9)
-        when.setForeground(QColor(FAINT))
-        cursor.insertText(clock(paragraph.start) + " ", when)
         cursor.insertText(paragraph.text, self._text_format(paragraph))
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self.shown:
+            return
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        name_font, time_font = QFont(self.font()), QFont(self.font())
+        name_font.setPointSizeF(9.5)
+        name_font.setWeight(QFont.Weight.DemiBold)
+        time_font.setPointSizeF(9)
+        dx, dy = -self.horizontalScrollBar().value(), -self.verticalScrollBar().value()
+        area = self.viewport().rect()
+        block = self.document().begin()
+        for paragraph in self.shown:
+            if not block.isValid():
+                break
+            top = block.layout().position().y() + dy
+            if top - self.HEAD > area.bottom():
+                break
+            if top >= area.top() - 4:
+                left = block.layout().position().x() + dx
+                head = QRectF(left, top - self.HEAD, area.width(), self.HEAD - 5)
+                who = LABELS.get(paragraph.who, "") if self.labels else ""
+                if who:
+                    painter.setFont(name_font)
+                    painter.setPen(QColor(ACCENT if paragraph.who == ME else "#3A3A3C"))
+                    painter.drawText(head, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, who)
+                    head.setLeft(head.left() + QFontMetrics(name_font).horizontalAdvance(who) + 8)
+                painter.setFont(time_font)
+                painter.setPen(QColor(FAINT))
+                painter.drawText(head, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, clock(paragraph.start))
+            block = block.next()
+
+    # Editing
+
+    def may_edit(self, cursor: QTextCursor, step: int = 0) -> bool:
+        document = self.document()
+        block = document.findBlock(cursor.selectionStart())
+        if document.findBlock(cursor.selectionEnd()) != block:
+            return False
+        index = block.blockNumber()
+        if index >= len(self.shown) or self.shown[index].who == SKIPPED:
+            return False
+        if not cursor.hasSelection():
+            inside = cursor.position() - block.position()
+            if step < 0 and inside == 0 or step > 0 and inside >= block.length() - 1:
+                return False  # It would join two paragraphs.
+        return True
+
+    def pasted(self, text: str) -> str:
+        """Pasted lines run on in the paragraph."""
+        joined = ""
+        for part in text.splitlines():
+            joined = run_on(joined, part.strip())
+        return joined
+
+    def changed_at(self, position: int, added: int) -> None:
+        self.edits.add(self.document().findBlock(position).blockNumber())
+
+    def take_edits(self) -> list[Line] | None:
+        """The lines with each edited paragraph now one line of its edited words (an emptied one
+        holds an empty line, so that the paragraphs stay as they are on the page), or None when
+        nothing was edited since the last call."""
+        if not self.edits:
+            return None
+        lines: list[Line] = []
+        block = self.document().begin()
+        for index, paragraph in enumerate(self.shown):
+            held = self.lines[paragraph.first : paragraph.last + 1]
+            if index in self.edits and paragraph.who != SKIPPED:
+                text = block.text().strip()
+                lines.append(Line(held[0].start, max(line.end for line in held), held[0].who, text))
+            else:
+                lines.extend(held)
+            block = block.next()
+        self.edits.clear()
+        self.lines = lines
+        self.shown = paragraphs(lines, self.labels)
+        return lines
 
     def plain_text(self) -> str:
         """The transcript for copying: its paragraphs with time and speaker, a blank line apart."""
         rows = []
-        for paragraph in paragraphs(self.lines, self.labels):
-            if paragraph.who == SKIPPED:
+        block = self.document().begin()
+        for paragraph in self.shown:
+            text = block.text().strip()
+            block = block.next()
+            if paragraph.who == SKIPPED or not text:
                 continue
             who = LABELS.get(paragraph.who, "") if self.labels else ""
             when = clock(paragraph.start)
-            rows.append(f"[{when}] {who}：{paragraph.text}" if who else f"[{when}] {paragraph.text}")
+            rows.append(f"[{when}] {who}：{text}" if who else f"[{when}] {text}")
         return "\n\n".join(rows)
 
 
@@ -444,9 +684,13 @@ def card_column(title: str, accent: bool) -> tuple[QFrame, QVBoxLayout, QHBoxLay
     return frame, column, head
 
 
-class MinutesView(QTextBrowser):
-    """The minutes as a document: read-only, selectable, links off."""
+class MinutesView(GuardedEdit):
+    """The minutes as a document the user may edit once they are written. Each block keeps what
+    kind of block it is (KIND, outline's kinds plus "points" under a chapter), so that the edited
+    minutes read back as outline's blocks for copying and export; Enter makes a block of the
+    kind that follows. The line with the date and the template stays as the program wrote it."""
 
+    KIND = QTextFormat.Property.UserProperty + 1
     EMPTY = (
         "开会途中或会议结束后，选一个模板，点“生成纪要”。",
         "纪要只根据会议文字来写，没听清、没说定的地方会列进“待确认”。生成时会把会议文字发送给所选 API；"
@@ -457,18 +701,145 @@ class MinutesView(QTextBrowser):
     def __init__(self):
         super().__init__()
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setOpenLinks(False)
-        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.setStyleSheet("QTextBrowser { background: transparent; border: none; padding: 0 10px 10px 14px;"
+        self.setStyleSheet("QTextEdit { background: transparent; border: none; padding: 0 10px 10px 14px;"
                            " font-size: 14px; selection-background-color: #CCE0FA; }")
+        self.document().setIndentWidth(16)
+        self.showing = False  # Minutes, not an explanation in their place.
         self.empty(self.EMPTY)
 
     def empty(self, paragraphs: tuple[str, ...]):
         """Grey explanatory text in place of the minutes."""
-        self.setHtml("".join(
-            f"<p style='color:{MUTED}; margin:0 0 10px 0; line-height:150%'>{html.escape(text)}</p>"
-            for text in paragraphs
-        ))
+        with self.quietly():
+            self.setHtml("".join(
+                f"<p style='color:{MUTED}; margin:0 0 10px 0; line-height:150%'>{html.escape(text)}</p>"
+                for text in paragraphs
+            ))
+        self.showing = False
+        self.dirty = False
+        self.set_editable(False)
+
+    def show_blocks(self, blocks: list[tuple[str, object]]) -> None:
+        """outline's blocks after the title."""
+        with self.quietly():
+            self.clear()
+            cursor = QTextCursor(self.document())
+            first = True
+            for kind, value in blocks:
+                if kind == "chapter":
+                    when, title, points = value
+                    self._block(cursor, "chapter", first)
+                    cursor.insertText(when, self._char("time"))
+                    cursor.insertText("  " + title if when else title, self._char("bold"))
+                    if points:
+                        self._block(cursor, "points", False)
+                        cursor.insertText(points, self._char("points"))
+                elif kind in ("meta", "heading", "paragraph", "item", "todo"):
+                    self._block(cursor, kind, first)
+                    text = todo_text(*value) if kind == "todo" else value
+                    cursor.insertText(text, self._char(kind))
+                else:
+                    continue
+                first = False
+            self.verticalScrollBar().setValue(0)
+        self.showing = True
+        self.dirty = False
+
+    def _block(self, cursor: QTextCursor, kind: str, first: bool) -> None:
+        if not first:
+            cursor.insertBlock()
+        cursor.setBlockFormat(self._format(kind))
+        if kind in ("item", "todo"):
+            previous = cursor.block().previous()
+            listed = previous.textList() if previous.isValid() else None
+            if listed is not None and previous.blockFormat().property(self.KIND) == kind:
+                listed.add(cursor.block())
+            else:
+                style = QTextListFormat()
+                style.setStyle(QTextListFormat.Style.ListDisc)
+                style.setIndent(1)
+                cursor.createList(style)
+
+    def _format(self, kind: str) -> QTextBlockFormat:
+        block = QTextBlockFormat()
+        block.setProperty(self.KIND, kind)
+        top, bottom = {
+            "meta": (0, 6), "heading": (16, 4), "paragraph": (0, 2), "chapter": (4, 0), "points": (0, 4),
+            "item": (2, 2), "todo": (2, 2),
+        }[kind]
+        block.setTopMargin(top)
+        block.setBottomMargin(bottom)
+        if kind != "meta":
+            block.setLineHeight(150, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+        if kind == "todo":
+            block.setMarker(QTextBlockFormat.MarkerType.Unchecked)
+        return block
+
+    @staticmethod
+    def _char(kind: str) -> QTextCharFormat:
+        text = QTextCharFormat()
+        size, color, weight = {
+            "meta": (12, FAINT, QFont.Weight.Normal),
+            "heading": (14, INK, QFont.Weight.Bold),
+            "time": (14, ACCENT, QFont.Weight.DemiBold),
+            "bold": (14, INK, QFont.Weight.Bold),
+            "points": (14, "#3A3A3C", QFont.Weight.Normal),
+        }.get(kind, (14, INK, QFont.Weight.Normal))
+        text.setProperty(QTextFormat.Property.FontPixelSize, size)
+        text.setForeground(QColor(color))
+        text.setFontWeight(weight)
+        return text
+
+    def blocks(self) -> list[tuple[str, object]]:
+        """What the document holds, as outline's blocks (without the title and the meta line)."""
+        out: list[tuple[str, object]] = []
+        block = self.document().begin()
+        while block.isValid():
+            kind = block.blockFormat().property(self.KIND) or "paragraph"
+            text = block.text().replace("\u2028", " ").strip()
+            if block.textList() is not None:
+                marked = block.blockFormat().marker() != QTextBlockFormat.MarkerType.NoMarker
+                kind = "todo" if marked else "item"
+            elif kind in ("item", "todo"):
+                kind = "paragraph"  # Taken out of its list.
+            block = block.next()
+            if not text or kind == "meta":
+                continue
+            if kind == "chapter":
+                found = re.match(r"(\d{1,2}:\d{2}(?::\d{2})?)\s*(.*)", text)
+                out.append(("chapter", (found.group(1), found.group(2), "") if found else ("", text, "")))
+            elif kind == "points" and out and out[-1][0] == "chapter" and not out[-1][1][2]:
+                when, title, _ = out[-1][1]
+                out[-1] = ("chapter", (when, title, text))
+            elif kind == "todo":
+                out.append(("todo", (text, "", "")))
+            else:
+                out.append(("paragraph" if kind == "points" else kind, text))
+        return out
+
+    # Editing
+
+    def may_edit(self, cursor: QTextCursor, step: int = 0) -> bool:
+        if not self.showing:
+            return False
+        meta = self.document().begin()
+        if meta.blockFormat().property(self.KIND) != "meta":
+            return True
+        after = meta.position() + meta.length()  # Where the block after the meta line starts.
+        start = cursor.selectionStart()
+        return start >= after and not (step < 0 and not cursor.hasSelection() and start == after)
+
+    def may_break(self, cursor: QTextCursor) -> bool:
+        """After a heading comes a paragraph and after a chapter its points, not another of the
+        same; elsewhere Enter does what it does in Qt (in a list, a new item)."""
+        if not self.may_edit(cursor):
+            return False
+        kind = cursor.block().blockFormat().property(self.KIND)
+        if cursor.block().textList() is None and kind in ("heading", "chapter") and cursor.atBlockEnd():
+            following = "paragraph" if kind == "heading" else "points"
+            cursor.insertBlock(self._format(following), self._char(following))
+            self.setTextCursor(cursor)
+            return False
+        return True
 
 
 class StayOpenMenu(QMenu):
@@ -670,6 +1041,17 @@ class MeetingPage(QWidget):
         self.timer = QTimer(self)
         self.timer.setInterval(80)
         self.timer.timeout.connect(self.tick)
+        # Edits are saved once the user pauses typing, and before anything reads them.
+        self.save_timer = QTimer(self)
+        self.save_timer.setSingleShot(True)
+        self.save_timer.setInterval(800)
+        self.save_timer.timeout.connect(self.save_edits)
+        self.saved_timer = QTimer(self)
+        self.saved_timer.setSingleShot(True)
+        self.saved_timer.setInterval(2000)
+        self.saved_timer.timeout.connect(lambda: self.progress.setText(""))
+        self.transcript.edited.connect(self.transcript_edited)
+        self.minutes_view.edited.connect(self.save_timer.start)
         self.refresh()
 
     # Sources
@@ -734,6 +1116,7 @@ class MeetingPage(QWidget):
         if not ok:
             self.main.set_notice(why)
             return
+        self.save_edits()
         from .vocabulary import Vocabulary
 
         window = self.main
@@ -838,6 +1221,7 @@ class MeetingPage(QWidget):
 
     def shutdown(self):
         """Quitting: stop now; lines already heard are on disk, speech still waiting is dropped."""
+        self.save_edits()
         self.stopping.set()
         if self.writing is not None:
             self.writing.set()
@@ -897,6 +1281,7 @@ class MeetingPage(QWidget):
             hero.app_chip.setText("选择会议软件" if self.supported else "只能录麦克风")
             hero.app_chip.set_picture(None)
         editable = self.state in ("idle", "done")
+        self.transcript.set_editable(self.state == "done" and bool(self.transcript.lines))
         # While recording the sources stay as they look, as a statement of what is recorded, but
         # cannot be changed.
         hero.app_chip.setEnabled(self.supported)
@@ -930,10 +1315,10 @@ class MeetingPage(QWidget):
                 size = f"共 {duration_text(self.duration)}，{self.transcript.characters():,} 字。"
                 if self.opened:
                     hero.status.setText(self.opened)
-                    hero.hint.setText(size + "可以重新生成纪要，或导出成文件。")
+                    hero.hint.setText(size + "文字和纪要都可以直接修改，也可以导出成文件。")
                 else:
                     hero.status.setText("会议记好了")
-                    hero.hint.setText(size + "文字已加密保存在本机。")
+                    hero.hint.setText(size + "文字已加密保存在本机，可以直接修改。")
             else:
                 hero.set_pill("idle", "未开始")
                 hero.status.setText("记录一场会议")
@@ -951,9 +1336,12 @@ class MeetingPage(QWidget):
         """Minutes of what has been said so far, with the chosen template, on a worker thread."""
         if self.writing is not None or self.store is None or not self.transcript.lines:
             return
+        self.save_edits()  # The transcript as edited goes in; edits to the minutes count as made.
+        if self.minutes is not None and self.minutes.edited is not None and not self.confirm_rewrite():
+            return
         from .cleanup import CleanupError
 
-        lines = list(self.transcript.lines)
+        lines = [line for line in self.transcript.lines if line.text.strip() or line.who == SKIPPED]
         labels = self.transcript.labels
         template = self.template_box.currentData()
         store, cache = self.store, self.parts
@@ -998,6 +1386,13 @@ class MeetingPage(QWidget):
             self.minutes_view.empty(MinutesView.WRITING)
         run_task(self, work, done, lambda text: self.writing is cancel and self.minutes_status.setText(text))
         self.refresh_minutes()
+
+    def confirm_rewrite(self) -> bool:
+        box = QMessageBox(QMessageBox.Icon.Question, "重新生成纪要", "这份纪要你修改过。重新生成会按会议文字重写，你的修改会被替换。", parent=self)
+        again = box.addButton("重新生成", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(box.addButton("取消", QMessageBox.ButtonRole.RejectRole))
+        box.exec()
+        return box.clickedButton() is again
 
     def _writer(self, cache: dict, lines: list[Line]) -> MinutesWriter:
         from .cleanup import ApiCleaner
@@ -1056,8 +1451,7 @@ class MeetingPage(QWidget):
             info = self.store.info() if self.store else {}
             if self.recorder is not None:
                 info.pop("duration", None)  # Still going: the length so far says little.
-            blocks = [block for block in outline(minutes, info) if block[0] != "title"]
-            self.minutes_view.setHtml(to_html(blocks))
+            self.minutes_view.show_blocks([block for block in outline(minutes, info) if block[0] != "title"])
         self.refresh_minutes()
 
     def refresh_minutes(self):
@@ -1068,17 +1462,52 @@ class MeetingPage(QWidget):
         self.copy_minutes_button.setEnabled(self.minutes is not None)
         self.export_button.setEnabled(bool(self.transcript.lines) and self.store is not None)
         self.history_button.setEnabled(not self.recording and not busy)
+        # Not while new minutes are on their way: they would replace what is typed.
+        self.minutes_view.set_editable(self.minutes is not None and not busy)
         if busy:
             return
         minutes = self.minutes
         if minutes is None:
             self.minutes_status.setText("")
+        elif minutes.edited is not None:
+            self.minutes_status.setText("已修改")
         elif minutes.lines < len(self.transcript.lines):
             self.minutes_status.setText(f"截至 {clock(minutes.through)} · 之后的话还没写进去")
         else:
             self.minutes_status.setText(f"截至 {clock(minutes.through)}" if self.recording else "整场会议")
 
+    # Editing
+
+    def transcript_edited(self):
+        self.save_timer.start()
+        self.count.setText(f"{self.transcript.characters():,} 字")
+
+    def save_edits(self):
+        """What the user changed in either panel, into the meeting's files."""
+        self.save_timer.stop()
+        store = self.store
+        if store is None:
+            return
+        try:
+            lines = self.transcript.take_edits()
+            if lines is not None:
+                store.replace_lines([line for line in lines if line.text.strip() or line.who == SKIPPED])
+                info = store.info()
+                info["characters"] = self.transcript.characters()
+                store.save_info(info)
+                self.refresh()  # The count of characters above the panels.
+                self.progress.setText("已保存修改")
+                self.saved_timer.start()
+            if self.minutes is not None and self.minutes_view.dirty:
+                self.minutes_view.dirty = False
+                self.minutes.edited = self.minutes_view.blocks()
+                store.save("minutes", minutes_record(self.minutes))
+                self.refresh_minutes()
+        except OSError:
+            self.main.set_notice("修改没能保存，请检查磁盘空间和权限。")
+
     def copy_minutes(self):
+        self.save_edits()
         if self.minutes is None:
             return
         info = self.store.info() if self.store else {}
@@ -1086,6 +1515,7 @@ class MeetingPage(QWidget):
         self.copy_minutes_button.flash("已复制")
 
     def copy_all(self):
+        self.save_edits()
         text = self.transcript.plain_text()
         if text:
             QApplication.clipboard().setText(text)
@@ -1120,6 +1550,7 @@ class MeetingPage(QWidget):
         """The minutes, with the transcript if asked for (or alone, before there are minutes)."""
         if self.store is None or not self.transcript.lines:
             return
+        self.save_edits()
         from .export import document_blocks, file_name, save
 
         settings = self.main.settings
@@ -1137,7 +1568,8 @@ class MeetingPage(QWidget):
         if path.suffix.lower() != f".{kind}":
             path = path.with_name(f"{path.name}.{kind}")
         transcript = settings.meeting_export_transcript or self.minutes is None
-        blocks = document_blocks(info, self.minutes, list(self.transcript.lines), self.transcript.labels, transcript)
+        lines = [line for line in self.transcript.lines if line.text.strip() or line.who == SKIPPED]
+        blocks = document_blocks(info, self.minutes, lines, self.transcript.labels, transcript)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             save(path, blocks)
@@ -1230,6 +1662,7 @@ class MeetingPage(QWidget):
         """A meeting from the list, as it was left: its transcript, minutes and notes."""
         if self.recording or self.writing is not None:
             return
+        self.save_edits()
         info = store.info()
         lines = store.lines()
         self.store = store
@@ -1258,6 +1691,7 @@ class MeetingPage(QWidget):
         except OSError:
             return False
         if self.store is not None and self.store.folder == store.folder:
+            self.save_timer.stop()
             self.store = None
             self.parts = {}
             self.opened = ""
