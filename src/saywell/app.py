@@ -5,7 +5,7 @@ import os
 import sys
 import time
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from threading import Event
 
@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
+from .achievements import Achievements
+from .achievements_ui import AchievementToast
 from .announcement import AnnouncementDialog
 from .api_config import is_deepseek_api
 from .audio import AudioError, Recorder
@@ -123,6 +125,18 @@ class FittedStack(QStackedWidget):
         return current.minimumSizeHint() if current else super().minimumSizeHint()
 
 
+def earlier_meetings() -> list[tuple[dict, str]]:
+    """The meetings on this computer, for achievements counted the first time: each one's
+    info and the template of its minutes (or "")."""
+    from .meeting import list_meetings
+
+    found = []
+    for store in list_meetings():
+        minutes = store.load("minutes")
+        found.append((store.info(), minutes.get("template", "") if isinstance(minutes, dict) else ""))
+    return found
+
+
 class MainWindow(QMainWindow):
     PILLS = {
         "recording": ("rec", "录音中"),
@@ -167,6 +181,11 @@ class MainWindow(QMainWindow):
         self.solo_timer.timeout.connect(self.solo_long_press)
         self.overlay = RecordingOverlay()
         self.usage = StatsStore() if self.settings.collect_stats else None
+        # Achievements are counted with the statistics, and only while they are kept.
+        self.achievements = Achievements() if self.settings.collect_stats else None
+        self.badge_toast = AchievementToast()
+        self.badge_toast.ready = lambda: self.state != "recording" and not self.meeting.recording
+        self.badge_toast.clicked.connect(self.show_achievements)
         self.balance: str | None = None
         self.balance_time = 0.0
         # Graphics card the speech model last ran on; "CPU" after GPU acceleration fell back, "" if unknown.
@@ -227,6 +246,8 @@ class MainWindow(QMainWindow):
         self.find_dropped_models()
         self.refresh_controls()
         self.refresh_overview()
+        # The first time, achievements already earned by earlier use are counted (and said once).
+        QTimer.singleShot(4000 if native else 0, self.achieve)
         if native:
             QTimer.singleShot(1500, self.update_balance)
         self.update_timer = QTimer(self)
@@ -363,7 +384,7 @@ class MainWindow(QMainWindow):
         self.overview.copy_latest.connect(lambda: self.copy_text(True))
         self.overview.insert_latest.connect(self.schedule_manual_insert)
         self.overview.refresh_balance.connect(lambda: self.update_balance(force=True))
-        scroll = QScrollArea()
+        scroll = self.overview_scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -496,6 +517,7 @@ class MainWindow(QMainWindow):
         except ValueError:
             deepseek = False
         self.overview.refresh(self.usage, date.today(), deepseek, self.usage is not None)
+        self.overview.achievements.refresh(self.achievements, self.usage, self.settings)
         provider = "DeepSeek" if deepseek else self.provider_name()
         updated = time.strftime("%H:%M 更新", time.localtime(self.balance_time)) if self.balance else ""
         self.overview.set_balance(self.balance if deepseek else None, provider, updated)
@@ -741,6 +763,46 @@ class MainWindow(QMainWindow):
             self.usage.save()
         except OSError:
             pass
+        if data.get("duration"):
+            imported = data.get("kind") == "file"
+
+            def dictated(tally: Achievements):
+                # An imported recording was not said in one breath here, nor at this hour.
+                if imported:
+                    tally.add("imports")
+                    tally.use("dictation", datetime.now())
+                else:
+                    tally.dictated(data["duration"], datetime.now(), bool(result.translated_to), data.get("device") or "")
+
+            self.achieve(dictated)
+
+    def achieve(self, record=None):
+        """Note something done towards an achievement (`record` gets the tally), then show any
+        newly reached. Nothing is kept while the statistics are off."""
+        tally = self.achievements
+        if tally is None or self.usage is None:
+            return
+        if record is not None:
+            record(tally)
+        fresh = tally.fresh
+        if fresh:
+            tally.count_meetings(earlier_meetings())
+        reached = tally.check(self.usage, self.settings)
+        self.overview.achievements.refresh(tally, self.usage, self.settings)
+        if not reached or not self.settings.achievement_popups:
+            return
+        if fresh:
+            self.badge_toast.push_summary(reached)
+        else:
+            for achievement in reached:
+                self.badge_toast.push(achievement)
+
+    def show_achievements(self):
+        """From the card at the bottom right: the 成就 section, opened."""
+        self.reveal()
+        self.show_page(0)
+        self.overview.achievements.set_open(True)
+        QTimer.singleShot(80, lambda: self.overview_scroll.ensureWidgetVisible(self.overview.achievements, 0, 0))
 
     def record_minutes_usage(self, usage: dict):
         """Meeting minutes count as one API request in the statistics."""
@@ -912,6 +974,7 @@ class MainWindow(QMainWindow):
             if target and target.process != os.getpid():
                 self.from_hotkey = True
                 self.attempt_insert(self.gate.generation, target)
+                self.achieve(lambda tally: tally.add("paste_again"))
         elif identifier == 3:
             self.cancel()
         elif self.selection is not None and identifier == self.selection.HOTKEY:
@@ -1264,6 +1327,9 @@ class MainWindow(QMainWindow):
         if (new.asr_model, new.models) != (previous.asr_model, previous.models):
             self.pipeline.release_recognizer()  # Loaded again on the next recognition.
             self.device = ""
+        if new.asr_model != previous.asr_model and models_ready(previous.models, model=previous.asr_model):
+            # Chosen over one that worked (not the first download taking over).
+            self.achieve(lambda tally: tally.add("model_switches"))
         self.refresh_controls()
         return True
 
@@ -1323,6 +1389,7 @@ class MainWindow(QMainWindow):
         self.finish_ui()
         self.status.setText("已取消")
         self.hint.setText("本次结果不会输入到其他窗口。")
+        self.achieve(lambda tally: tally.add("cancels"))
 
     def clear(self):
         if self.state != "idle":
@@ -1370,8 +1437,10 @@ class MainWindow(QMainWindow):
     def apply_settings_dialog(self, dialog, accepted: bool):
         if getattr(dialog, "stats_cleared", False):
             (self.usage or StatsStore()).clear()
+            (self.achievements or Achievements()).clear()
             if self.usage is not None:
                 self.usage = StatsStore()
+                self.achievements.check(self.usage, self.settings)  # Quietly: what still holds.
             self.refresh_overview()
         if accepted:
             new = dialog.updated
@@ -1388,10 +1457,12 @@ class MainWindow(QMainWindow):
                     self.schedule_update_checks()
                 if new.collect_stats != (self.usage is not None):
                     self.usage = StatsStore() if new.collect_stats else None
+                    self.achievements = Achievements() if new.collect_stats else None
                 self.configure_hotkeys()
                 self.refresh_controls()
                 self.refresh_overview()
                 self.translate_page.refresh()
+                self.achieve()  # A longer word list, a lexicon imported.
                 self.toast.show_text("设置已保存")
                 if self.native:
                     self.update_balance(force=True)
@@ -1501,6 +1572,8 @@ class MainWindow(QMainWindow):
         self.timer.stop()
         self.overlay.dismiss_timer.stop()
         self.overlay.close()
+        self.badge_toast.queue.clear()
+        self.badge_toast.close()
         self.tray.hide()
         if self.selection is not None:
             self.selection.shutdown()

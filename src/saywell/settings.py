@@ -81,6 +81,7 @@ class Settings:
     save_history: bool = False
     # Daily counts and token totals for the overview page; never any text.
     collect_stats: bool = True
+    achievement_popups: bool = True  # A small card at the bottom right when one is reached.
     start_on_login: bool = False
     glossary: list[str] = field(default_factory=lambda: ["DeepSeek", "API", "Windows", "Ctrl", "Shift"])
     # Imported professional lexicons: {"id", "name", "enabled", "count"}; the terms live in

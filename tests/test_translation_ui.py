@@ -1,6 +1,8 @@
 import os
+import tempfile
 import time
 from dataclasses import replace
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -8,6 +10,7 @@ import pytest
 from PySide6.QtWidgets import QApplication, QWidget
 
 from saywell import translation
+from saywell.achievements import Achievements
 from saywell.selection import Selection
 from saywell.settings import Settings
 from saywell.translation import Translation
@@ -41,9 +44,14 @@ class Window(QWidget):
         self.settings = replace(Settings(), selection_translate=True, **settings)
         self.hotkeys = None
         self.usage = []
+        self.tally = Achievements(Path(tempfile.mkdtemp()) / "achievements.json")
 
     def record_api_usage(self, usage):
         self.usage.append(usage)
+
+    def achieve(self, record=None):
+        if record:
+            record(self.tally)
 
 
 @pytest.fixture
@@ -113,6 +121,8 @@ def test_direct_mode_translates_at_once_and_another_language_can_be_chosen(run):
     controller.popup.language_buttons["日语"].click()
     assert wait_for(lambda: controller.translation is not None and controller.translation.language == "日语")
     assert controller.popup.route.text() == "译成日语"
+    # Each translation asked for counts towards achievements.
+    assert window.tally.counts["selections"] == 2 and window.tally.sets["languages"] == {"英语", "日语"}
 
 
 def test_the_shortcut_explains_what_it_cannot_read(run, monkeypatch):
@@ -132,7 +142,8 @@ def test_replacing_types_the_translation_over_the_selection_with_its_lines(run, 
     assert wait_for(lambda: controller.translation is not None)
     assert not controller.popup.replace_button.isHidden()
     controller.replace()
-    assert pasted == [("[英语] 第一行\n第二行", "the field", {"keep_result": False, "single_line": False})]
+    assert window.tally.counts["replacements"] == 1
+    assert pasted ==[("[英语] 第一行\n第二行", "the field", {"keep_result": False, "single_line": False})]
     assert wait_for(lambda: not controller.popup.isVisible())
 
 

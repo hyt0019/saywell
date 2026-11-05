@@ -179,6 +179,10 @@ def _chevron_down(p):
     _lines(p, (7, 10), (12, 15), (17, 10))
 
 
+def _chevron_up(p):
+    _lines(p, (7, 14), (12, 9), (17, 14))
+
+
 def _chevron_right(p):
     _lines(p, (10, 7), (15, 12), (10, 17))
 
@@ -287,6 +291,7 @@ PATHS = {
     "refresh": _refresh,
     "chevron_down": _chevron_down,
     "chevron_right": _chevron_right,
+    "chevron_up": _chevron_up,
     "verify": _verify,
     "keyboard": _keyboard,
 }

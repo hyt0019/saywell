@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QTextCursor
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from .brand import bird_rect, draw_swallow, draw_tile
 from .shortcuts import SOLO_KEYS, shortcut_label
+from .stats import count_chars
 from .translation import LANGUAGES, SCRIPTS, STYLES, Translation, script_of, target_language
 from .ui import (
     ACCENT,
@@ -544,6 +546,8 @@ class TranslatePage(QWidget):
             self._sync()
             if len(job.pieces) > 1:
                 self.main.toast.show_text(f"译完了，共 {len(job.pieces)} 段")
+            chars = count_chars(job.text)
+            self.main.achieve(lambda tally: tally.translated(job.target, job.style, datetime.now(), False, chars))
             return
         piece = job.pieces[index][0]
         settings = self.settings

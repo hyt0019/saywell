@@ -230,6 +230,7 @@ class Pipeline:
                     "result": result,
                     "asr_seconds": asr_seconds,
                     "duration": duration,
+                    "kind": kind,
                     "used_original": used_original,
                     "device": device,
                     "gpu_problem": gpu_problem,

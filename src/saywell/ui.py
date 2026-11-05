@@ -221,6 +221,7 @@ class Glyph:
     CHECK = "check"
     CHEVRON_DOWN = "chevron_down"
     CHEVRON_RIGHT = "chevron_right"
+    CHEVRON_UP = "chevron_up"
     INFO = "info"
     FOLDER = "folder"
     LOCK = "lock"
@@ -2082,6 +2083,9 @@ class SettingsDialog(QDialog):
         stats_row.addWidget(self.clear_stats)
         privacy.body.addLayout(stats_row)
         self.stats_cleared = False
+        self.achievement_popups = Switch("达成成就时弹出小卡片")
+        self.achievement_popups.setChecked(settings.achievement_popups)
+        privacy.body.addWidget(self.achievement_popups)
         self.startup = Switch("开机自启动，登录 Windows 后在托盘运行")
         self.startup.setChecked(settings.start_on_login)
         privacy.body.addWidget(self.startup)
@@ -2373,6 +2377,7 @@ class SettingsDialog(QDialog):
                 hold_to_talk=self.hold.current() == 0,
                 save_history=self.history.isChecked(),
                 collect_stats=self.collect_stats.isChecked(),
+                achievement_popups=self.achievement_popups.isChecked(),
                 start_on_login=self.startup.isChecked(),
                 glossary=words,
                 lexicons=[dict(item) for item in self.lexicons],

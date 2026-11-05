@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import replace
+from datetime import datetime
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -890,6 +891,7 @@ class SelectionTranslate:
                 self.made[(language, style)] = value
                 self.popup.show_translation(value)
                 self.window.record_api_usage(value.usage)
+                self.window.achieve(lambda tally: tally.translated(language, style, datetime.now()))
             else:
                 self.popup.show_problem(getattr(value, "message", "翻译没有完成，请重试。"))
 
@@ -912,6 +914,7 @@ class SelectionTranslate:
             self.popup.show_problem(str(error), can_retry=False)
             return
         self.popup.dismiss()
+        self.window.achieve(lambda tally: tally.add("replacements"))
 
     def _closed(self):
         if self.cancel:

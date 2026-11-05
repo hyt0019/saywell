@@ -72,7 +72,7 @@ def test_costs_are_only_estimated_for_deepseek(tmp_path):
     assert day.requests == 3 and day.cost == pytest.approx(2)
 
 
-def test_streaks_milestones_and_saved_time():
+def test_streaks_and_saved_time():
     store = StatsStore.empty()
     today = date(2026, 10, 17)
     for offset in (0, 1, 2, 5, 6, 7, 8):
@@ -81,12 +81,11 @@ def test_streaks_milestones_and_saved_time():
     assert store.streak(today + timedelta(days=1)) == 3  # Today not used yet keeps yesterday's streak.
     assert store.streak(today + timedelta(days=2)) == 0
     assert store.longest_streak() == 4 and store.active_days() == 7
-    assert store.next_milestone() == (10_000, 50_000)
     assert store.best_day()[1] == 2_000
     assert store.saved_minutes() == pytest.approx(14_000 / 40 - 7)
 
 
-def test_overview_shows_totals_heatmap_and_milestones(qt_app):
+def test_overview_shows_totals_heatmap_and_achievements(qt_app, tmp_path):
     from saywell.dashboard import Heatmap, Overview, number
 
     assert number(8_600) == "8,600" and number(86_000) == "8.6 万" and number(100_000) == "10 万"
@@ -100,11 +99,20 @@ def test_overview_shows_totals_heatmap_and_milestones(qt_app):
     view.refresh(store, today, deepseek=True)
     assert "1,200" in view.today.value.text() and view.streak.value.text().count("2")
     assert view.requests.text() == "4 次" and view.cost.text() == "约 ¥0.01"
-    chars, streak = view.milestones
-    assert chars.reached() == ["1 千字"] and streak.reached() == []
-    assert chars.position(1_000) == 0.25 and chars.position(5_500) == 0.25 + 0.25 / 2
-    assert streak.position(0) == 0 and streak.position(500) == 1
-    assert "1,200" in view.best.text()
+    assert "最多一天 1,200 字" in view.heat_summary.text()
+    from saywell.achievements import Achievements
+
+    panel = view.achievements
+    tally = Achievements(tmp_path / "achievements.json")
+    tally.check(store, Settings(glossary=[]))
+    panel.refresh(tally, store, Settings(glossary=[]))
+    assert panel.count.text() == "2 / 54"
+    assert [a.name for a in panel.latest.items] == ["千言", "开口"]  # Newest first.
+    assert panel.next.achievement.name == "三日不辍" and not panel.all.isVisibleTo(view)  # 2 of 3 days.
+    panel.set_open(True)
+    assert panel.all.isVisibleTo(view) and panel.toggle.text() == "收起"
+    panel.refresh(None, store, Settings())
+    assert panel.off.isVisibleTo(view) and not panel.toggle.isVisibleTo(view)
     assert view.heatmap.day_at(*cell_center(view.heatmap, today)) == today
     view.refresh(store, today, deepseek=False)
     assert view.cost.text() == "—"

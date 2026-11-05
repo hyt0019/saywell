@@ -13,7 +13,6 @@ from .settings import data_dir
 
 # Chinese typing speed used for the "time saved" estimate.
 TYPING_CHARS_PER_MINUTE = 40
-MILESTONES = (1_000, 10_000, 50_000, 100_000, 500_000, 1_000_000)
 
 # DeepSeek list prices, yuan per million tokens: (cache hit, cache miss, output) at peak time.
 # Off-peak is half. Source: api-docs.deepseek.com/zh-cn/quick_start/pricing (2026-10).
@@ -158,10 +157,3 @@ class StatsStore:
     def saved_minutes(self) -> float:
         total = self.total()
         return max(0.0, total.chars / TYPING_CHARS_PER_MINUTE - total.seconds / 60)
-
-    def next_milestone(self) -> tuple[int, int]:
-        """(reached, next) character milestones; next is 0 once all are reached."""
-        chars = self.total().chars
-        reached = max((m for m in MILESTONES if chars >= m), default=0)
-        upcoming = next((m for m in MILESTONES if chars < m), 0)
-        return reached, upcoming

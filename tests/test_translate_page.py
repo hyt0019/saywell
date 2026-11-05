@@ -1,6 +1,8 @@
 import os
+import tempfile
 import time
 from dataclasses import replace
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -8,8 +10,10 @@ import pytest
 from PySide6.QtWidgets import QApplication, QWidget
 
 from saywell import translation
+from saywell.achievements import Achievements
 from saywell.cleanup import CleanupError
 from saywell.settings import Settings
+from saywell.stats import count_chars
 from saywell.translate_page import TranslateGuide, TranslatePage, pieces
 from saywell.translation import Translation
 from saywell.ui import STYLE
@@ -47,9 +51,14 @@ class Main(QWidget):
         super().__init__()
         self.settings = replace(Settings(), **settings)
         self.usage, self.notices, self.toast = [], [], Toast()
+        self.tally = Achievements(Path(tempfile.mkdtemp()) / "achievements.json")
 
     def record_api_usage(self, usage):
         self.usage.append(usage)
+
+    def achieve(self, record=None):
+        if record:
+            record(self.tally)
 
     def set_notice(self, text=""):
         self.notices.append(text)
@@ -97,6 +106,7 @@ def test_a_long_text_is_translated_piece_by_piece_into_the_pair_language(page):
     assert len(page.asked) == 3 and all(language == "英语" for _t, language, _s, _src in page.asked)
     assert page.result.toPlainText() == "<第1段：内容>\n\n<第2段：内容>\n\n<第3段：内容>"
     assert len(page.main.usage) == 3 and page.main.toast.texts == ["译完了，共 3 段"]
+    assert page.main.tally.counts["page_chars"] == count_chars(text) and "selections" not in page.main.tally.counts
     assert page.translate_button.text() == "翻译" and not page.bar.isVisible()
     page.copy_button.click()
     assert QApplication.clipboard().text() == page.result.toPlainText()

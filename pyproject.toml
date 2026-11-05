@@ -32,7 +32,7 @@ saywell-cli = "saywell.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-saywell = ["assets/*.png"]
+saywell = ["assets/*.png", "assets/achievements/*.png", "assets/fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

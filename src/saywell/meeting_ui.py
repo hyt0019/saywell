@@ -1856,6 +1856,7 @@ class MeetingPage(QWidget):
         self.check_note = ""
         if check is not None and check is running:
             self.check_note = self.check_result(check)
+            self.main.achieve(lambda tally: tally.add("sound_checks"))
             if OTHERS in check.sources:
                 hero.app_mark.play(check.heard(OTHERS))
             if ME in check.sources:
@@ -2006,6 +2007,9 @@ class MeetingPage(QWidget):
             if not self.transcript.lines:
                 self._discard_store()  # Nothing was said: no empty meeting in the history.
         self.state = "done" if self.transcript.lines else "idle"
+        if self.transcript.lines:
+            seconds = self.duration
+            self.main.achieve(lambda tally: tally.meeting_ended(seconds, datetime.now()))
         self.timer.stop()
         self.transcript.set_pending(False)
         self.hero.app_meter.setValue(0)
@@ -2187,6 +2191,7 @@ class MeetingPage(QWidget):
             self.spinner.hide()
             if not isinstance(result, Exception):
                 self.main.record_minutes_usage(result.usage)
+                self.main.achieve(lambda tally: tally.minutes_written(result.template))
                 try:
                     store.save("parts", cache)
                     store.save("minutes", minutes_record(result))
@@ -2389,6 +2394,7 @@ class MeetingPage(QWidget):
         self._save(meeting_export_dir=str(path.parent), meeting_export_format=kind)
         self.main.set_notice("")
         self.export_button.flash("已导出")
+        self.main.achieve(lambda tally: tally.add("exports"))
 
     # Earlier meetings
 

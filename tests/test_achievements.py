@@ -1,5 +1,10 @@
 import json
+import os
 from datetime import date, datetime, timedelta
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import pytest
 
 from saywell.achievements import ACHIEVEMENTS, BY_ID, GROUPS, Achievements
 from saywell.settings import Settings
@@ -137,3 +142,93 @@ def test_meetings_from_before_are_counted_once(tmp_path):
                           ({"characters": 50}, "")])  # Never finished.
     assert tally.counts["meetings"] == 1 and tally.sets == {"templates": {"general"}}
     assert {"meeting-1", "minutes-1", "meeting-2h"} <= reached(tally)
+
+
+# ---------- in the app ----------
+
+
+@pytest.fixture(scope="module")
+def qt_app():
+    from PySide6.QtWidgets import QApplication
+
+    from saywell.ui import STYLE
+
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(STYLE)
+    yield app
+
+
+def test_hover_text_keeps_hidden_ones_secret_and_says_what_is_missing(tmp_path):
+    from saywell.achievements_ui import amount, describe
+
+    tally = Achievements(tmp_path / "a.json")
+    tally.reached["words-100"] = "2026-10-07T15:00"
+    facts = {"chars": 7_700, "saved_hours": 0.6}
+    assert describe(BY_ID["words-100"], tally, facts) == ("开口", "累计说满 100 字 · 10月7日", BY_ID["words-100"].comment)
+    assert describe(BY_ID["words-10k"], tally, facts)[2] == "还差 2,300 字"
+    assert describe(BY_ID["night"], tally, facts) == ("？？？", "隐藏成就", "夜深人静的时候")
+    assert describe(BY_ID["import-1"], tally, facts)[2] == "还没达成"
+    assert amount(27_000, "字") == "2.7 万字" and amount(0.4, "小时") == "24 分钟" and amount(2, "天") == "2 天"
+
+
+def test_a_dictation_reaches_one_and_the_card_says_so(qt_app, monkeypatch):
+    from saywell.app import MainWindow
+    from saywell.core import CleanupResult
+
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
+    window = MainWindow(Settings(), native=False)
+    try:
+        job, _ = window.begin("busy")
+        result = CleanupResult("一" * 120, "一" * 120)
+        window.on_complete(job, {"result": result, "asr_seconds": 0.5, "duration": 3.0, "kind": "audio"})
+        assert set(window.achievements.reached) == {"words-100"}
+        assert window.badge_toast.current[1] == "开口" and window.badge_toast.isVisible()
+        assert window.overview.achievements.count.text() == "1 / 54"
+        job, _ = window.begin("busy")
+        window.on_complete(job, {"result": CleanupResult("好", "好"), "asr_seconds": 0.5, "duration": 3.0, "kind": "file"})
+        assert window.achievements.counts["imports"] == 1 and "import-1" in window.achievements.reached
+        assert [item[1] for item in window.badge_toast.queue] == ["旧声新文"]  # After the first is gone.
+        window.begin("busy")
+        window.cancel()
+        assert window.achievements.counts["cancels"] == 1
+    finally:
+        window.shutdown()
+        window.close()
+
+
+def test_the_card_waits_while_recording(qt_app):
+    from saywell.achievements_ui import AchievementToast
+
+    toast = AchievementToast()
+    busy = [True]
+    toast.ready = lambda: not busy[0]
+    toast.push(BY_ID["words-1k"])
+    assert not toast.isVisible() and len(toast.queue) == 1
+    busy[0] = False
+    toast._next()
+    assert toast.isVisible() and toast.current[1] == "千言" and not toast.queue
+    toast.hide()
+    toast.push_summary([BY_ID["words-100"], BY_ID["streak-3"]])
+    assert toast.current[1] == "点亮了 2 个成就"
+    toast.close()
+
+
+def test_clearing_the_statistics_clears_achievements_and_turning_them_off_stops_them(qt_app, monkeypatch):
+    from types import SimpleNamespace
+
+    from saywell.app import MainWindow
+
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
+    window = MainWindow(Settings(), native=False)
+    try:
+        window.achieve(lambda tally: tally.add("imports"))
+        assert "import-1" in window.achievements.reached
+        window.apply_settings_dialog(SimpleNamespace(stats_cleared=True), accepted=False)
+        assert window.achievements.reached == {} and Achievements().reached == {}
+        window.achievements = window.usage = None
+        window.achieve(lambda tally: tally.add("imports"))  # Off: nothing is counted.
+        window.refresh_overview()
+        assert window.overview.achievements.off.isVisibleTo(window.overview)
+    finally:
+        window.shutdown()
+        window.close()

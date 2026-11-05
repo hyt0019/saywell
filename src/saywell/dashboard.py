@@ -1,4 +1,4 @@
-"""The overview page: totals, a year of speaking, latest result, API usage and milestones.
+"""The overview page: totals, a year of speaking, latest result, API usage and achievements.
 
 Typography carries the page: big numbers, small quiet labels, hairlines instead of icons."""
 
@@ -11,7 +11,7 @@ from PySide6.QtCore import QEasingCurve, QPoint, QRectF, Qt, QVariantAnimation, 
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
-from .icons import draw_icon
+from .achievements_ui import AchievementsPanel
 from .stats import TYPING_CHARS_PER_MINUTE, Day, StatsStore
 from .ui import ACCENT, INK, MUTED, Glyph, Tween, label, make_button
 
@@ -38,6 +38,8 @@ QLabel#rowValue { color: #1D2240; font-size: 13px; }
 QLabel#trackTitle { color: #47413A; font-size: 13px; }
 QLabel#trackValue { color: #1D2240; font-size: 13px; font-weight: 700; }
 QFrame#vline { background: #EEE7DB; min-width: 1px; max-width: 1px; border: none; }
+QLabel#groupTitle { font-family: 'Saywell Serif'; font-size: 15px; font-weight: 700; color: #192457; }
+QFrame#groupRule { background: #EEE7DB; min-height: 1px; max-height: 1px; border: none; }
 """
 
 
@@ -77,6 +79,7 @@ class HoverCard(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.title = ""
         self.body = ""
+        self.note = ""  # A third line, in ink: an achievement's comment or what is missing.
         self.fade = Tween(self, duration=160, on_change=lambda: self.setWindowOpacity(self.fade.value))
 
     def fonts(self) -> tuple[QFont, QFont]:
@@ -87,11 +90,12 @@ class HoverCard(QWidget):
         body.setPixelSize(12)
         return title, body
 
-    def show_at(self, position: QPoint, title: str, body: str):
-        self.title, self.body = title, body
+    def show_at(self, position: QPoint, title: str, body: str, note: str = ""):
+        self.title, self.body, self.note = title, body, note
         title_font, body_font = self.fonts()
-        width = max(QFontMetrics(title_font).horizontalAdvance(title), QFontMetrics(body_font).horizontalAdvance(body))
-        self.resize(width + 28 + 12, 58 + 12)
+        width = max(QFontMetrics(title_font).horizontalAdvance(title),
+                    *(QFontMetrics(body_font).horizontalAdvance(line) for line in (body, note)))
+        self.resize(width + 28 + 12, (76 if note else 58) + 12)
         target = position + QPoint(14, 16)
         screen = self.screen().availableGeometry() if self.screen() else None
         if screen and target.x() + self.width() > screen.right():
@@ -121,6 +125,10 @@ class HoverCard(QWidget):
         painter.setFont(body_font)
         painter.setPen(QColor(MUTED))
         painter.drawText(QRectF(body.left() + 14, body.top() + 29, body.width(), 18), Qt.AlignmentFlag.AlignVCenter, self.body)
+        if self.note:
+            painter.setPen(QColor(INK))
+            painter.drawText(QRectF(body.left() + 14, body.top() + 47, body.width(), 18),
+                             Qt.AlignmentFlag.AlignVCenter, self.note)
 
 
 class CountLabel(QLabel):
@@ -370,106 +378,6 @@ class MiniBars(QWidget):
         super().leaveEvent(event)
 
 
-class MilestoneTrack(QWidget):
-    """A progress line with milestone nodes; reached nodes are filled."""
-
-    def __init__(self, hover: HoverCard, steps: tuple[int, ...], names: tuple[str, ...], unit: str):
-        super().__init__()
-        self.hovercard = hover
-        self.steps, self.names, self.unit = steps, names, unit
-        self.value = 0.0
-        self.shown = 0.0
-        self.setFixedHeight(46)
-        self.setMouseTracking(True)
-        self.animation = QVariantAnimation(self)
-        self.animation.setDuration(800)
-        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self.animation.valueChanged.connect(self._progress)
-
-    def reached(self) -> list[str]:
-        return [name for step, name in zip(self.steps, self.names, strict=True) if self.value >= step]
-
-    def set_value(self, value: float):
-        target = self.position(value)
-        self.value = value
-        if self.isVisible():
-            self.animation.stop()
-            self.animation.setStartValue(self.shown)
-            self.animation.setEndValue(target)
-            self.animation.start()
-        else:
-            self.shown = target
-            self.update()
-
-    def _progress(self, value):
-        self.shown = float(value)
-        self.update()
-
-    def position(self, value: float) -> float:
-        """0..1 along the line: value 0 at the left end, node k at (k + 1) / n."""
-        count = len(self.steps)
-        if value <= 0:
-            return 0.0
-        if value < self.steps[0]:
-            return value / self.steps[0] / count
-        for index in range(count - 1):
-            low, high = self.steps[index], self.steps[index + 1]
-            if value < high:
-                return (index + 1 + (value - low) / (high - low)) / count
-        return 1.0
-
-    LEFT, RIGHT = 8.0, 30.0
-
-    def node_x(self, index: int) -> float:
-        return self.LEFT + (self.width() - self.LEFT - self.RIGHT) * (index + 1) / len(self.steps)
-
-    def paintEvent(self, _event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        y, left, right = 10.0, self.LEFT, self.width() - self.RIGHT
-        track = QPen(QColor(HAIRLINE), 3)
-        track.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(track)
-        painter.drawLine(QRectF(left, y, right - left, 0).topLeft(), QRectF(left, y, right - left, 0).topRight())
-        if self.shown > 0:
-            fill = QPen(QColor(ACCENT), 3)
-            fill.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(fill)
-            end = left + (right - left) * self.shown
-            painter.drawLine(QRectF(left, y, end - left, 0).topLeft(), QRectF(left, y, end - left, 0).topRight())
-        font = QFont(self.font())
-        font.setPixelSize(11)
-        painter.setFont(font)
-        for index, name in enumerate(self.names):
-            x = self.node_x(index)
-            reached = self.shown >= (index + 1) / len(self.steps) - 1e-6
-            node = QRectF(x - 7, y - 7, 14, 14)
-            if reached:
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor(ACCENT))
-                painter.drawEllipse(node)
-                draw_icon(painter, "check", node.adjusted(3, 3, -3, -3), "#FFFCF7", 3.4)
-            else:
-                painter.setPen(QPen(QColor("#D9D0C1"), 1.5))
-                painter.setBrush(QColor("#FFFCF7"))
-                painter.drawEllipse(node)
-            painter.setPen(QColor(INK if reached else SUBTLE))
-            painter.drawText(QRectF(x - 40, y + 12, 80, 18), Qt.AlignmentFlag.AlignCenter, name)
-
-    def mouseMoveEvent(self, event):
-        x = event.position().x()
-        for index, (step, name) in enumerate(zip(self.steps, self.names, strict=True)):
-            if abs(x - self.node_x(index)) < 18:
-                status = "已达成" if self.value >= step else f"还差 {number(step - self.value)} {self.unit}"
-                self.hovercard.show_at(event.globalPosition().toPoint(), name, status)
-                return
-        self.hovercard.hide()
-
-    def leaveEvent(self, event):
-        self.hovercard.hide()
-        super().leaveEvent(event)
-
-
 def value_row(name: str) -> tuple[QHBoxLayout, QLabel]:
     row = QHBoxLayout()
     row.addWidget(label(name, "rowLabel"))
@@ -535,7 +443,7 @@ class Overview(QWidget):
         self.latest_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.latest_text.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.latest_text.setMinimumHeight(44)
-        latest_layout.addWidget(self.latest_text, 1)
+        latest_layout.addWidget(self.latest_text)
         actions = QHBoxLayout()
         actions.setSpacing(8)
         self.copy_button = make_button("复制", Glyph.COPY)
@@ -549,29 +457,9 @@ class Overview(QWidget):
         actions.addStretch()
         actions.addWidget(compare)
         latest_layout.addLayout(actions)
+        latest_layout.addStretch(1)  # Beside the taller API column, the room is left below.
         left.addWidget(latest, 1)
 
-        milestones, milestone_layout, milestone_head = panel("里程碑")
-        self.best = label("", "panelMeta")
-        milestone_head.addWidget(self.best)
-        self.chars_value = label("", "trackValue")
-        self.streak_value = label("", "trackValue")
-        self.milestones = [
-            MilestoneTrack(
-                self.hovercard, (1_000, 10_000, 100_000, 1_000_000), ("1 千字", "1 万字", "10 万字", "100 万字"), "字"
-            ),
-            MilestoneTrack(self.hovercard, (3, 7, 30, 100), ("3 天", "7 天", "30 天", "100 天"), "天"),
-        ]
-        for title, value, track in zip(
-            ("累计字数", "最长连续使用"), (self.chars_value, self.streak_value), self.milestones, strict=True
-        ):
-            head = QHBoxLayout()
-            head.addWidget(label(title, "trackTitle"))
-            head.addStretch()
-            head.addWidget(value)
-            milestone_layout.addLayout(head)
-            milestone_layout.addWidget(track)
-        left.addWidget(milestones)
         row.addLayout(left, 3)
 
         usage, usage_layout, usage_head = panel("API 用量")
@@ -610,6 +498,8 @@ class Overview(QWidget):
         usage_layout.addWidget(label("最近 14 天每天的 tokens", "statSub"))
         row.addWidget(usage, 2)
         layout.addLayout(row)
+        self.achievements = AchievementsPanel(self.hovercard)
+        layout.addWidget(self.achievements)
         self.set_latest("", "")
 
     def hideEvent(self, event):
@@ -660,8 +550,10 @@ class Overview(QWidget):
         year_start = today - timedelta(days=365)
         year = store.total(year_start)
         active = sum(1 for key, value in store.days.items() if value.dictations and date.fromisoformat(key) > year_start)
+        _, best_chars = store.best_day()
+        best = f" · 最多一天 {best_chars:,} 字" if best_chars else ""
         self.heat_summary.setText(
-            f"过去一年说了 {number(year.chars)} 字 · 活跃 {active} 天" if enabled else "使用统计已关闭，可在设置中开启"
+            f"过去一年说了 {number(year.chars)} 字 · 活跃 {active} 天{best}" if enabled else "使用统计已关闭，可在设置中开启"
         )
 
         month = store.total(today.replace(day=1))
@@ -676,14 +568,3 @@ class Overview(QWidget):
         )
         recent = [today - timedelta(days=offset) for offset in range(13, -1, -1)]
         self.bars.set_data([(d, store.day(d).prompt_tokens + store.day(d).completion_tokens) for d in recent])
-
-        best_day, best_chars = store.best_day()
-        if best_chars:
-            when = date.fromisoformat(best_day)
-            self.best.setText(f"最多的一天 {when.month}月{when.day}日 · {best_chars:,} 字")
-        else:
-            self.best.setText("")
-        self.chars_value.setText(f"{number(total.chars)} 字")
-        self.streak_value.setText(f"{store.longest_streak()} 天")
-        self.milestones[0].set_value(total.chars)
-        self.milestones[1].set_value(store.longest_streak())
