@@ -107,7 +107,9 @@ def test_overview_shows_totals_heatmap_and_achievements(qt_app, tmp_path):
     tally.check(store, Settings(glossary=[]))
     panel.refresh(tally, store, Settings(glossary=[]))
     assert panel.count.text() == "2 / 54"
-    assert [a.name for a in panel.latest.items] == ["千言", "开口"]  # Newest first.
+    group, latest = panel.reel.lines[0]
+    assert group == "最近" and [a.name for a in latest] == ["千言", "开口"]  # Newest first.
+    assert panel.reel.lines[1][0] == "字数"
     assert panel.next.achievement.name == "三日不辍" and not panel.all.isVisibleTo(view)  # 2 of 3 days.
     panel.set_open(True)
     assert panel.all.isVisibleTo(view) and panel.toggle.text() == "收起"

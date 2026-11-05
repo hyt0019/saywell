@@ -232,3 +232,74 @@ def test_clearing_the_statistics_clears_achievements_and_turning_them_off_stops_
     finally:
         window.shutdown()
         window.close()
+
+
+class Wheel:
+    """Just what Reel.roll reads of a wheel event."""
+
+    def __init__(self, delta: int):
+        self.delta = delta
+
+    def angleDelta(self):
+        from PySide6.QtCore import QPoint
+
+        return QPoint(0, self.delta)
+
+
+def test_the_wheel_glides_the_folded_line_through_every_group_and_then_lets_the_page_scroll(qt_app, tmp_path):
+    from saywell.achievements_ui import Reel
+    from saywell.dashboard import HoverCard
+
+    tally = Achievements(tmp_path / "a.json")
+    tally.add("imports")
+    tally.check(StatsStore.empty(), Settings(glossary=[]))
+    reel = Reel(HoverCard())
+    reel.show()  # So that resizing it reaches it at once.
+    reel.resize(1000, reel.ROW)
+    reel.set_items(tally.latest(12), tally, tally.facts(StatsStore.empty(), Settings(glossary=[])))
+    assert list(dict.fromkeys(group for group, _ in reel.lines)) == ["最近", *GROUPS]
+    assert sum(len(items) for _, items in reel.lines[1:]) == len(ACHIEVEMENTS)
+    assert not reel.roll(Wheel(120))  # Already at the top: the page scrolls.
+    assert reel.roll(Wheel(-120)) and reel.line == 1 and reel.offset.running()
+    assert reel.roll(Wheel(-60)) and reel.line == 1  # Half a notch waits for the other half.
+    assert reel.roll(Wheel(-60)) and reel.line == 2
+    reel.offset.to(float(reel.line), animate=False)
+    for _ in range(len(reel.lines)):
+        reel.roll(Wheel(-120))
+    assert reel.line == len(reel.lines) - 1 and not reel.roll(Wheel(-120))  # At the end: the page scrolls.
+    reel.resize(500, reel.ROW)  # Fewer to a line: more lines, and still somewhere among them.
+    assert max(len(items) for _, items in reel.lines) <= reel.columns() and reel.line < len(reel.lines)
+    lengths = [len(items) for group, items in reel.lines if group == "字数"]
+    assert lengths == [4, 3]  # Shared out evenly, not 4 columns and then 3 left over by chance.
+    reel.close()
+
+
+def test_the_card_glides_in_draws_its_ring_and_fades_out_slowly(qt_app):
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    from saywell.achievements_ui import AchievementToast
+
+    def settle(seconds):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            QApplication.processEvents()
+            time.sleep(0.01)
+
+    toast = AchievementToast()
+    toast.push(BY_ID["words-1k"])
+    assert toast.isVisible() and toast.presence.value < 0.5 and toast.ring.value == 0
+    settle(1.3)
+    assert toast.presence.value == 1 and toast.ring.value == 1 and toast.pop.value == 1
+    toast.vanish()
+    settle(0.3)
+    assert toast.isVisible() and 0 < toast.presence.value < 1 and toast.drift == toast.DRIFT
+    toast.enterEvent(None)  # The pointer over it: it comes back and stays.
+    assert not toast.leaving
+    settle(0.5)
+    assert toast.presence.value == 1 and not toast.timer.isActive()
+    toast.vanish(200)
+    settle(0.5)
+    assert not toast.isVisible()
+    toast.close()

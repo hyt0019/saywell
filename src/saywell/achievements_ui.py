@@ -11,13 +11,13 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QImage, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from .achievements import ACHIEVEMENTS, GROUPS, Achievement, Achievements
 from .translation_ui import Floating
-from .ui import ACCENT, ASSETS, CORAL, DISABLED, INK, LINE, MUTED, SERIF, SHEET, Glyph, label, make_button
+from .ui import ACCENT, ASSETS, CORAL, DISABLED, INK, LINE, MUTED, SERIF, SHEET, Glyph, Tween, label, make_button, spring
 
 BADGES = ASSETS / "achievements"
 FAINT = "#958C7F"
@@ -58,7 +58,9 @@ def state(achievement: Achievement, tally: Achievements, now: datetime | None = 
     return "new" if recent else "reached"
 
 
-def draw_medallion(painter: QPainter, rect: QRectF, achievement: Achievement, look: str):
+def draw_medallion(painter: QPainter, rect: QRectF, achievement: Achievement, look: str, sweep: float = 1.0):
+    """The medallion in `rect`. `sweep` (0 to 1) draws a new one's coral ring only so far
+    round, clockwise from the top: the card at the bottom right draws it in as it arrives."""
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -71,8 +73,16 @@ def draw_medallion(painter: QPainter, rect: QRectF, achievement: Achievement, lo
         painter.setBrush(QColor(SHEET))
         painter.drawEllipse(rect)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(CORAL if look == "new" else ACCENT), ring))
-        painter.drawEllipse(edge)
+        if look == "new" and sweep < 1:
+            painter.setPen(QPen(QColor(LINE), ring))
+            painter.drawEllipse(edge)
+            pen = QPen(QColor(CORAL), ring)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.drawArc(edge, 90 * 16, -round(max(0.0, sweep) * 360 * 16))
+        else:
+            painter.setPen(QPen(QColor(CORAL if look == "new" else ACCENT), ring))
+            painter.drawEllipse(edge)
         gap = ring + max(1.5, size * 0.035)
         painter.setPen(QPen(QColor(LINE), 1))
         painter.drawEllipse(edge.adjusted(gap, gap, -gap, -gap))
@@ -124,16 +134,14 @@ def describe(achievement: Achievement, tally: Achievements, facts: dict[str, flo
 
 
 class Shelf(QWidget):
-    """Medallions in rows with their names under them; the one under the pointer tells more.
-    With `one_row`, only as many as fit on one line."""
+    """Medallions in rows with their names under them; the one under the pointer tells more."""
 
     CELL, ROW = 88, 90
 
-    def __init__(self, hovercard, size: int = 52, one_row: bool = False):
+    def __init__(self, hovercard, size: int = 52):
         super().__init__()
         self.hovercard = hovercard
         self.size = size
-        self.one_row = one_row
         self.items: list[Achievement] = []
         self.tally: Achievements | None = None
         self.facts: dict[str, float] = {}
@@ -150,11 +158,8 @@ class Shelf(QWidget):
     def columns(self) -> int:
         return max(1, self.width() // self.CELL)
 
-    def shown(self) -> list[Achievement]:
-        return self.items[: self.columns()] if self.one_row else self.items
-
     def _fit(self):
-        rows = 1 if self.one_row else max(1, math.ceil(len(self.items) / self.columns()))
+        rows = max(1, math.ceil(len(self.items) / self.columns()))
         if self.height() != rows * self.ROW:
             self.setFixedHeight(rows * self.ROW)
 
@@ -174,7 +179,7 @@ class Shelf(QWidget):
         font = QFont(self.font())
         font.setPixelSize(12)
         now = datetime.now()
-        for index, achievement in enumerate(self.shown()):
+        for index, achievement in enumerate(self.items):
             cell = self.cell(index)
             look = state(achievement, self.tally, now)
             top = cell.top() + 4
@@ -194,7 +199,7 @@ class Shelf(QWidget):
         columns = self.columns()
         column, row = int(x // self.CELL), int(y // self.ROW)
         index = row * columns + column
-        return index if 0 <= column < columns and 0 <= index < len(self.shown()) else -1
+        return index if 0 <= column < columns and 0 <= index < len(self.items) else -1
 
     def mouseMoveEvent(self, event):
         index = self.index_at(event.position().x(), event.position().y())
@@ -204,11 +209,159 @@ class Shelf(QWidget):
         if index < 0 or self.tally is None:
             self.hovercard.hide()
             return
-        title, body, note = describe(self.shown()[index], self.tally, self.facts)
+        title, body, note = describe(self.items[index], self.tally, self.facts)
         self.hovercard.show_at(event.globalPosition().toPoint(), title, body, note)
 
     def leaveEvent(self, event):
         self.hovered = -1
+        self.hovercard.hide()
+        self.update()
+        super().leaveEvent(event)
+
+
+class Reel(QWidget):
+    """The folded section's one line of medallions: first the latest reached, then every group,
+    a line at a time. `roll` glides to the line below or above (the wheel anywhere over the
+    section); the line leaving fades as the next one slides in."""
+
+    LABEL, CELL, ROW = 52, 88, 90
+    GLIDE = 420  # Milliseconds from one line to the next.
+
+    def __init__(self, hovercard, size: int = 52):
+        super().__init__()
+        self.hovercard = hovercard
+        self.size = size
+        self.latest: list[Achievement] = []
+        self.lines: list[tuple[str, list[Achievement]]] = []
+        self.tally: Achievements | None = None
+        self.facts: dict[str, float] = {}
+        self.line = 0  # Where it is going; `offset` is where it is, in lines.
+        self.offset = Tween(self, duration=self.GLIDE)
+        self.pending = 0  # Wheel turned by less than a notch (fine-grained wheels, touchpads).
+        self.hovered: tuple[int, int] | None = None
+        self.pointer = None
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(self.ROW)
+
+    def set_items(self, latest: list[Achievement], tally: Achievements, facts: dict[str, float]):
+        self.latest, self.tally, self.facts = latest, tally, facts
+        self._arrange()
+        self.update()
+
+    def columns(self) -> int:
+        return max(1, (self.width() - self.LABEL - 14) // self.CELL)
+
+    def _arrange(self):
+        columns = self.columns()
+        lines = [("最近", self.latest[:columns])] if self.latest else []
+        for group in GROUPS:
+            members = [a for a in ACHIEVEMENTS if a.group == group]
+            # A group too long for one line is shared out evenly: 4 and 3, not 6 and 1.
+            per_line = math.ceil(len(members) / math.ceil(len(members) / columns))
+            for start in range(0, len(members), per_line):
+                lines.append((group, members[start:start + per_line]))
+        self.lines = lines
+        if self.line >= len(lines):
+            self.line = max(0, len(lines) - 1)
+            self.offset.to(self.line, animate=False)
+
+    def resizeEvent(self, event):
+        self._arrange()
+        super().resizeEvent(event)
+
+    def roll(self, event) -> bool:
+        """Glide a line for each notch of the wheel; False past the first or the last line,
+        so the page scrolls on."""
+        delta = event.angleDelta().y()
+        if not delta:
+            return False
+        self.pending += delta
+        steps = int(self.pending / 120)
+        if not steps:
+            return True  # Part of a notch: wait for the rest.
+        self.pending -= steps * 120
+        target = max(0, min(len(self.lines) - 1, self.line - steps))
+        if target == self.line:
+            self.pending = 0
+            return False
+        self.line = target
+        self.hovercard.hide()
+        self.offset.to(float(target))
+        return True
+
+    def paintEvent(self, _event):
+        if self.tally is None:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setClipRect(self.rect())
+        name_font = QFont(self.font())
+        name_font.setPixelSize(12)
+        label_font = QFont(SERIF)
+        label_font.setPixelSize(14)
+        label_font.setWeight(QFont.Weight.Bold)
+        now = datetime.now()
+        position = self.offset.value
+        for index, (group, items) in enumerate(self.lines):
+            distance = abs(index - position)
+            if distance >= 1:
+                continue
+            top = (index - position) * self.ROW
+            painter.setOpacity((1 - distance) ** 1.5)  # Fades a little faster than it slides.
+            painter.setFont(label_font)
+            again = index > 0 and self.lines[index - 1][0] == group  # The rest of a group.
+            painter.setPen(QColor(DISABLED if again else ACCENT))
+            painter.drawText(QRectF(0, top + 4, self.LABEL, 22), Qt.AlignmentFlag.AlignVCenter, group)
+            for column, achievement in enumerate(items):
+                cell = QRectF(self.LABEL + column * self.CELL, top, self.CELL, self.ROW)
+                look = state(achievement, self.tally, now)
+                medal = QRectF(cell.center().x() - self.size / 2, cell.top() + 4, self.size, self.size)
+                if self.hovered == (index, column) and look in ("new", "reached"):
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QColor(0, 0, 0, 10))
+                    painter.drawEllipse(medal.adjusted(-3, -2, 3, 4))
+                draw_medallion(painter, medal, achievement, look)
+                painter.setFont(name_font)
+                painter.setPen(QColor(INK if look in ("new", "reached") else FAINT))
+                painter.drawText(QRectF(cell.left(), medal.bottom() + 6, cell.width(), 18),
+                                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                                 "？？？" if look == "secret" else achievement.name)
+        painter.setOpacity(1)
+        # The hairline before the next one to reach, with a short thumb on it showing where
+        # this line is among them.
+        track = QRectF(self.width() - 1.5, (self.ROW - 60) / 2, 1.5, 60)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#EEE7DB"))
+        painter.drawRect(track)
+        if len(self.lines) > 1:
+            length = max(10.0, track.height() / len(self.lines))
+            top = track.top() + (track.height() - length) * position / (len(self.lines) - 1)
+            painter.setBrush(QColor(MUTED if self.pointer is not None else DISABLED))
+            painter.drawRoundedRect(QRectF(track.left() - 0.5, top, 2.5, length), 1.2, 1.2)
+
+    def item_at(self, x: float, y: float) -> tuple[int, int] | None:
+        index = round(self.offset.value)
+        if not 0 <= index < len(self.lines) or self.offset.running():
+            return None
+        column = int((x - self.LABEL) // self.CELL)
+        items = self.lines[index][1]
+        return (index, column) if x >= self.LABEL and 0 <= column < len(items) and 0 <= y < self.ROW else None
+
+    def mouseMoveEvent(self, event):
+        self.pointer = event.globalPosition().toPoint()
+        found = self.item_at(event.position().x(), event.position().y())
+        if found != self.hovered:
+            self.hovered = found
+            self.update()
+        if found is None or self.tally is None:
+            self.hovercard.hide()
+            return
+        title, body, note = describe(self.lines[found[0]][1][found[1]], self.tally, self.facts)
+        self.hovercard.show_at(self.pointer, title, body, note)
+
+    def leaveEvent(self, event):
+        self.hovered = self.pointer = None
         self.hovercard.hide()
         self.update()
         super().leaveEvent(event)
@@ -264,8 +417,8 @@ class NextGoal(QWidget):
 
 
 class AchievementsPanel(QFrame):
-    """The 成就 section of the overview: folded to the latest few and the next one, or opened
-    to every achievement by group."""
+    """The 成就 section of the overview: folded to one line that the wheel rolls through, and
+    the next one to reach; or opened to every achievement by group."""
 
     def __init__(self, hovercard):
         super().__init__()
@@ -290,14 +443,8 @@ class AchievementsPanel(QFrame):
         row = QHBoxLayout(self.folded)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(16)
-        self.latest = Shelf(hovercard, one_row=True)
-        row.addWidget(self.latest, 1)
-        self.empty = label("说出第一句话，就能点亮第一个成就。", "statSub")
-        row.addWidget(self.empty, 1)
-        line = QFrame()
-        line.setObjectName("vline")
-        line.setFixedHeight(56)
-        row.addWidget(line, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.reel = Reel(hovercard)
+        row.addWidget(self.reel, 1)
         self.next = NextGoal()
         row.addWidget(self.next, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.folded)
@@ -335,6 +482,14 @@ class AchievementsPanel(QFrame):
         self.toggle.setText("收起" if opened else "展开全部")
         self.toggle.set_trailing(Glyph.CHEVRON_UP if opened else Glyph.CHEVRON_DOWN)
 
+    def wheelEvent(self, event):
+        """Anywhere over the folded section the wheel rolls its line; past either end, and
+        when opened, the page scrolls as usual."""
+        if self.folded.isVisible() and self.reel.roll(event):
+            event.accept()
+        else:
+            event.ignore()
+
     def refresh(self, tally: Achievements | None, stats, settings):
         enabled = tally is not None and stats is not None
         self.off.setVisible(not enabled)
@@ -346,10 +501,7 @@ class AchievementsPanel(QFrame):
             return
         facts = tally.facts(stats, settings)
         self.count.setText(f"{len(tally.reached)} / {len(ACHIEVEMENTS)}")
-        latest = tally.latest(12)
-        self.latest.set_items(latest, tally, facts)
-        self.latest.setVisible(bool(latest))
-        self.empty.setVisible(not latest)
+        self.reel.set_items(tally.latest(12), tally, facts)
         upcoming = tally.upcoming(facts)
         value, goal = tally.progress(upcoming, facts) if upcoming else (0, 0)
         self.next.set_goal(upcoming, value, goal)
@@ -358,19 +510,36 @@ class AchievementsPanel(QFrame):
         self.set_open(self.opened)
 
 
+def smooth(t: float) -> float:
+    """Slow at both ends: a fade that neither snaps on nor drops away."""
+    return t * t * (3 - 2 * t)
+
+
 class AchievementToast(Floating):
     """A card at the bottom right of the screen, one achievement at a time, for a few seconds.
-    It waits while `ready()` says no (recording), and never takes the focus. Clicked, it opens
-    the 成就 section."""
+    It glides in from the screen's right edge while it fades in and settles; then its coral
+    ring draws itself round and the medallion gives a small spring. It leaves by fading slowly
+    as it drifts a little back to the right; the pointer over it brings it back. It waits
+    while `ready()` says no (recording), and never takes the focus. Clicked, it opens the 成就
+    section."""
 
     clicked = Signal()
     WIDTH, MARGIN, SECONDS = 420, 14, 4.5
+    SLIDE, DRIFT = 56, 14  # How far it comes in from, and how far it drifts as it goes.
 
     def __init__(self):
         super().__init__()
         self.queue: list[tuple[str, str, str, Achievement]] = []
         self.current: tuple[str, str, str, Achievement] | None = None
         self.ready = lambda: True
+        self.leaving = False
+        self.drift = self.SLIDE
+        self.presence = Tween(self, on_change=self._presence)  # 0 gone, 1 in place.
+        self.ring = Tween(self)  # The coral ring, drawn round from 0 to 1.
+        self.pop = Tween(self, value=1.0)  # The medallion's scale.
+        self.flourish = QTimer(self)
+        self.flourish.setSingleShot(True)
+        self.flourish.timeout.connect(self._flourish)
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.vanish)
@@ -378,6 +547,36 @@ class AchievementToast(Floating):
         self.waiting.setSingleShot(True)
         self.waiting.timeout.connect(self._next)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def appear(self):
+        self.leaving = False
+        self.setWindowOpacity(1.0)
+        if not self.isVisible():
+            self.drift = self.SLIDE
+            self.presence.to(0.0, animate=False)
+            self.ring.to(0.0, animate=False)
+            self.pop.to(0.84, animate=False)
+            self.show()
+            self.flourish.start(220)
+        self.presence.to(1.0, 720, lambda t: spring(t, 0.85))
+
+    def _flourish(self):
+        self.ring.to(1.0, 760)
+        self.pop.to(1.0, 700, lambda t: spring(t, 0.5))
+
+    def vanish(self, duration: int = 1100):
+        if not self.isVisible():
+            return
+        if self.presence.value >= 0.999:
+            self.drift = self.DRIFT  # From rest it only drifts; cut short on the way in, it goes back.
+        self.leaving = True
+        self.presence.to(0.0, duration, smooth)
+
+    def _presence(self):
+        if self.leaving and self.presence.value <= 0.001 and self.isVisible():
+            self.hide()
+        else:
+            self.update()
 
     def push(self, achievement: Achievement):
         self.queue.append(("达成成就", achievement.name, achievement.comment, achievement))
@@ -398,9 +597,10 @@ class AchievementToast(Floating):
             self.waiting.start(1500)
             return
         self.current = self.queue.pop(0)
-        self.resize(self.WIDTH + 2 * self.MARGIN, self._card_height() + 2 * self.MARGIN)
+        # Room on the right to come in from, which lies past the screen's edge.
+        self.resize(self.WIDTH + 2 * self.MARGIN + self.SLIDE, self._card_height() + 2 * self.MARGIN)
         screen = QGuiApplication.primaryScreen().availableGeometry()
-        self.move(screen.right() - self.width() - 8, screen.bottom() - self.height() - 8)
+        self.move(screen.right() - self.WIDTH - 2 * self.MARGIN - 6, screen.bottom() - self.height() - 6)
         self.update()
         self.appear()
         self.timer.start(int(self.SECONDS * 1000))
@@ -430,7 +630,13 @@ class AchievementToast(Floating):
         caption_text, title_text, comment, achievement = self.current
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        card = QRectF(self.rect()).adjusted(self.MARGIN, self.MARGIN - 4, -self.MARGIN, -self.MARGIN - 4)
+        shown = self.presence.value
+        if self.leaving:
+            painter.setOpacity(max(0.0, min(1.0, shown)))
+        else:
+            painter.setOpacity(max(0.0, min(1.0, shown * 1.4)))  # Opaque before it settles.
+        card = QRectF(self.MARGIN, self.MARGIN - 4, self.WIDTH, self.height() - 2 * self.MARGIN)
+        card.translate((1 - shown) * self.drift, 0)
         for step in range(6):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(20, 24, 50, 9 - step))
@@ -438,7 +644,10 @@ class AchievementToast(Floating):
         painter.setBrush(QColor(SHEET))
         painter.setPen(QPen(QColor(LINE), 1))
         painter.drawRoundedRect(card, 14, 14)
-        draw_medallion(painter, QRectF(card.left() + 16, card.center().y() - 28, 56, 56), achievement, "new")
+        medal = 56 * self.pop.value
+        center = QPointF(card.left() + 16 + 28, card.center().y())
+        draw_medallion(painter, QRectF(center.x() - medal / 2, center.y() - medal / 2, medal, medal), achievement,
+                       "new", self.ring.value)
         caption, title, body = self.fonts()
         left = card.left() + 16 + 56 + 14
         top = card.top() + 14
@@ -459,11 +668,14 @@ class AchievementToast(Floating):
         QTimer.singleShot(400, self._next)
 
     def enterEvent(self, event):
-        self.timer.stop()  # Being read: stay.
+        self.timer.stop()  # Being read: stay, and come back if it was going.
+        if self.leaving and self.isVisible():
+            self.leaving = False
+            self.presence.to(1.0, 320)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        if self.isVisible():
+        if self.isVisible() and not self.leaving:
             self.timer.start(1800)
         super().leaveEvent(event)
 
@@ -471,4 +683,4 @@ class AchievementToast(Floating):
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
             self.queue.clear()
-            self.vanish()
+            self.vanish(380)
