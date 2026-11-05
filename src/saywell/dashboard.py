@@ -457,8 +457,11 @@ class Overview(QWidget):
         actions.addStretch()
         actions.addWidget(compare)
         latest_layout.addLayout(actions)
-        latest_layout.addStretch(1)  # Beside the taller API column, the room is left below.
-        left.addWidget(latest, 1)
+        left.addWidget(latest)
+        # Achievements, folded, under the latest result and beside the API column; opened, the
+        # full list takes the whole width below them.
+        self.achievements = AchievementsPanel(self.hovercard)
+        left.addWidget(self.achievements, 1)
 
         row.addLayout(left, 3)
 
@@ -498,8 +501,7 @@ class Overview(QWidget):
         usage_layout.addWidget(label("最近 14 天每天的 tokens", "statSub"))
         row.addWidget(usage, 2)
         layout.addLayout(row)
-        self.achievements = AchievementsPanel(self.hovercard)
-        layout.addWidget(self.achievements)
+        layout.addWidget(self.achievements.grid)
         self.set_latest("", "")
 
     def hideEvent(self, event):

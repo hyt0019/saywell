@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QImage, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from .achievements import ACHIEVEMENTS, GROUPS, Achievement, Achievements
 from .translation_ui import Floating
@@ -221,10 +221,14 @@ class Shelf(QWidget):
 
 class Reel(QWidget):
     """The folded section's one line of medallions: first the latest reached, then every group,
-    a line at a time. `roll` glides to the line below or above (the wheel anywhere over the
-    section); the line leaving fades as the next one slides in."""
+    a line at a time. The wheel over it glides to the line below or above; the line leaving
+    fades as the next one slides in.
 
-    LABEL, CELL, ROW = 52, 88, 90
+    It only takes the wheel once the pointer has moved over it (`armed`): while the page is
+    being scrolled the line passes under a still pointer, and the page keeps scrolling. Past
+    the first or the last line the wheel goes back to the page too."""
+
+    LABEL, CELL, ROW = 52, 78, 90  # CELL is the least room for one; they share out the rest.
     GLIDE = 420  # Milliseconds from one line to the next.
 
     def __init__(self, hovercard, size: int = 52):
@@ -240,9 +244,28 @@ class Reel(QWidget):
         self.pending = 0  # Wheel turned by less than a notch (fine-grained wheels, touchpads).
         self.hovered: tuple[int, int] | None = None
         self.pointer = None
+        self.armed = False
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(self.ROW)
+
+    def disarm(self, *_):
+        """The page scrolled: the wheel stays with it until the pointer moves over the line."""
+        self.armed = False
+        self.update()
+
+    def notice(self, point) -> None:
+        """The pointer over the line, at `point` on the screen: moved there, not scrolled there."""
+        if self.pointer is not None and point != self.pointer and not self.armed:
+            self.armed = True
+            self.update()
+        self.pointer = point
+
+    def wheelEvent(self, event):
+        if self.armed and self.roll(event):
+            event.accept()
+        else:
+            event.ignore()
 
     def set_items(self, latest: list[Achievement], tally: Achievements, facts: dict[str, float]):
         self.latest, self.tally, self.facts = latest, tally, facts
@@ -251,6 +274,9 @@ class Reel(QWidget):
 
     def columns(self) -> int:
         return max(1, (self.width() - self.LABEL - 14) // self.CELL)
+
+    def cell_width(self) -> float:
+        return (self.width() - self.LABEL - 14) / self.columns()
 
     def _arrange(self):
         columns = self.columns()
@@ -314,7 +340,7 @@ class Reel(QWidget):
             painter.setPen(QColor(DISABLED if again else ACCENT))
             painter.drawText(QRectF(0, top + 4, self.LABEL, 22), Qt.AlignmentFlag.AlignVCenter, group)
             for column, achievement in enumerate(items):
-                cell = QRectF(self.LABEL + column * self.CELL, top, self.CELL, self.ROW)
+                cell = QRectF(self.LABEL + column * self.cell_width(), top, self.cell_width(), self.ROW)
                 look = state(achievement, self.tally, now)
                 medal = QRectF(cell.center().x() - self.size / 2, cell.top() + 4, self.size, self.size)
                 if self.hovered == (index, column) and look in ("new", "reached"):
@@ -328,8 +354,7 @@ class Reel(QWidget):
                                  Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
                                  "？？？" if look == "secret" else achievement.name)
         painter.setOpacity(1)
-        # The hairline before the next one to reach, with a short thumb on it showing where
-        # this line is among them.
+        # A hairline at the right with a short thumb on it: where this line is among them.
         track = QRectF(self.width() - 1.5, (self.ROW - 60) / 2, 1.5, 60)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#EEE7DB"))
@@ -337,19 +362,19 @@ class Reel(QWidget):
         if len(self.lines) > 1:
             length = max(10.0, track.height() / len(self.lines))
             top = track.top() + (track.height() - length) * position / (len(self.lines) - 1)
-            painter.setBrush(QColor(MUTED if self.pointer is not None else DISABLED))
+            painter.setBrush(QColor(MUTED if self.armed else DISABLED))
             painter.drawRoundedRect(QRectF(track.left() - 0.5, top, 2.5, length), 1.2, 1.2)
 
     def item_at(self, x: float, y: float) -> tuple[int, int] | None:
         index = round(self.offset.value)
         if not 0 <= index < len(self.lines) or self.offset.running():
             return None
-        column = int((x - self.LABEL) // self.CELL)
+        column = int((x - self.LABEL) // self.cell_width())
         items = self.lines[index][1]
         return (index, column) if x >= self.LABEL and 0 <= column < len(items) and 0 <= y < self.ROW else None
 
     def mouseMoveEvent(self, event):
-        self.pointer = event.globalPosition().toPoint()
+        self.notice(event.globalPosition().toPoint())
         found = self.item_at(event.position().x(), event.position().y())
         if found != self.hovered:
             self.hovered = found
@@ -362,22 +387,31 @@ class Reel(QWidget):
 
     def leaveEvent(self, event):
         self.hovered = self.pointer = None
+        self.armed = False
         self.hovercard.hide()
         self.update()
         super().leaveEvent(event)
 
 
 class NextGoal(QWidget):
-    """The visible achievement closest to being reached, and how far there is to go."""
+    """One line under the folded achievements: the visible one closest to being reached, a
+    progress bar, and how far there is to go."""
 
-    def __init__(self):
+    def __init__(self, hovercard):
         super().__init__()
+        self.hovercard = hovercard
         self.achievement: Achievement | None = None
         self.value = self.goal = 0.0
-        self.setFixedSize(300, 76)
+        self.tally: Achievements | None = None
+        self.facts: dict[str, float] = {}
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(32)
 
-    def set_goal(self, achievement: Achievement | None, value: float, goal: float):
+    def set_goal(self, achievement: Achievement | None, value: float, goal: float,
+                 tally: Achievements | None = None, facts: dict[str, float] | None = None):
         self.achievement, self.value, self.goal = achievement, value, goal
+        self.tally, self.facts = tally, facts or {}
         self.update()
 
     def paintEvent(self, _event):
@@ -385,23 +419,32 @@ class NextGoal(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         small = QFont(self.font())
         small.setPixelSize(12)
+        middle = self.height() / 2
         if self.achievement is None:
             painter.setFont(small)
             painter.setPen(QColor(FAINT))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignVCenter, "看得见的成就都达成了，还有几个藏着。")
             return
-        draw_medallion(painter, QRectF(0, 10, 52, 52), self.achievement, "locked")
-        left = 68
+        draw_medallion(painter, QRectF(0, middle - 13, 26, 26), self.achievement, "locked")
         painter.setFont(small)
         painter.setPen(QColor(FAINT))
-        painter.drawText(QRectF(left, 4, 200, 16), Qt.AlignmentFlag.AlignVCenter, "下一个")
+        x = 36.0
+        painter.drawText(QRectF(x, 0, 60, self.height()), Qt.AlignmentFlag.AlignVCenter, "下一个")
+        x += QFontMetrics(small).horizontalAdvance("下一个") + 8
         title = QFont(SERIF)
-        title.setPixelSize(16)
+        title.setPixelSize(14)
         title.setWeight(QFont.Weight.Bold)
         painter.setFont(title)
         painter.setPen(QColor(ACCENT))
-        painter.drawText(QRectF(left, 20, 220, 22), Qt.AlignmentFlag.AlignVCenter, self.achievement.name)
-        track = QRectF(left, 48, self.width() - left - 8, 4)
+        painter.drawText(QRectF(x, 0, 200, self.height()), Qt.AlignmentFlag.AlignVCenter, self.achievement.name)
+        x += QFontMetrics(title).horizontalAdvance(self.achievement.name) + 14
+        missing = f"还差 {amount(self.goal - self.value, self.achievement.unit)}"
+        room = QFontMetrics(small).horizontalAdvance(missing)
+        painter.setFont(small)
+        painter.setPen(QColor(FAINT))
+        painter.drawText(QRectF(self.width() - room - 2, 0, room + 2, self.height()),
+                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, missing)
+        track = QRectF(x, middle - 2, max(24.0, self.width() - room - 16 - x), 4)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#EFE9DE"))
         painter.drawRoundedRect(track, 2, 2)
@@ -409,24 +452,30 @@ class NextGoal(QWidget):
         if share > 0:
             painter.setBrush(QColor(ACCENT))
             painter.drawRoundedRect(QRectF(track.left(), track.top(), max(4.0, track.width() * share), 4), 2, 2)
-        painter.setFont(small)
-        painter.setPen(QColor(FAINT))
-        missing = f"还差 {amount(self.goal - self.value, self.achievement.unit)} · {self.achievement.condition}"
-        painter.drawText(QRectF(left, 56, self.width() - left, 18), Qt.AlignmentFlag.AlignVCenter,
-                         QFontMetrics(small).elidedText(missing, Qt.TextElideMode.ElideRight, self.width() - left))
+
+    def mouseMoveEvent(self, event):
+        if self.achievement is None or self.tally is None:
+            return
+        title, body, note = describe(self.achievement, self.tally, self.facts)
+        self.hovercard.show_at(event.globalPosition().toPoint(), title, body, note)
+
+    def leaveEvent(self, event):
+        self.hovercard.hide()
+        super().leaveEvent(event)
 
 
 class AchievementsPanel(QFrame):
-    """The 成就 section of the overview: folded to one line that the wheel rolls through, and
-    the next one to reach; or opened to every achievement by group."""
+    """The 成就 section of the overview, under the latest result: one line that the wheel
+    rolls through and the next one to reach. 展开全部 opens `grid`, every achievement by
+    group, which the overview places across the whole width below."""
 
     def __init__(self, hovercard):
         super().__init__()
         self.setObjectName("panel")
         self.opened = False
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 20, 28, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(28, 20, 28, 14)
+        layout.setSpacing(10)
         head = QHBoxLayout()
         head.setSpacing(10)
         head.addWidget(label("成就", "panelTitle"))
@@ -435,24 +484,35 @@ class AchievementsPanel(QFrame):
         head.addStretch()
         self.toggle = make_button("展开全部", None, "link")
         self.toggle.set_trailing(Glyph.CHEVRON_DOWN)
-        self.toggle.clicked.connect(lambda: self.set_open(not self.opened))
+        self.toggle.clicked.connect(lambda: self.set_open(not self.opened, reveal=True))
         head.addWidget(self.toggle)
         layout.addLayout(head)
-
-        self.folded = QWidget()
-        row = QHBoxLayout(self.folded)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(16)
         self.reel = Reel(hovercard)
-        row.addWidget(self.reel, 1)
-        self.next = NextGoal()
-        row.addWidget(self.next, 0, Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(self.folded)
+        layout.addWidget(self.reel)
+        self.next = NextGoal(hovercard)
+        layout.addWidget(self.next)
+        self.off = label("使用统计已关闭，成就也随之暂停。可在设置中开启。", "statSub")
+        self.off.hide()
+        layout.addWidget(self.off)
+        layout.addStretch(1)  # Beside a taller API column, the room is left below.
 
-        self.all = QWidget()
-        groups = QVBoxLayout(self.all)
-        groups.setContentsMargins(0, 0, 0, 0)
+        self.grid = QFrame()
+        self.grid.setObjectName("panel")
+        groups = QVBoxLayout(self.grid)
+        groups.setContentsMargins(28, 20, 28, 10)
         groups.setSpacing(0)
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        top.addWidget(label("全部成就", "panelTitle"))
+        self.grid_count = label("", "panelMeta")
+        top.addWidget(self.grid_count)
+        top.addStretch()
+        fold = make_button("收起", None, "link")
+        fold.set_trailing(Glyph.CHEVRON_UP)
+        fold.clicked.connect(lambda: self.set_open(False))
+        top.addWidget(fold)
+        groups.addLayout(top)
+        groups.addSpacing(6)
         self.shelves: list[Shelf] = []
         for index, group in enumerate(GROUPS):
             if index:
@@ -469,42 +529,42 @@ class AchievementsPanel(QFrame):
             self.shelves.append(shelf)
             line.addWidget(shelf, 1)
             groups.addLayout(line)
-        self.all.hide()
-        layout.addWidget(self.all)
-        self.off = label("使用统计已关闭，成就也随之暂停。可在设置中开启。", "statSub")
-        self.off.hide()
-        layout.addWidget(self.off)
+        self.grid.hide()
 
-    def set_open(self, opened: bool):
+    def set_open(self, opened: bool, reveal: bool = False):
         self.opened = opened
-        self.all.setVisible(opened)
-        self.folded.setVisible(not opened and not self.off.isVisible())
-        self.toggle.setText("收起" if opened else "展开全部")
+        self.grid.setVisible(opened and not self.off.isVisible())
+        self.toggle.setText("收起全部" if opened else "展开全部")
         self.toggle.set_trailing(Glyph.CHEVRON_UP if opened else Glyph.CHEVRON_DOWN)
+        if opened and reveal:
+            QTimer.singleShot(60, self.reveal_grid)
 
-    def wheelEvent(self, event):
-        """Anywhere over the folded section the wheel rolls its line; past either end, and
-        when opened, the page scrolls as usual."""
-        if self.folded.isVisible() and self.reel.roll(event):
-            event.accept()
-        else:
-            event.ignore()
+    def reveal_grid(self):
+        """Scroll the page so the opened list can be seen."""
+        holder = self.parentWidget()
+        while holder is not None and not isinstance(holder, QScrollArea):
+            holder = holder.parentWidget()
+        if holder is not None and self.grid.isVisible():
+            holder.ensureWidgetVisible(self.grid, 0, 40)
 
     def refresh(self, tally: Achievements | None, stats, settings):
         enabled = tally is not None and stats is not None
         self.off.setVisible(not enabled)
         self.toggle.setVisible(enabled)
+        self.reel.setVisible(enabled)
+        self.next.setVisible(enabled)
         if not enabled:
             self.count.setText("")
-            self.folded.hide()
-            self.all.hide()
+            self.grid.hide()
             return
         facts = tally.facts(stats, settings)
-        self.count.setText(f"{len(tally.reached)} / {len(ACHIEVEMENTS)}")
+        count = f"{len(tally.reached)} / {len(ACHIEVEMENTS)}"
+        self.count.setText(count)
+        self.grid_count.setText(count)
         self.reel.set_items(tally.latest(12), tally, facts)
         upcoming = tally.upcoming(facts)
         value, goal = tally.progress(upcoming, facts) if upcoming else (0, 0)
-        self.next.set_goal(upcoming, value, goal)
+        self.next.set_goal(upcoming, value, goal, tally, facts)
         for shelf, group in zip(self.shelves, GROUPS, strict=True):
             shelf.set_items([a for a in ACHIEVEMENTS if a.group == group], tally, facts)
         self.set_open(self.opened)

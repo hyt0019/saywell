@@ -110,9 +110,9 @@ def test_overview_shows_totals_heatmap_and_achievements(qt_app, tmp_path):
     group, latest = panel.reel.lines[0]
     assert group == "最近" and [a.name for a in latest] == ["千言", "开口"]  # Newest first.
     assert panel.reel.lines[1][0] == "字数"
-    assert panel.next.achievement.name == "三日不辍" and not panel.all.isVisibleTo(view)  # 2 of 3 days.
+    assert panel.next.achievement.name == "三日不辍" and not panel.grid.isVisibleTo(view)  # 2 of 3 days.
     panel.set_open(True)
-    assert panel.all.isVisibleTo(view) and panel.toggle.text() == "收起"
+    assert panel.grid.isVisibleTo(view) and panel.toggle.text() == "收起全部"
     panel.refresh(None, store, Settings())
     assert panel.off.isVisibleTo(view) and not panel.toggle.isVisibleTo(view)
     assert view.heatmap.day_at(*cell_center(view.heatmap, today)) == today

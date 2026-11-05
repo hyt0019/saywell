@@ -384,7 +384,7 @@ class MainWindow(QMainWindow):
         self.overview.copy_latest.connect(lambda: self.copy_text(True))
         self.overview.insert_latest.connect(self.schedule_manual_insert)
         self.overview.refresh_balance.connect(lambda: self.update_balance(force=True))
-        scroll = self.overview_scroll = QScrollArea()
+        scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -392,6 +392,7 @@ class MainWindow(QMainWindow):
         holder_layout = QVBoxLayout(holder)
         holder_layout.setContentsMargins(0, 0, 6, 4)
         holder_layout.addWidget(self.overview)
+        scroll.verticalScrollBar().valueChanged.connect(self.overview.achievements.reel.disarm)
         holder_layout.addStretch()
         scroll.setWidget(holder)
         self.pages.addWidget(scroll)
@@ -801,8 +802,7 @@ class MainWindow(QMainWindow):
         """From the card at the bottom right: the 成就 section, opened."""
         self.reveal()
         self.show_page(0)
-        self.overview.achievements.set_open(True)
-        QTimer.singleShot(80, lambda: self.overview_scroll.ensureWidgetVisible(self.overview.achievements, 0, 0))
+        self.overview.achievements.set_open(True, reveal=True)
 
     def record_minutes_usage(self, usage: dict):
         """Meeting minutes count as one API request in the statistics."""

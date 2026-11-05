@@ -303,3 +303,39 @@ def test_the_card_glides_in_draws_its_ring_and_fades_out_slowly(qt_app):
     settle(0.5)
     assert not toast.isVisible()
     toast.close()
+
+
+def test_the_line_takes_the_wheel_only_once_the_pointer_moved_over_it(qt_app):
+    from PySide6.QtCore import QPoint
+
+    from saywell.achievements_ui import Reel
+    from saywell.dashboard import HoverCard
+
+    class Event:
+        def __init__(self, delta):
+            self.delta, self.accepted = delta, None
+
+        def angleDelta(self):
+            return QPoint(0, self.delta)
+
+        def accept(self):
+            self.accepted = True
+
+        def ignore(self):
+            self.accepted = False
+
+    reel = Reel(HoverCard())
+    reel.lines = [("最近", []), ("字数", []), ("坚持", [])]
+    wheel = Event(-120)
+    reel.notice(QPoint(10, 10))  # The page scrolled the line under a still pointer.
+    reel.notice(QPoint(10, 10))
+    reel.wheelEvent(wheel)
+    assert wheel.accepted is False and reel.line == 0  # The page goes on scrolling.
+    reel.notice(QPoint(14, 11))  # Moved over it.
+    wheel = Event(-120)
+    reel.wheelEvent(wheel)
+    assert wheel.accepted and reel.line == 1
+    reel.disarm()  # The page scrolled again.
+    wheel = Event(-120)
+    reel.wheelEvent(wheel)
+    assert wheel.accepted is False and reel.line == 1
