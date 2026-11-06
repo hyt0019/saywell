@@ -73,6 +73,7 @@ from .ui import (
     hrule,
     label,
     load_fonts,
+    load_translations,
     make_button,
     pill_text,
     run_task,
@@ -1638,6 +1639,8 @@ def main() -> int:
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Saywell")
     app.setOrganizationName("Saywell")
+    if not load_translations() and args.smoke:
+        raise RuntimeError("Qt's Chinese translations are missing from this build.")
     load_fonts()
     app.setStyleSheet(STYLE)
     app.setWindowIcon(app_icon())
@@ -1645,7 +1648,7 @@ def main() -> int:
     lock = QLockFile(str(data_dir() / "application.lock"))
     lock.setStaleLockTime(0)
     if not args.smoke and not lock.tryLock(100):
-        QMessageBox.information(None, "好好说", "程序已在运行，请点击系统托盘中的麦克风图标。")
+        QMessageBox.information(None, "好好说", "程序已在运行，请点击屏幕右下角托盘里的燕子图标。")
         return 0
     if not args.smoke:
         migrate_legacy_entry()

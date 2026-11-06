@@ -11,8 +11,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PySide6.QtCore import (
+    QCoreApplication,
     QEasingCurve,
     QEvent,
+    QLibraryInfo,
     QObject,
     QPointF,
     QPropertyAnimation,
@@ -20,6 +22,7 @@ from PySide6.QtCore import (
     QSize,
     Qt,
     QTimer,
+    QTranslator,
     QUrl,
     QVariantAnimation,
     Signal,
@@ -990,6 +993,32 @@ def load_fonts() -> None:
     if not _fonts_loaded:
         QFontDatabase.addApplicationFont(str(ASSETS / "fonts" / "SaywellSerif-Bold.ttf"))
         _fonts_loaded.append(True)
+
+
+_translators: list[QTranslator] = []
+
+
+def load_translations() -> bool:
+    """Qt's own words (the right-click menu's 复制/粘贴, standard buttons) in Chinese.
+
+    PySide6 ships the translations; PyInstaller keeps them under PySide6/translations."""
+    if _translators:
+        return True
+    import PySide6
+
+    folders = (
+        QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath),
+        str(Path(PySide6.__file__).parent / "translations"),
+    )
+    for folder in folders:
+        translator = QTranslator()
+        if translator.load("qtbase_zh_CN", folder):
+            QCoreApplication.installTranslator(translator)
+            _translators.append(translator)
+            return True
+    return False
+
+
 _icons: dict[str, QIcon] = {}
 
 
