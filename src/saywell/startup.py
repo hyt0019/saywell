@@ -1,7 +1,8 @@
-"""Manage this app's current-user Windows login entry."""
+"""Manage this app's current-user Windows login entry and its identity in Windows."""
 
 from __future__ import annotations
 
+import ctypes
 import subprocess
 import sys
 import winreg
@@ -13,6 +14,11 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 VALUE_NAME = "Saywell"
 # The entry name used before the app was called Saywell.
 LEGACY_VALUE_NAME = "BetterVoiceInput"
+# Windows shows the tray's notices under the app's identity. Without one it goes by the exe's path:
+# the notice is headed "Saywell.exe", with whatever icon Windows cached for that path, which may be
+# an older build's. The installer gives its shortcuts the same ID and removes the key on uninstall.
+APP_ID = "hyt0019.Saywell"
+APP_ID_KEY = rf"Software\Classes\AppUserModelId\{APP_ID}"
 
 
 class StartupError(OSError):
@@ -73,6 +79,21 @@ def migrate_legacy_entry() -> None:
         write_entry(None, LEGACY_VALUE_NAME)
     except StartupError:
         pass  # Settings still show the real state; the user can toggle it again.
+
+
+def register_identity(icon: Path) -> bool:
+    """Head this process's notices 好好说, with the swallow beside the name.
+
+    Must run before the first window: the taskbar groups windows by this ID too."""
+    try:
+        if ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID) != 0:
+            return False
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, APP_ID_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "好好说")
+            winreg.SetValueEx(key, "IconUri", 0, winreg.REG_SZ, str(icon))
+    except (OSError, AttributeError):
+        return False
+    return True
 
 
 def save_settings_with_startup(settings: Settings, path: Path | None = None) -> None:

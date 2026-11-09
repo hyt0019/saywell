@@ -759,3 +759,16 @@ def test_the_two_languages_translate_into_each_other_and_can_be_swapped(window):
     dialog.save()
     assert (dialog.updated.selection_native, dialog.updated.selection_foreign) == ("英语", "日语")
     dialog.close()
+
+
+def test_tray_notices_show_the_swallow_and_warnings_keep_the_warning_sign(window, monkeypatch):
+    from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QSystemTrayIcon
+
+    shown = []
+    monkeypatch.setattr(window.tray, "showMessage", lambda *args: shown.append(args))
+    window.notify("好好说仍在运行", "右键托盘图标可退出。", 2500)
+    window.notify("好好说", "连不上更新服务器。", 4000, warning=True)
+    (title, text, icon, milliseconds), warning = shown
+    assert (title, milliseconds) == ("好好说仍在运行", 2500) and isinstance(icon, QIcon) and not icon.isNull()
+    assert warning == ("好好说", "连不上更新服务器。", QSystemTrayIcon.MessageIcon.Warning, 4000)

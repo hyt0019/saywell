@@ -48,11 +48,18 @@ from .pipeline import Events, ModelDownloads, Pipeline
 from .session import SessionGate
 from .settings import Settings, data_dir, read_key
 from .shortcuts import DEFAULT_HOTKEY, INSERT_HOTKEY, SOLO_HOLD_MS, SOLO_TAP_MS, parse_shortcut, shortcut_label
-from .startup import StartupError, migrate_legacy_entry, save_settings_with_startup, startup_enabled
+from .startup import (
+    StartupError,
+    migrate_legacy_entry,
+    register_identity,
+    save_settings_with_startup,
+    startup_enabled,
+)
 from .stats import StatsStore
 from .translate_page import TranslatePage
 from .ui import (
     ACCENT,
+    ASSETS,
     RECORD,
     STYLE,
     Glyph,
@@ -584,16 +591,14 @@ class MainWindow(QMainWindow):
             if isinstance(value, Release):
                 self.offer_release(value, manual)
             elif manual and self.native:
-                self.tray.showMessage("好好说", value.message, QSystemTrayIcon.MessageIcon.Warning, 4000)
+                self.notify("好好说", value.message, 4000, warning=True)
 
         run_task(self, work, done)
 
     def offer_release(self, release: Release, manual: bool = False):
         if not is_newer(release.version):
             if manual and self.native:
-                self.tray.showMessage(
-                    "好好说", f"已是最新版本（{__version__}）。", QSystemTrayIcon.MessageIcon.Information, 3000
-                )
+                self.notify("好好说", f"已是最新版本（{__version__}）。")
             return
         self.release = release
         if not self.updating:
@@ -607,12 +612,7 @@ class MainWindow(QMainWindow):
         if manual and self.native and not QApplication.activeModalWidget():
             self.reveal()
         elif self.native and not self.isVisible():
-            self.tray.showMessage(
-                f"好好说 {release.version} 已发布",
-                f"{release.notes}打开主窗口看看新内容。",
-                QSystemTrayIcon.MessageIcon.Information,
-                6000,
-            )
+            self.notify(f"好好说 {release.version} 已发布", f"{release.notes}打开主窗口看看新内容。", 6000)
         self.announce_soon()
 
     def note_version(self):
@@ -1362,9 +1362,7 @@ class MainWindow(QMainWindow):
         else:
             self.stats.setText(f"{model.name} 已{verb}，可在“语音模型”中切换使用。")
         if not self.isVisible() and self.native:
-            self.tray.showMessage(
-                "好好说", f"{model.name} 已{verb}完成。", QSystemTrayIcon.MessageIcon.Information, 3000
-            )
+            self.notify("好好说", f"{model.name} 已{verb}完成。")
         self.refresh_controls()
 
     def on_download_failed(self, model_id: str, message: str):
@@ -1547,15 +1545,17 @@ class MainWindow(QMainWindow):
         clear_button.clicked.connect(clear_history)
         dialog.exec()
 
+    def notify(self, title: str, text: str, milliseconds: int = 3000, warning: bool = False):
+        """A tray notice with the swallow beside it; a warning keeps Windows' warning sign."""
+        if warning:
+            self.tray.showMessage(title, text, QSystemTrayIcon.MessageIcon.Warning, milliseconds)
+        else:
+            self.tray.showMessage(title, text, app_icon(), milliseconds)
+
     def closeEvent(self, event):
         if self.native and not self.quitting and QSystemTrayIcon.isSystemTrayAvailable():
             self.hide()
-            self.tray.showMessage(
-                "好好说仍在运行",
-                f"使用 {shortcut_label(self.settings.hotkey)} 录音；右键托盘图标可退出。",
-                QSystemTrayIcon.MessageIcon.Information,
-                2500,
-            )
+            self.notify("好好说仍在运行", f"使用 {shortcut_label(self.settings.hotkey)} 录音；右键托盘图标可退出。", 2500)
             event.ignore()
         else:
             self.shutdown()
@@ -1636,6 +1636,8 @@ def main() -> int:
         # What is new after an update comes from the release notes bundled with the program.
         if not shipped_notes()[0]:
             raise RuntimeError("This version's release notes are missing from this build.")
+    if not args.smoke:
+        register_identity(ASSETS / "icon.png")
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Saywell")
     app.setOrganizationName("Saywell")

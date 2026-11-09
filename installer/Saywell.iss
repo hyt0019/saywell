@@ -60,8 +60,14 @@ Type: files; Name: "{autodesktop}\好好说.lnk"
 Source: "..\dist\Saywell\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+; The same ID the program gives itself (startup.APP_ID), so a pinned shortcut and the running
+; program share one taskbar button.
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "hyt0019.Saywell"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "hyt0019.Saywell"; Tasks: desktopicon
+
+[Registry]
+; The program writes the name and icon its notices show here (startup.register_identity).
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\hyt0019.Saywell"; Flags: uninsdeletekey
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent

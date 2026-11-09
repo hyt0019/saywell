@@ -133,3 +133,64 @@ def test_old_or_invalid_preferences_keep_startup_off(tmp_path):
     assert not Settings.load(path).start_on_login
     path.write_text(json.dumps({"start_on_login": "true"}), encoding="utf-8")
     assert not Settings.load(path).start_on_login
+
+
+@pytest.fixture
+def identity(monkeypatch):
+    """A fake registry key for the app's ID and a fake shell that records the process ID."""
+    written, ids, result = {}, [], {"hr": 0}
+    real = startup.winreg
+
+    class Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+    def create_key(root, path, reserved, access):
+        assert root == real.HKEY_CURRENT_USER and path == rf"Software\Classes\AppUserModelId\{startup.APP_ID}"
+        return Key()
+
+    fake = SimpleNamespace(
+        HKEY_CURRENT_USER=real.HKEY_CURRENT_USER,
+        KEY_SET_VALUE=real.KEY_SET_VALUE,
+        REG_SZ=real.REG_SZ,
+        CreateKeyEx=create_key,
+        SetValueEx=lambda key, name, reserved, kind, value: written.update({name: (value, kind)}),
+    )
+    shell = SimpleNamespace(SetCurrentProcessExplicitAppUserModelID=lambda app_id: ids.append(app_id) or result["hr"])
+    monkeypatch.setattr(startup, "winreg", fake)
+    monkeypatch.setattr(startup.ctypes, "windll", SimpleNamespace(shell32=shell), raising=False)
+    return SimpleNamespace(written=written, ids=ids, result=result)
+
+
+def test_notices_are_headed_with_the_app_name_and_the_swallow(identity, tmp_path):
+    icon = tmp_path / "icon.png"
+    assert startup.register_identity(icon)
+    assert identity.ids == [startup.APP_ID]
+    assert identity.written == {
+        "DisplayName": ("好好说", startup.winreg.REG_SZ),
+        "IconUri": (str(icon), startup.winreg.REG_SZ),
+    }
+
+
+def test_a_refused_identity_writes_nothing(identity, tmp_path, monkeypatch):
+    identity.result["hr"] = -2147467259  # E_FAIL
+    assert not startup.register_identity(tmp_path / "icon.png")
+    assert identity.written == {}
+    identity.result["hr"] = 0
+
+    def deny(*_):
+        raise PermissionError
+
+    monkeypatch.setattr(startup.winreg, "CreateKeyEx", deny)
+    assert not startup.register_identity(tmp_path / "icon.png")  # Notices then go by the exe; no crash.
+
+
+def test_the_installer_shortcuts_carry_the_same_id_and_uninstall_removes_its_key():
+    from pathlib import Path
+
+    script = (Path(__file__).parents[1] / "installer" / "Saywell.iss").read_text(encoding="utf-8")
+    assert script.count(f'AppUserModelID: "{startup.APP_ID}"') == 2
+    assert f'Subkey: "{startup.APP_ID_KEY}"; Flags: uninsdeletekey' in script

@@ -36,6 +36,8 @@ API 地址支持 Base URL（如 `https://api.example.com/v1`）或完整 `/chat/
 
 图标是一只折纸燕子：墨蓝的身子、一面靛蓝的折面、珊瑚色的胸口，落在象牙白的圆角底板上。它不是位图，而是 `brand.py` 里的几何图形（燕子在自己的 100×89 坐标里，按折面从后往前画），每个尺寸单独画：24 像素及以下燕子占底板更多，48 像素及以下底板边线更深（浅色任务栏上也看得清），64 像素以上燕子在纸上有一层柔和的投影。窗口和任务栏的图标由 `app_icon()` 直接画出；托盘只画燕子不画底板，深色任务栏用白色剪影，浅色任务栏用燕子本来的颜色。改了几何以后运行 `.venv\Scripts\python.exe scripts\make_icon.py`，重新生成 `assets/app.ico`（exe 和安装包图标，16～256 共 10 个尺寸）和给文档、官网用的 1024 像素 `src/saywell/assets/icon.png`。
 
+托盘通知的标题栏按程序在 Windows 里的身份显示名字和图标。程序启动时（`startup.register_identity`，在第一个窗口之前）给自己设上 AppUserModelID `hyt0019.Saywell`，并在 `HKCU\Software\Classes\AppUserModelId\hyt0019.Saywell` 写入名字“好好说”和 `icon.png` 的路径，所以通知顶部是“好好说”和燕子。不设的话，Windows 按 exe 的路径显示“Saywell.exe”和它给这个路径缓存的图标，原地换过图标的 exe（例如 `dist` 里重新打包的、原地升级的安装版）会一直显示旧图标。通知正文旁边也是燕子（`MainWindow.notify`），只有警告保留 Windows 的警告标志。安装包的开始菜单和桌面快捷方式带同一个 ID，固定到任务栏的快捷方式和运行中的程序合成一个按钮；卸载时删除这个注册表项。
+
 界面的颜色也从图标来，常量在 `ui.py` 开头：窗口是暖纸色 `PAPER`，卡片、输入框和菜单是更亮的 `SHEET`，文字和主按钮用墨蓝，次要的链接和选中态用靛蓝。珊瑚色只留给“正在发生”的东西：录音中卡片边缘的呼吸光、结束按钮、会议里其他参会人的声音。标题和大数字用衬线字 Saywell Serif，它是 Noto Serif SC 截取 700 字重和 GB2312 常用字后改名的子集（`assets/fonts/`，约 3 MB），由 `load_fonts()` 在启动时注册；子集里没有的生僻字由 Qt 用系统字体补上。
 
 ## 语音模型与引擎
