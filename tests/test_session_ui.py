@@ -772,3 +772,15 @@ def test_tray_notices_show_the_swallow_and_warnings_keep_the_warning_sign(window
     (title, text, icon, milliseconds), warning = shown
     assert (title, milliseconds) == ("好好说仍在运行", 2500) and isinstance(icon, QIcon) and not icon.isNull()
     assert warning == ("好好说", "连不上更新服务器。", QSystemTrayIcon.MessageIcon.Warning, 4000)
+
+
+def test_starting_at_login_stays_in_the_tray_and_names_only_what_stops_dictation(window, monkeypatch):
+    ready, active = [True], [True]
+    monkeypatch.setattr("saywell.app.models_ready", lambda *args, **kwargs: ready[0])
+    monkeypatch.setattr("saywell.app.read_key", lambda *args, **kwargs: "")
+    monkeypatch.setattr(window, "hotkey_active", lambda: active[0])
+    assert window.background_problem() == ""  # No API key: dictation still types what was heard.
+    active[0] = False
+    assert "被其他程序占用" in window.background_problem()
+    ready[0] = False
+    assert "还没有语音模型" in window.background_problem()

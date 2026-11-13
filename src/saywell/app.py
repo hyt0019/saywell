@@ -928,6 +928,16 @@ class MainWindow(QMainWindow):
     def hotkey_active(self) -> bool:
         return bool(self.solo) or bool(self.hotkeys and 1 in self.hotkeys.registered)
 
+    def background_problem(self) -> str:
+        """Why dictation would not work after starting at login with no window; empty when it would.
+        A missing API key is no reason: dictation then types what was heard, and says so each time."""
+        model = get_model(self.settings.asr_model)
+        if not models_ready(self.settings.models, model=model.id):
+            return f"还没有语音模型，点这里下载 {model.name}。"
+        if not self.hotkey_active():
+            return f"录音快捷键 {shortcut_label(self.settings.hotkey)} 被其他程序占用，点这里换一个。"
+        return ""
+
     def hotkey_held(self) -> bool:
         if self.solo:
             return self.solo.held
@@ -1660,13 +1670,14 @@ def main() -> int:
         HistoryStore().prune()
     except OSError:
         window.set_notice("旧历史清理失败，请在“历史”中清空或检查本地目录权限。")
-    background_ready = (
-        models_ready(window.settings.models, model=window.settings.asr_model)
-        and bool(read_key(api_base_url=window.settings.api_base_url))
-        and QSystemTrayIcon.isSystemTrayAvailable()
-        and (args.smoke or window.hotkey_active())
-    )
-    if not args.background or not background_ready:
+    if args.background and QSystemTrayIcon.isSystemTrayAvailable():
+        # Started at login: the tray only, never the window. If dictation could not work, a notice
+        # says why, and clicking it opens the window.
+        problem = window.background_problem()
+        if problem:
+            # The taskbar may still be starting; a notice sent before it is up is lost.
+            QTimer.singleShot(4000, lambda: window.notify("好好说已在托盘运行", problem, 8000))
+    else:
         window.show()
     if args.updated:
         window.report_update(args.updated)
