@@ -185,3 +185,37 @@ def test_closing_settings_while_placing_puts_the_overlay_away(qt_app, monkeypatc
     dialog.save()  # Saved without 完成: where it stands counts.
     assert dialog.placing is None and dialog.updated.overlay_position == [300, 400]
     dispose(qt_app, dialog)
+
+
+def test_opening_the_settings_flashes_no_stray_windows(qt_app, monkeypatch):
+    from PySide6.QtCore import QObject
+    from PySide6.QtWidgets import QWidget
+
+    from saywell.ui import SettingsDialog
+
+    class Watch(QObject):
+        """Every window that shows, even for an instant."""
+
+        def __init__(self):
+            super().__init__()
+            self.shown = []
+
+        def eventFilter(self, watched, event):
+            if event.type() == QEvent.Type.Show and isinstance(watched, QWidget) and watched.isWindow():
+                self.shown.append(type(watched).__name__)
+            return False
+
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
+    watch = Watch()
+    qt_app.installEventFilter(watch)
+    try:
+        dialog = SettingsDialog(Settings())
+        assert watch.shown == []  # Nothing may show while it is built.
+        dialog.show()
+        for key in dialog.pages:
+            dialog.show_page(key, animate=False)
+        settle(qt_app, 0.2)
+    finally:
+        qt_app.removeEventFilter(watch)
+    assert watch.shown == ["SettingsDialog"]
+    dispose(qt_app, dialog)

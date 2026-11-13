@@ -1824,12 +1824,15 @@ class SettingRow(QWidget):
         layout.setSpacing(20)
         self.text = QVBoxLayout()
         self.text.setSpacing(2)
+        layout.addLayout(self.text, 1)  # First, so what goes in belongs to the row at once.
         self.title = label(title, "rowTitle", wrap=True)
         self.text.addWidget(self.title)
         self.hint = label(hint, "rowHint", wrap=True)
-        self.hint.setVisible(bool(hint))
         self.text.addWidget(self.hint)
-        layout.addLayout(self.text, 1)
+        if not hint:
+            # Hidden only once it is inside the row: showing a label that has no parent yet
+            # opens it as a window of its own for a moment.
+            self.hint.hide()
         if isinstance(control, QHBoxLayout):
             layout.addLayout(control)
         elif control is not None:
