@@ -283,6 +283,14 @@ def _cloud(p):
     p.closeSubpath()
 
 
+def _overlay(p):
+    # The minimal recording overlay: a pill with lines standing on its floor.
+    _rounded(p, 2.5, 7, 19, 10, 5)
+    _lines(p, (8.6, 14), (8.6, 11.8))
+    _lines(p, (12, 14), (12, 10))
+    _lines(p, (15.4, 14), (15.4, 12.4))
+
+
 def _stop(p):
     _rounded(p, 6.5, 6.5, 11, 11, 2.6)
 
@@ -295,6 +303,7 @@ PATHS = {
     "paste": _paste,
     "book": _book,
     "cloud": _cloud,
+    "overlay": _overlay,
     "translate": _translate,
     "swap": _swap,
     "mic": _mic,

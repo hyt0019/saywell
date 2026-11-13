@@ -139,6 +139,12 @@ class Settings:
     # before it scrolls. 0 means the built-in size.
     selection_popup_width: int = 0
     selection_popup_height: int = 0
+    # The overlay shown while dictating: "standard", the dark card with words, or "minimal", a
+    # small pill with the voice level only; how opaque its background is, in percent; and where it
+    # was dragged to, as the middle of its bottom edge on the desktop ([] for the bottom middle).
+    overlay_style: str = "standard"
+    overlay_opacity: int = 100
+    overlay_position: list[int] = field(default_factory=list)
 
     @property
     def download_root(self) -> Path:
@@ -241,6 +247,9 @@ class Settings:
                             for name, path in value.items()
                             if name in MODEL_IDS and isinstance(path, str) and path
                         }
+                elif key == "overlay_position":
+                    if isinstance(value, list) and len(value) == 2 and all(type(item) is int for item in value):
+                        values[key] = value
                 elif key in ("model_dir", "download_dir"):
                     if isinstance(value, str):
                         values[key] = relocated(value) if value else value
@@ -256,6 +265,10 @@ class Settings:
                                   ("selection_native", LANGUAGES), ("selection_foreign", LANGUAGES)):
                 if name in values and values[name] not in allowed:
                     values.pop(name)
+            if values.get("overlay_style", "standard") not in ("standard", "minimal"):
+                values.pop("overlay_style")
+            if not 0 <= values.get("overlay_opacity", 100) <= 100:
+                values.pop("overlay_opacity")
             if not 1 <= values.get("api_timeout", 25) <= 120:
                 values.pop("api_timeout", None)
             return cls(**values), "asr_model" in values

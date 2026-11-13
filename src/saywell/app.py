@@ -68,7 +68,6 @@ from .ui import (
     LevelBars,
     MicButton,
     ModelDialog,
-    RecordingOverlay,
     SettingsDialog,
     TabBar,
     Toast,
@@ -88,6 +87,7 @@ from .ui import (
     tray_icon,
     vrule,
 )
+from .overlay import RecordingOverlay
 from .updates import (
     Release,
     UpdateError,
@@ -188,6 +188,8 @@ class MainWindow(QMainWindow):
         self.solo_timer.setSingleShot(True)
         self.solo_timer.timeout.connect(self.solo_long_press)
         self.overlay = RecordingOverlay()
+        self.overlay.apply(self.settings)
+        self.overlay.moved.connect(self.remember_overlay_position)
         self.usage = StatsStore() if self.settings.collect_stats else None
         # Achievements are counted with the statistics, and only while they are kept.
         self.achievements = Achievements() if self.settings.collect_stats else None
@@ -1051,16 +1053,11 @@ class MainWindow(QMainWindow):
             return
         self.status.setText("正在听，慢慢说")
         self.hint.setText("最长 2 分钟；停顿不会自动结束。Esc 取消本次录音。")
-        self.overlay.hint.setText(
+        self.overlay.listen(
             "松开快捷键结束，Esc 取消"
             if from_hotkey and self.settings.hold_to_talk
             else "再次按快捷键结束，Esc 取消"
         )
-        self.overlay.label.setText("正在听  00:00")
-        self.overlay.level.setValue(0)
-        self.overlay.level.show()
-        self.overlay.set_tone("rec")
-        self.overlay.show_near_bottom()
 
     def stop_recording(self):
         if self.state != "recording":
@@ -1075,16 +1072,14 @@ class MainWindow(QMainWindow):
         self.state = "busy"
         self.status.setText("正在本地识别…")
         self.hint.setText("原始转写会保留，识别后再整理整段表达。")
-        self.overlay.label.setText("正在识别和整理…")
-        self.overlay.hint.setText("Esc 取消本次处理")
-        self.overlay.set_tone("busy")
+        self.overlay.working("正在识别和整理…", "Esc 取消本次处理")
         self.refresh_controls()
         self.pipeline.start(self.gate.generation, self.gate.cancel_event, self.settings, samples, "audio")
 
     def tick(self):
         if self.state == "recording":
             seconds = int(time.monotonic() - self.recorder.started)
-            self.overlay.label.setText(f"正在听  {seconds // 60:02}:{seconds % 60:02}")
+            self.overlay.set_elapsed(seconds)
             if self.recorder.limit_reached.is_set():
                 self.stop_recording()
                 self.set_notice("已达到 2 分钟上限，正在处理刚才的录音。")
@@ -1094,12 +1089,12 @@ class MainWindow(QMainWindow):
     def on_level(self, level: float):
         if self.state == "recording":
             self.meter.setValue(int(level * 100))
-            self.overlay.level.setValue(int(level * 100))
+            self.overlay.set_level(int(level * 100))
 
     def on_stage(self, job: int, message: str):
         if self.gate.accepts(job):
             self.status.setText(message)
-            self.overlay.label.setText(message)
+            self.overlay.set_stage(message)
 
     def on_transcript(self, job: int, text: str):
         if self.gate.accepts(job):
@@ -1158,10 +1153,11 @@ class MainWindow(QMainWindow):
         else:
             self.feedback("整理好了，结果已保留", f"在目标输入框按 {INSERT_HOTKEY} 输入")
 
-    def feedback(self, title: str, hint: str, milliseconds: int = 4500, tone: str = "done"):
-        """Global dictation never activates the main window, including failures."""
+    def feedback(self, title: str, hint: str, milliseconds: int = 4500, tone: str = "done", brief: bool = False):
+        """Global dictation never activates the main window, including failures. A brief one,
+        the words typed, is only a tick on the minimal overlay."""
         if self.from_hotkey:
-            self.overlay.show_message(title, hint, milliseconds, tone)
+            self.overlay.show_message(title, hint, milliseconds, tone, brief)
             self.tray.setToolTip(f"好好说 · {title}")
         else:
             self.reveal()
@@ -1181,7 +1177,7 @@ class MainWindow(QMainWindow):
             self.hint.setText("请在目标应用查看文字。可继续按录音快捷键输入下一段。")
             self.refresh_controls()
             if self.from_hotkey:
-                self.feedback("已输入，剪贴板里也有一份" if keep else "已输入", "可以继续按快捷键说下一段", 1200)
+                self.feedback("已输入，剪贴板里也有一份" if keep else "已输入", "可以继续按快捷键说下一段", 1200, brief=True)
         except PasteError as exc:
             self.gate.inserted = False
             self.set_notice(str(exc))
@@ -1439,6 +1435,14 @@ class MainWindow(QMainWindow):
                 if button.isVisible():
                     button.flash("已复制")
 
+    def remember_overlay_position(self, anchor):
+        """The overlay was dragged during dictation: it shows there from now on."""
+        self.settings = replace(self.settings, overlay_position=[anchor.x(), anchor.y()])
+        try:
+            self.settings.save()
+        except OSError:
+            pass  # Kept for this run; the next drag tries again.
+
     def open_settings(self, page: str | None = None):
         try:
             current = replace(self.settings, start_on_login=startup_enabled())
@@ -1495,6 +1499,7 @@ class MainWindow(QMainWindow):
                     self.pipeline.release_recognizer()  # Free the card or the CPU copy; reloaded on next use.
                     self.device = ""
                 self.settings = new
+                self.overlay.apply(new)
                 if self.native:
                     self.schedule_update_checks()
                 if new.collect_stats != (self.usage is not None):

@@ -217,7 +217,7 @@ def test_status_overlay_cannot_take_keyboard_focus(window):
     overlay = window.overlay
     assert overlay.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
     assert overlay.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-    assert overlay.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    assert not overlay.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # It can be dragged.
     overlay.show_message("已输入", "继续录音")
     assert overlay.dismiss_timer.isActive()
     overlay.show_near_bottom()
@@ -819,3 +819,29 @@ def test_settings_open_on_the_key_page_and_follow_a_known_release(window, monkey
     seen.clear()
     window.open_settings("translate")
     assert ("page", "translate") in seen
+
+
+def test_a_dragged_overlay_is_remembered_and_settings_restyle_it(window, monkeypatch):
+    from PySide6.QtCore import QPoint
+
+    from saywell.settings import data_dir
+
+    window.overlay.moved.emit(QPoint(640, 700))
+    assert window.settings.overlay_position == [640, 700]
+    assert Settings.load(data_dir() / "settings.json").overlay_position == [640, 700]
+
+    class Dialog:
+        release_found = update_requested = SimpleNamespace(connect=lambda slot: None)
+
+        def __init__(self, settings, parent, page=None):
+            self.updated = Settings(overlay_style="minimal", overlay_opacity=20)
+
+        def exec(self):
+            return 1
+
+    monkeypatch.setattr("saywell.app.SettingsDialog", Dialog)
+    monkeypatch.setattr("saywell.app.startup_enabled", lambda: False)
+    monkeypatch.setattr("saywell.app.save_settings_with_startup", lambda settings: None)
+    monkeypatch.setattr("saywell.app.read_key", lambda *args, **kwargs: "key")
+    window.open_settings()
+    assert (window.overlay.look, window.overlay.opacity) == ("minimal", 0.2)

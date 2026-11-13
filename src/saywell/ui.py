@@ -37,7 +37,6 @@ from PySide6.QtGui import (
     QIcon,
     QBrush,
     QConicalGradient,
-    QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
@@ -61,6 +60,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -218,6 +218,12 @@ QFrame#updateNews { background: #ECEDF5; border-radius: 12px; }
 QLabel#newsTitle { color: #192457; font-size: 14px; font-weight: 700; }
 QLabel#newsText { color: #47413A; font-size: 13px; }
 QFrame#updateNews QProgressBar { background: #D9DCEC; }
+QSlider { min-height: 24px; }
+QSlider::groove:horizontal { height: 4px; background: #E8E0D3; border-radius: 2px; }
+QSlider::sub-page:horizontal { background: #192457; border-radius: 2px; }
+QSlider::handle:horizontal { background: #FFFCF7; border: 1px solid #C4BAAA; width: 16px; height: 16px;
+    margin: -7px 0; border-radius: 9px; }
+QSlider::handle:horizontal:hover { border-color: #192457; }
 QToolTip { background: #1D2240; color: #FFFCF7; border: none; padding: 6px 9px; border-radius: 6px; }
 """
 
@@ -260,6 +266,7 @@ class Glyph:
     PASTE = "paste"
     BOOK = "book"
     CLOUD = "cloud"
+    OVERLAY = "overlay"
 
 
 def glyph_pixmap(glyph: str, color: str, size: int = 16) -> QPixmap:
@@ -1581,147 +1588,6 @@ class CheckBox(QCheckBox):
         )
 
 
-class RecordingOverlay(QWidget):
-    TONES = {"rec": "#EC7360", "busy": "#E0A040", "done": "#66AE7C", "warn": "#E0A040"}
-
-    def __init__(self):
-        super().__init__(
-            None,
-            Qt.WindowType.ToolTip
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus,
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.tone = "rec"
-        self.color = QColor(self.TONES["rec"])
-        self.previous = QColor(self.color)
-        self.phase = 0.0
-        self.home = None
-        # Rises a little into place when it appears and sinks away when dismissed.
-        self.presence = Tween(self, on_change=self._present)
-        self.shade = Tween(self, 1.0, 320)
-        self.dismiss_timer = QTimer(self)
-        self.dismiss_timer.setSingleShot(True)
-        self.dismiss_timer.timeout.connect(self.dismiss)
-        self.pulse = QVariantAnimation(self)
-        self.pulse.setStartValue(0.0)
-        self.pulse.setEndValue(1.0)
-        self.pulse.setDuration(1200)
-        self.pulse.setLoopCount(-1)
-        self.pulse.valueChanged.connect(self._pulse)
-        self.setFixedSize(380, 104)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(52, 22, 26, 22)
-        layout.setSpacing(14)
-        text = QVBoxLayout()
-        text.setSpacing(3)
-        self.label = QLabel("正在听  00:00")
-        self.label.setTextFormat(Qt.TextFormat.PlainText)
-        self.label.setStyleSheet("color: #FFFCF7; font-size: 15px; font-weight: 700; background: transparent;")
-        self.hint = QLabel("松开快捷键结束，Esc 取消")
-        self.hint.setTextFormat(Qt.TextFormat.PlainText)
-        self.hint.setStyleSheet("color: #9D9487; font-size: 12px; background: transparent;")
-        text.addWidget(self.label)
-        text.addWidget(self.hint)
-        layout.addLayout(text, 1)
-        self.level = LevelBars(14, VOICE, "#534C43")
-        self.level.setFixedWidth(104)
-        layout.addWidget(self.level)
-
-    def _pulse(self, value):
-        self.phase = float(value)
-        self.update()
-
-    def set_tone(self, tone: str):
-        tone = tone if tone in self.TONES else "rec"
-        if tone != self.tone:
-            # The status dot shifts hue (red → orange → green) instead of swapping.
-            self.previous = mix(self.previous, self.color, max(0.0, min(1.0, self.shade.value)))
-            self.color = QColor(self.TONES[tone])
-            self.shade.to(0.0, animate=False)
-            self.shade.to(1.0, animate=self.isVisible())
-        self.tone = tone
-        if self.tone in ("rec", "busy"):
-            if self.pulse.state() != QVariantAnimation.State.Running:
-                self.pulse.start()
-        else:
-            self.pulse.stop()
-            self.phase = 0.0
-        self.update()
-
-    def show_near_bottom(self):
-        self.dismiss_timer.stop()
-        area = self.screen().availableGeometry()
-        self.home = (area.center().x() - self.width() // 2, area.bottom() - self.height() - 28)
-        if not self.isVisible():
-            self.presence.to(0.0, animate=False)
-            self.show()
-        self.presence.to(1.0, 460, lambda t: spring(t, 0.8))
-
-    def show_message(self, title: str, hint: str, milliseconds: int = 4500, tone: str = "done"):
-        changed = self.isVisible() and self.label.text() != title
-        self.label.setText(title)
-        self.hint.setText(hint)
-        self.level.hide()
-        self.set_tone(tone)
-        self.show_near_bottom()
-        if changed:
-            fade_in(self.label, 260, 0.15)
-            fade_in(self.hint, 320, 0.0)
-        self.dismiss_timer.start(milliseconds)
-
-    def dismiss(self):
-        """Fade out and sink a few pixels, then hide. Showing again midway turns it back."""
-        self.dismiss_timer.stop()
-        if self.isVisible():
-            self.presence.to(0.0, 240)
-
-    def _present(self):
-        value = self.presence.value
-        self.setWindowOpacity(max(0.0, min(1.0, value)))
-        if self.home:
-            # Past 1 the spring overshoots, so it lifts a pixel above its spot and settles.
-            self.move(self.home[0], round(self.home[1] + (1 - value) * 16))
-        if value <= 0.001 and self.presence.target == 0.0 and self.isVisible():
-            self.hide()
-
-    def hideEvent(self, event):
-        self.pulse.stop()
-        super().hideEvent(event)
-
-    def paintEvent(self, _event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        body = QRectF(self.rect()).adjusted(12, 10, -12, -14)
-        for step in range(8):
-            shadow = QColor(0, 0, 0, 10 - step)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(shadow)
-            painter.drawRoundedRect(body.adjusted(-step, -step + 3, step, step + 3), 22 + step, 22 + step)
-        gradient = QLinearGradient(body.topLeft(), body.bottomLeft())
-        gradient.setColorAt(0, QColor(36, 43, 82, 245))
-        gradient.setColorAt(1, QColor(23, 28, 58, 245))
-        painter.setBrush(gradient)
-        painter.setPen(QPen(QColor(255, 255, 255, 34), 1))
-        painter.drawRoundedRect(body, 22, 22)
-        color = mix(self.previous, self.color, max(0.0, min(1.0, self.shade.value)))
-        center = body.left() + 22, body.center().y()
-        if self.tone in ("rec", "busy"):
-            ring = 6 + self.phase * 9
-            halo = QColor(color)
-            halo.setAlphaF(0.5 * (1 - self.phase))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(halo)
-            painter.drawEllipse(QRectF(center[0] - ring, center[1] - ring, ring * 2, ring * 2))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(color)
-        painter.drawEllipse(QRectF(center[0] - 6, center[1] - 6, 12, 12))
-
-
 def card(accent: bool = False) -> QFrame:
     frame = QFrame()
     frame.setObjectName("card")
@@ -2045,6 +1911,7 @@ def settings_page(title: str, hint: str) -> tuple[QScrollArea, QVBoxLayout]:
 SETTINGS_PAGES = (
     ("general", "通用", Glyph.SETTINGS),
     ("dictation", "听写", Glyph.MIC),
+    ("overlay", "识别框", Glyph.OVERLAY),
     ("translate", "划词翻译", Glyph.TRANSLATE),
     ("words", "词库", Glyph.BOOK),
     ("api", "文字整理服务", Glyph.CLOUD),
@@ -2100,6 +1967,7 @@ class SettingsDialog(QDialog):
 
         self.build_general()
         self.build_dictation()
+        self.build_overlay()
         self.build_translate()
         self.build_words()
         self.build_api()
@@ -2284,6 +2152,120 @@ class SettingsDialog(QDialog):
         layout.addWidget(words)
         layout.addStretch()
         self.add_page("dictation", area)
+
+    # ---- 识别框 ----
+
+    def build_overlay(self):
+        from .overlay import OverlayPreview
+
+        settings = self.settings
+        area, layout = settings_page("识别框", "说话时屏幕上的小框。可以拖到不挡事的地方，位置会记住。")
+        look = SettingsGroup("样式")
+        self.overlay_style = Segmented(("标准", "极简"))
+        self.overlay_style.set_current(1 if settings.overlay_style == "minimal" else 0, animate=False)
+        self.overlay_style.changed.connect(self.overlay_look_changed)
+        look.row("样式", "标准显示计时和提示；极简只留声波和转圈，要你处理的提示仍会展开成一行字。", self.overlay_style)
+        self.overlay_preview = OverlayPreview()
+        backdrop = QHBoxLayout()
+        backdrop.addWidget(label("预览背景", "rowHint"))
+        backdrop.addStretch()
+        self.preview_backdrop = Segmented(("浅色", "深色"))
+        self.preview_backdrop.set_current(0, animate=False)
+        self.preview_backdrop.changed.connect(lambda index: self.overlay_preview.set_dark(index == 1))
+        backdrop.addWidget(self.preview_backdrop)
+        look.block(self.overlay_preview, backdrop)
+        opacity = QHBoxLayout()
+        opacity.setSpacing(10)
+        self.overlay_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.overlay_opacity.setRange(0, 100)
+        self.overlay_opacity.setValue(settings.overlay_opacity)
+        self.overlay_opacity.setFixedWidth(180)
+        self.overlay_opacity.setAccessibleName("不透明度")
+        self.overlay_opacity.valueChanged.connect(self.overlay_look_changed)
+        opacity.addWidget(self.overlay_opacity)
+        self.overlay_opacity_value = label("", "rowHint")
+        self.overlay_opacity_value.setFixedWidth(36)
+        self.overlay_opacity_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        opacity.addWidget(self.overlay_opacity_value)
+        look.row("不透明度", "只调底色。极简样式拉到 0 几乎完全透明；标准样式的文字需要底色，最低保留 60%。", opacity)
+        layout.addWidget(look)
+
+        place = SettingsGroup("位置")
+        self.overlay_position = list(settings.overlay_position)
+        self.placing = None
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        self.reset_overlay = make_button("恢复默认", None, "link", ACCENT)
+        self.reset_overlay.clicked.connect(self.reset_overlay_position)
+        buttons.addWidget(self.reset_overlay, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.place_overlay = check_button("在屏幕上调整…", Glyph.OVERLAY)
+        self.place_overlay.clicked.connect(self.toggle_placing)
+        buttons.addWidget(self.place_overlay, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.overlay_place_hint = place.row("位置", " ", buttons).hint
+        layout.addWidget(place)
+        layout.addStretch()
+        self.overlay_look_changed()
+        self.update_place_hint()
+        self.add_page("overlay", area)
+
+    def overlay_look(self) -> tuple[str, float]:
+        return "minimal" if self.overlay_style.current() == 1 else "standard", self.overlay_opacity.value() / 100
+
+    def overlay_look_changed(self, *_):
+        look, opacity = self.overlay_look()
+        self.overlay_opacity_value.setText(f"{self.overlay_opacity.value()}%")
+        self.overlay_preview.set_look(look, opacity)
+        if self.placing is not None:
+            self.placing.set_look(look, opacity)
+
+    def update_place_hint(self):
+        if self.placing is not None:
+            text = "拖动屏幕上的识别框，摆好后点“完成”。"
+        elif self.overlay_position:
+            text = "在你拖到的地方。录音时直接拖动识别框也能换位置。"
+        else:
+            text = "在屏幕底部正中。录音时直接拖动识别框就能换位置，也可以点右边在屏幕上摆好。"
+        self.overlay_place_hint.setText(text)
+        self.reset_overlay.setVisible(bool(self.overlay_position) or self.placing is not None)
+
+    def toggle_placing(self):
+        """Show the real overlay playing on the screen, to be dragged where it should go."""
+        from .overlay import OverlayDemo, RecordingOverlay
+
+        if self.placing is not None:
+            self.overlay_position = list(self.placing.position)
+            self.stop_placing()
+            self.update_place_hint()
+            return
+        overlay = RecordingOverlay(self)  # Owned by the dialog, so it can be dragged while it is open.
+        overlay.position = list(self.overlay_position)
+        overlay.set_look(*self.overlay_look())
+        self.placing = overlay
+        self.placing_demo = OverlayDemo(overlay, vanish=False)
+        self.placing_demo.start()
+        self.place_overlay.setText("完成")
+        self.update_place_hint()
+
+    def stop_placing(self):
+        if self.placing is None:
+            return
+        self.placing_demo.stop()
+        self.placing.close()
+        self.placing.deleteLater()
+        self.placing = None
+        self.place_overlay.setText("在屏幕上调整…")
+
+    def reset_overlay_position(self):
+        self.overlay_position = []
+        if self.placing is not None:
+            self.placing.position = []
+            self.placing.place()
+            self.placing._present()
+        self.update_place_hint()
+
+    def done(self, result: int):
+        self.stop_placing()
+        super().done(result)
 
     # ---- 划词翻译 ----
 
@@ -2776,6 +2758,9 @@ class SettingsDialog(QDialog):
             selection_foreign=self.selection_foreign.currentData(),
             selection_style=list(TRANSLATION_STYLES)[self.selection_style.current()],
             selection_excluded=list(dict.fromkeys(excluded))[:100],
+            overlay_style=self.overlay_look()[0],
+            overlay_opacity=self.overlay_opacity.value(),
+            overlay_position=list(self.placing.position if self.placing is not None else self.overlay_position),
         )
 
     def has_changes(self) -> bool:
