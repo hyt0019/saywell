@@ -292,9 +292,9 @@ def test_failed_startup_change_keeps_existing_window_settings(window, monkeypatc
     from saywell.startup import StartupError
 
     class Dialog:
-        release_found = SimpleNamespace(connect=lambda slot: None)
+        release_found = update_requested = SimpleNamespace(connect=lambda slot: None)
 
-        def __init__(self, settings, parent):
+        def __init__(self, settings, parent, page=None):
             self.updated = Settings(start_on_login=True)
 
         def exec(self):
@@ -784,3 +784,38 @@ def test_starting_at_login_stays_in_the_tray_and_names_only_what_stops_dictation
     assert "被其他程序占用" in window.background_problem()
     ready[0] = False
     assert "还没有语音模型" in window.background_problem()
+
+
+def test_settings_open_on_the_key_page_and_follow_a_known_release(window, monkeypatch):
+    from saywell.updates import Release
+
+    seen = []
+
+    class Dialog:
+        release_found = SimpleNamespace(connect=lambda slot: None)
+
+        def __init__(self, settings, parent, page=None):
+            self.page = page
+            self.update_requested = SimpleNamespace(connect=lambda slot: seen.append("connected"))
+
+        def show_release(self, release):
+            seen.append(("release", release.version))
+
+        def show_download(self, percent):
+            seen.append(("download", percent))
+
+        def exec(self):
+            seen.append(("page", self.page))
+            window.update_progress("37")  # A download started from the dialog reports back to it.
+            return 0
+
+    monkeypatch.setattr("saywell.app.SettingsDialog", Dialog)
+    monkeypatch.setattr("saywell.app.startup_enabled", lambda: False)
+    monkeypatch.setattr("saywell.app.read_key", lambda *args, **kwargs: "")
+    window.release = Release("99.0", "新东西。", "https://x", "a.exe", 1, "0" * 64, ("u",))
+    window.open_settings()
+    assert seen == ["connected", ("release", "99.0"), ("page", "api"), ("download", 37)]
+    assert window.settings_dialog is None
+    seen.clear()
+    window.open_settings("translate")
+    assert ("page", "translate") in seen

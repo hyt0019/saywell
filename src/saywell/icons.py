@@ -257,6 +257,32 @@ def _paste(p):
     _rounded(p, 9, 3, 6, 4, 1.6)
 
 
+def _book(p):
+    # A closed book seen from the front, its pages showing along the bottom: a word list.
+    p.moveTo(6, 18.5)
+    p.lineTo(6, 5.5)
+    p.quadTo(6, 3.5, 8, 3.5)
+    p.lineTo(18.5, 3.5)
+    p.lineTo(18.5, 16.5)
+    p.lineTo(8, 16.5)
+    p.quadTo(6, 16.5, 6, 18.5)
+    p.quadTo(6, 20.5, 8, 20.5)
+    p.lineTo(18.5, 20.5)
+    _lines(p, (10, 8), (14.5, 8))
+
+
+def _cloud(p):
+    # A cloud: the service the words are sent to for tidying.
+    p.moveTo(7.5, 18.5)
+    p.cubicTo(4.8, 18.5, 3, 16.6, 3, 14.4)
+    p.cubicTo(3, 12.2, 4.7, 10.6, 6.9, 10.5)
+    p.cubicTo(7.5, 7.5, 10, 5.5, 12.9, 5.5)
+    p.cubicTo(16.2, 5.5, 18.5, 7.9, 18.7, 10.9)
+    p.cubicTo(20.3, 11.4, 21.2, 12.9, 21.2, 14.6)
+    p.cubicTo(21.2, 16.8, 19.5, 18.5, 17.2, 18.5)
+    p.closeSubpath()
+
+
 def _stop(p):
     _rounded(p, 6.5, 6.5, 11, 11, 2.6)
 
@@ -267,6 +293,8 @@ PATHS = {
     "headphones": _headphones,
     "stop": _stop,
     "paste": _paste,
+    "book": _book,
+    "cloud": _cloud,
     "translate": _translate,
     "swap": _swap,
     "mic": _mic,

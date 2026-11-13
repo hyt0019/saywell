@@ -325,17 +325,18 @@ def test_settings_choose_tap_mode_and_unpunctuated_text(qt_app, monkeypatch):
 def test_settings_check_for_updates_and_keep_the_choice(qt_app, monkeypatch):
     import time
 
-    from saywell import __version__
     from saywell.ui import SettingsDialog
     from saywell.updates import Release
 
     monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
     newer = Release("99.0", "修了一些问题。", "https://example.com", "Saywell-Setup-99.0.exe", 1, "0" * 64, ("https://a",))
     monkeypatch.setattr("saywell.updates.fetch_release", lambda: newer)
-    found = []
+    found, requested = [], []
     dialog = SettingsDialog(Settings())
     dialog.release_found.connect(found.append)
-    assert dialog.check_updates.isChecked() and dialog.update_status.text.text() == f"当前版本 {__version__}"
+    dialog.update_requested.connect(lambda: requested.append(True))
+    assert dialog.current_page() == "general"
+    assert dialog.check_updates.isChecked() and dialog.update_status.isHidden() and dialog.update_news_box.isHidden()
     dialog.check_update_button.click()
     status = dialog.update_status
     deadline = time.monotonic() + 5
@@ -344,11 +345,67 @@ def test_settings_check_for_updates_and_keep_the_choice(qt_app, monkeypatch):
     while not found or status.text.graphicsEffect() or status.icon.animation.state() == status.icon.animation.State.Running:
         qt_app.processEvents()
         assert time.monotonic() < deadline
-    assert status.text.text().startswith("有新版本 99.0：修了一些问题。")
+    assert status.text.text() == "有新版本 99.0"
+    # The settings offer the release themselves: what it brings, and a button that installs it.
+    assert not dialog.update_news_box.isHidden() and dialog.news_text.text() == "修了一些问题。"
+    assert dialog.update_now.text() == "更新到 99.0" and dialog.nav_buttons["general"].badge
+    dialog.update_now.click()
+    assert requested == [True]
+    dialog.show_download(42)
+    assert dialog.news_progress.value() == 42 and dialog.update_now.isHidden()
+    dialog.show_downloaded()
+    assert dialog.update_state == "ready" and "关闭设置后自动安装" in dialog.news_text.text()
     assert dialog.check_update_button.isEnabled()
     dialog.check_updates.setChecked(False)
     dialog.save()
     assert dialog.updated.check_updates is False
+    dialog.close()
+
+
+def test_closing_settings_with_a_downloaded_update_asks_to_keep_unsaved_changes(qt_app, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from saywell.ui import SettingsDialog
+    from saywell.updates import Release
+
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
+    asked = []
+
+    def answer(*args, **kwargs):
+        asked.append(args[2])
+        return QMessageBox.StandardButton.Save
+
+    monkeypatch.setattr(QMessageBox, "question", answer)
+    dialog = SettingsDialog(Settings())
+    dialog.reject()  # Nothing downloaded: closes as always.
+    assert not asked and dialog.result() == 0
+    dialog = SettingsDialog(Settings())
+    dialog.show_release(Release("99.0", "新东西。", "https://x", "a.exe", 1, "0" * 64, ("u",)))
+    dialog.show_downloaded()
+    dialog.reject()  # Nothing changed: no question.
+    assert not asked
+    dialog = SettingsDialog(Settings())
+    dialog.show_release(Release("99.0", "新东西。", "https://x", "a.exe", 1, "0" * 64, ("u",)))
+    dialog.show_downloaded()
+    dialog.no_punctuation.setChecked(True)
+    dialog.reject()
+    assert asked and "安装更新" in asked[0]
+    assert dialog.result() == 1 and dialog.updated.no_punctuation  # Saved, then closed.
+
+
+def test_a_settings_problem_is_shown_on_its_page(qt_app, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from saywell.ui import SettingsDialog
+
+    monkeypatch.setattr("saywell.ui.read_key", lambda *args, **kwargs: "")
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warned.append(args[1]))
+    dialog = SettingsDialog(Settings(), page="privacy")
+    assert dialog.current_page() == "privacy"
+    dialog.model.setText("")
+    dialog.save()
+    assert warned == ["检查模型"] and dialog.current_page() == "api"
     dialog.close()
 
 

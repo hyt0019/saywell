@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import math
 import os
 import re
@@ -43,12 +44,12 @@ from PySide6.QtGui import (
     QPixmap,
 )
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
-    QFormLayout,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
@@ -204,6 +205,19 @@ QMenu::item { padding: 7px 26px 7px 14px; border-radius: 6px; }
 QMenu::item:selected { background: #EEE7DB; color: #1D2240; }
 QMenu::item:disabled { color: #B5AC9F; }
 QMenu::separator { height: 1px; background: #E8E0D3; margin: 5px 8px; }
+QWidget#settingsSide { background: #EFE8DC; border-right: 1px solid #E8E0D3; }
+QLabel#sideTitle { font-family: 'Saywell Serif'; font-weight: 700; color: #192457; font-size: 24px; padding-left: 10px; }
+QLabel#pageTitle { font-family: 'Saywell Serif'; font-weight: 700; color: #192457; font-size: 22px; }
+QLabel#settingsGroup { color: #8C8376; font-size: 13px; font-weight: 600; padding-left: 2px; }
+QFrame#settingsCard { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }
+QFrame#settingsRule { background: #EEE7DB; min-height: 1px; max-height: 1px; border: none; margin: 0 16px; }
+QLabel#rowTitle { color: #1D2240; font-size: 14px; }
+QLabel#rowHint { color: #776F63; font-size: 12px; }
+QLabel#versionName { color: #1D2240; font-size: 15px; font-weight: 700; }
+QFrame#updateNews { background: #ECEDF5; border-radius: 12px; }
+QLabel#newsTitle { color: #192457; font-size: 14px; font-weight: 700; }
+QLabel#newsText { color: #47413A; font-size: 13px; }
+QFrame#updateNews QProgressBar { background: #D9DCEC; }
 QToolTip { background: #1D2240; color: #FFFCF7; border: none; padding: 6px 9px; border-radius: 6px; }
 """
 
@@ -244,6 +258,8 @@ class Glyph:
     HEADPHONES = "headphones"
     STOP = "stop"
     PASTE = "paste"
+    BOOK = "book"
+    CLOUD = "cloud"
 
 
 def glyph_pixmap(glyph: str, color: str, size: int = 16) -> QPixmap:
@@ -1734,41 +1750,6 @@ def text_column(title: str, hint: str, accent: bool = False) -> tuple[QWidget, Q
     return widget, editor, count
 
 
-class Section(QFrame):
-    def __init__(self, title: str, description: str, glyph: str):
-        super().__init__()
-        self.setObjectName("sectionCard")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 22)
-        layout.setSpacing(16)
-        head = QHBoxLayout()
-        head.setSpacing(12)
-        text = QVBoxLayout()
-        text.setSpacing(2)
-        text.addWidget(label(title, "section"))
-        text.addWidget(label(description, "muted", wrap=True))
-        head.addLayout(text, 1)
-        layout.addLayout(head)
-        self.body = QVBoxLayout()
-        self.body.setSpacing(12)
-        layout.addLayout(self.body)
-
-    def form(self) -> QFormLayout:
-        form = QFormLayout()
-        form.setHorizontalSpacing(18)
-        form.setVerticalSpacing(12)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        self.body.addLayout(form)
-        return form
-
-
-def field_label(text: str) -> QLabel:
-    widget = label(text, "fieldLabel")
-    widget.setMinimumWidth(76)
-    return widget
-
-
 def dialog_header(title: str, subtitle: str) -> QWidget:
     widget = QWidget()
     layout = QVBoxLayout(widget)
@@ -1888,57 +1869,360 @@ class HotkeyRecorder(QDialog):
         return dialog.chosen if accepted and dialog.chosen else None
 
 
-class SettingsDialog(QDialog):
-    # A newer release found by 检查更新; the main window offers to install it.
-    release_found = Signal(object)
+class NavButton(QAbstractButton):
+    """A page of the settings sidebar: a line icon and its name, set on a paper pill when chosen."""
 
-    def __init__(self, settings: Settings, parent=None):
+    def __init__(self, text: str, glyph: str, parent=None):
+        super().__init__(parent)
+        self.setText(text)
+        self.glyph = glyph
+        self.badge = False
+        self.setCheckable(True)
+        self.setAutoExclusive(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setAccessibleName(text)
+        self.setFixedHeight(38)
+        self.keyboard_focus = False
+        self.hover = Tween(self)
+        self.chosen = Tween(self, 0.0, 220)
+        self.toggled.connect(lambda on: self.chosen.to(float(on), animate=self.isVisible()))
+
+    def sizeHint(self):
+        return QSize(168, 38)
+
+    def set_badge(self, on: bool):
+        self.badge = on
+        self.setAccessibleDescription("有新版本" if on else "")
+        self.update()
+
+    def enterEvent(self, event):
+        self.hover.to(1.0, 140)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hover.to(0.0, 260)
+        super().leaveEvent(event)
+
+    def focusInEvent(self, event):
+        self.keyboard_focus = event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason)
+        super().focusInEvent(event)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        box = QRectF(self.rect()).adjusted(0.5, 1.5, -0.5, -1.5)
+        chosen = max(0.0, min(1.0, self.chosen.value))
+        painter.setPen(Qt.PenStyle.NoPen)
+        if self.hover.value > 0 and chosen < 1:
+            painter.setBrush(QColor(25, 36, 87, round(14 * self.hover.value * (1 - chosen))))
+            painter.drawRoundedRect(box, 9, 9)
+        if chosen > 0:
+            painter.setBrush(QColor(29, 34, 64, round(14 * chosen)))
+            painter.drawRoundedRect(box.adjusted(0, 1, 0, 1), 9, 9)
+            sheet = QColor(SHEET)
+            sheet.setAlphaF(chosen)
+            painter.setBrush(sheet)
+            painter.drawRoundedRect(box, 9, 9)
+        color = mix(QColor("#5A5248"), QColor(ACCENT), chosen)
+        draw_icon(painter, self.glyph, QRectF(12, (self.height() - 18) / 2, 18, 18), color)
+        font = QFont(self.font())
+        font.setPixelSize(14)
+        font.setWeight(QFont.Weight.DemiBold if self.isChecked() else QFont.Weight.Normal)
+        painter.setFont(font)
+        painter.setPen(color)
+        painter.drawText(
+            QRectF(40, 0, self.width() - 64, self.height()),
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            self.text(),
+        )
+        if self.badge:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(RECORD))
+            painter.drawEllipse(QRectF(self.width() - 20, self.height() / 2 - 3.5, 7, 7))
+        if self.hasFocus() and self.keyboard_focus:
+            ring = QColor(ACCENT)
+            ring.setAlphaF(0.55)
+            painter.setPen(QPen(ring, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(box.adjusted(1, 1, -1, -1), 8, 8)
+
+
+class SettingRow(QWidget):
+    """A setting's name, an optional line about it, and its control on the right."""
+
+    def __init__(self, title: str, hint: str = "", control: QWidget | QHBoxLayout | None = None):
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(20)
+        self.text = QVBoxLayout()
+        self.text.setSpacing(2)
+        self.title = label(title, "rowTitle", wrap=True)
+        self.text.addWidget(self.title)
+        self.hint = label(hint, "rowHint", wrap=True)
+        self.hint.setVisible(bool(hint))
+        self.text.addWidget(self.hint)
+        layout.addLayout(self.text, 1)
+        if isinstance(control, QHBoxLayout):
+            layout.addLayout(control)
+        elif control is not None:
+            layout.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
+            if isinstance(control, QAbstractButton) and not control.text():
+                control.setAccessibleName(title)
+        self.setMinimumHeight(52)
+
+
+class SettingsGroup(QWidget):
+    """Rows on one card under a small grey heading, with hairlines between them."""
+
+    def __init__(self, title: str = ""):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
+        if title:
+            layout.addWidget(label(title, "settingsGroup"))
+        self.card = QFrame()
+        self.card.setObjectName("settingsCard")
+        self.rows = QVBoxLayout(self.card)
+        self.rows.setContentsMargins(0, 0, 0, 0)
+        self.rows.setSpacing(0)
+        layout.addWidget(self.card)
+
+    def add(self, widget: QWidget) -> QWidget:
+        if self.rows.count():
+            rule = QFrame()
+            rule.setObjectName("settingsRule")
+            self.rows.addWidget(rule)
+        self.rows.addWidget(widget)
+        return widget
+
+    def row(self, title: str, hint: str = "", control: QWidget | QHBoxLayout | None = None) -> SettingRow:
+        return self.add(SettingRow(title, hint, control))
+
+    def block(self, *items: QWidget | QHBoxLayout, spacing: int = 10) -> QWidget:
+        """Content as wide as the card, such as a text box or a list."""
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setSpacing(spacing)
+        for item in items:
+            if isinstance(item, QHBoxLayout):
+                layout.addLayout(item)
+            else:
+                layout.addWidget(item)
+        return self.add(box)
+
+
+def toggle(checked: bool) -> Switch:
+    """A switch with no words of its own; its row names it."""
+    switch = Switch()
+    switch.setChecked(checked)
+    switch.setFixedSize(46, 28)
+    return switch
+
+
+def settings_page(title: str, hint: str) -> tuple[QScrollArea, QVBoxLayout]:
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    content = QWidget()
+    layout = QVBoxLayout(content)
+    layout.setContentsMargins(32, 26, 28, 28)
+    layout.setSpacing(20)
+    head = QVBoxLayout()
+    head.setSpacing(3)
+    head.addWidget(label(title, "pageTitle"))
+    head.addWidget(label(hint, "muted", wrap=True))
+    layout.addLayout(head)
+    area.setWidget(content)
+    return area, layout
+
+
+# The settings pages, in sidebar order: (key, name, icon).
+SETTINGS_PAGES = (
+    ("general", "通用", Glyph.SETTINGS),
+    ("dictation", "听写", Glyph.MIC),
+    ("translate", "划词翻译", Glyph.TRANSLATE),
+    ("words", "词库", Glyph.BOOK),
+    ("api", "文字整理服务", Glyph.CLOUD),
+    ("privacy", "隐私", Glyph.LOCK),
+)
+
+
+class SettingsDialog(QDialog):
+    # A newer release found by 检查更新; the main window shows its 更新 button.
+    release_found = Signal(object)
+    # 更新到 … was clicked: the main window downloads the release and reports back here.
+    update_requested = Signal()
+
+    def __init__(self, settings: Settings, parent=None, page: str = "general"):
         super().__init__(parent)
         self.settings = settings
         self.updated = settings
+        self.release = None
+        # How far a newer release has got here: "" none, "offered", "downloading" or "ready".
+        self.update_state = ""
         self.setWindowTitle("设置 · 好好说")
-        self.resize(640, 780)
-        self.setMinimumSize(560, 560)
+        self.resize(880, 660)
+        self.setMinimumSize(780, 520)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        outer.addWidget(dialog_header("设置", "保存后立即生效。"))
-        area, layout = scroll_body()
-        outer.addWidget(area, 1)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        outer.addLayout(body, 1)
 
-        api = Section("文字整理服务", "录音在本机识别，只有文字会发到这里的 API 整理。", Glyph.GLOBE)
-        form = api.form()
-        self.base_url = QLineEdit(settings.api_base_url)
-        self.base_url.setPlaceholderText("例如 https://api.example.com/v1")
-        self.base_url.setToolTip("填写兼容 Chat Completions 的 API 地址，支持 Base URL 或完整请求地址。")
-        form.addRow(field_label("API 地址"), self.base_url)
-        self.key = QLineEdit()
-        self.key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.update_key_hint()
-        self.base_url.textChanged.connect(self.api_address_changed)
-        form.addRow(field_label("API Key"), self.key)
-        self.model = QLineEdit(settings.model)
-        self.model.setPlaceholderText("填写服务商提供的模型名称")
-        form.addRow(field_label("模型名称"), self.model)
-        self.timeout = SpinBox()
-        self.timeout.setRange(1, 120)
-        self.timeout.setSuffix(" 秒")
-        self.timeout.setValue(int(settings.api_timeout))
-        self.timeout.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self.timeout.setMaximumWidth(140)
-        form.addRow(field_label("请求超时"), self.timeout)
-        test = QHBoxLayout()
-        test.setSpacing(12)
-        self.test_api = check_button("测试连接", Glyph.CONNECT)
-        self.test_api.clicked.connect(self.check_connection)
-        test.addWidget(self.test_api, 0, Qt.AlignmentFlag.AlignTop)
-        self.api_status = CheckStatus()
-        test.addWidget(self.api_status, 1)
-        form.addRow(field_label("连接检查"), test)
-        layout.addWidget(api)
+        side = QWidget()
+        side.setObjectName("settingsSide")
+        side.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        side.setFixedWidth(196)
+        nav = QVBoxLayout(side)
+        nav.setContentsMargins(14, 24, 14, 16)
+        nav.setSpacing(2)
+        heading = label("设置", "sideTitle")
+        nav.addWidget(heading)
+        nav.addSpacing(12)
+        self.stack = QStackedWidget()
+        self.nav_buttons: dict[str, NavButton] = {}
+        self.pages: dict[str, QWidget] = {}
+        for key, name, glyph in SETTINGS_PAGES:
+            button = NavButton(name, glyph)
+            button.clicked.connect(lambda _=False, key=key: self.show_page(key))
+            nav.addWidget(button)
+            self.nav_buttons[key] = button
+        nav.addStretch()
+        body.addWidget(side)
+        body.addWidget(self.stack, 1)
 
-        recording = Section("录音与输入", "全局快捷键随时可用，结果直接输入到原来的光标处。", Glyph.MIC)
-        form = recording.form()
+        self.build_general()
+        self.build_dictation()
+        self.build_translate()
+        self.build_words()
+        self.build_api()
+        self.build_privacy()
+
+        footer, actions = footer_bar()
+        actions.addStretch()
+        cancel = make_button("取消")
+        cancel.clicked.connect(self.reject)
+        save = make_button("保存设置", Glyph.CHECK, "primary")
+        save.setDefault(True)
+        save.clicked.connect(self.save)
+        actions.addWidget(cancel)
+        actions.addWidget(save)
+        outer.addWidget(footer)
+        self.show_page(page if page in self.pages else "general", animate=False)
+
+    def add_page(self, key: str, area: QWidget):
+        self.pages[key] = area
+        self.stack.addWidget(area)
+
+    def show_page(self, key: str, animate: bool = True):
+        page = self.pages[key]
+        self.nav_buttons[key].setChecked(True)
+        if self.stack.currentWidget() is not page:
+            self.stack.setCurrentWidget(page)
+            if animate:
+                fade_in(page.widget(), 180, 0.35)
+
+    def current_page(self) -> str:
+        return next(key for key, page in self.pages.items() if page is self.stack.currentWidget())
+
+    # ---- 通用 ----
+
+    def build_general(self):
+        from .updates import changelog_page, shipped_notes
+
+        area, layout = settings_page("通用", "版本、启动和提醒。")
+        updates = SettingsGroup("软件更新")
+        version = QWidget()
+        line = QHBoxLayout(version)
+        line.setContentsMargins(16, 16, 16, 14)
+        line.setSpacing(14)
+        mark = QLabel()
+        mark.setPixmap(app_icon().pixmap(QSize(44, 44)))
+        mark.setFixedSize(44, 44)
+        line.addWidget(mark, 0, Qt.AlignmentFlag.AlignTop)
+        text = QVBoxLayout()
+        text.setSpacing(3)
+        text.addWidget(label(f"好好说 {__version__}", "versionName"))
+        summary = shipped_notes()[0]
+        link = f'<a href="{changelog_page(__version__)}" style="color:#3C488E; text-decoration:none">更新日志</a>'
+        about = QLabel(f"{html.escape(summary)}　{link}" if summary else link)
+        about.setObjectName("rowHint")
+        about.setTextFormat(Qt.TextFormat.RichText)
+        about.setWordWrap(True)
+        about.setOpenExternalLinks(True)
+        text.addWidget(about)
+        self.update_status = CheckStatus()
+        self.update_status.hide()
+        text.addWidget(self.update_status)
+        line.addLayout(text, 1)
+        self.check_update_button = check_button("检查更新", Glyph.REFRESH)
+        self.check_update_button.clicked.connect(self.check_update)
+        line.addWidget(self.check_update_button, 0, Qt.AlignmentFlag.AlignTop)
+        updates.add(version)
+
+        # A newer release: what it brings and the button that installs it, or how far the
+        # download has got.
+        self.update_news_box = QWidget()
+        wrap = QVBoxLayout(self.update_news_box)
+        wrap.setContentsMargins(16, 0, 16, 16)
+        news = QFrame()
+        news.setObjectName("updateNews")
+        inner = QVBoxLayout(news)
+        inner.setContentsMargins(16, 13, 16, 14)
+        inner.setSpacing(7)
+        self.news_title = QLabel()
+        self.news_title.setObjectName("newsTitle")
+        self.news_title.setTextFormat(Qt.TextFormat.RichText)
+        inner.addWidget(self.news_title)
+        self.news_text = label("", "newsText", wrap=True)
+        inner.addWidget(self.news_text)
+        self.news_progress = QProgressBar()
+        self.news_progress.setRange(0, 100)
+        self.news_progress.setTextVisible(False)
+        self.news_progress.hide()
+        inner.addWidget(self.news_progress)
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        self.update_now = make_button("更新", None, "primary")
+        self.update_now.clicked.connect(self.request_update)
+        actions.addWidget(self.update_now)
+        self.update_notes_button = make_button("看看新内容", None, "link")
+        self.update_notes_button.clicked.connect(self.show_release_notes)
+        actions.addWidget(self.update_notes_button)
+        actions.addStretch()
+        inner.addLayout(actions)
+        wrap.addWidget(news)
+        self.update_news_box.hide()
+        updates.rows.addWidget(self.update_news_box)  # Part of the version block: no hairline above.
+        self.check_updates = toggle(self.settings.check_updates)
+        updates.row("每天自动检查新版本", "只读取版本信息，不发送任何数据", self.check_updates)
+        layout.addWidget(updates)
+
+        start = SettingsGroup("启动")
+        self.startup = toggle(self.settings.start_on_login)
+        start.row("开机自启动", "登录 Windows 后在托盘待命，不打开主窗口", self.startup)
+        layout.addWidget(start)
+
+        cards = SettingsGroup("提醒")
+        self.achievement_popups = toggle(self.settings.achievement_popups)
+        cards.row("达成成就时弹出小卡片", "在屏幕右下角停留几秒", self.achievement_popups)
+        layout.addWidget(cards)
+        layout.addStretch()
+        self.add_page("general", area)
+
+    # ---- 听写 ----
+
+    def build_dictation(self):
+        settings = self.settings
+        area, layout = settings_page("听写", "全局快捷键随时可用，结果直接输入到原来的光标处。")
+        recording = SettingsGroup("录音")
         self.mic = ComboBox()
         self.mic.addItem("系统默认麦克风", None)
         try:
@@ -1953,9 +2237,8 @@ class SettingsDialog(QDialog):
             self.mic.setCurrentIndex(max(0, self.mic.findData(settings.microphone)))
         except Exception:
             self.mic.setToolTip("未能列出麦克风，请检查音频设备。")
-        form.addRow(field_label("麦克风"), self.mic)
-        hotkey = QVBoxLayout()
-        hotkey.setSpacing(4)
+        self.mic.setFixedWidth(260)
+        recording.row("麦克风", "", self.mic)
         self.hotkey = ComboBox()
         for name in RECORDING_CHOICES:
             self.hotkey.addItem(shortcut_label(name), name)
@@ -1965,81 +2248,64 @@ class SettingsDialog(QDialog):
         self.hotkey.setCurrentIndex(max(0, self.hotkey.findData(settings.hotkey)))
         self.hotkey_choice = settings.hotkey
         self.hotkey.activated.connect(self.choose_hotkey)
-        self.hotkey.setMaximumWidth(200)
-        hotkey.addWidget(self.hotkey)
-        form.addRow(field_label("录音快捷键"), hotkey)
-        mode = QVBoxLayout()
-        mode.setSpacing(6)
+        self.hotkey.setFixedWidth(200)
+        recording.row("录音快捷键", "", self.hotkey)
         self.hold = Segmented(("按住说话", "轻按开始/结束"))
         self.hold.set_current(0 if settings.hold_to_talk else 1, animate=False)
         self.hold.changed.connect(self.update_usage_hint)
-        mode.addWidget(self.hold)
-        self.usage_hint = label("", "muted", wrap=True)
-        mode.addWidget(self.usage_hint)
-        form.addRow(field_label("录音方式"), mode)
+        self.usage_hint = recording.row("录音方式", " ", self.hold).hint
         self.update_usage_hint()
-        form.addRow(field_label("输入方式"), label("直接输入单行文字，支持终端，不自动回车", "muted", wrap=True))
-        keep = QVBoxLayout()
-        keep.setSpacing(4)
-        self.keep_in_clipboard = Switch("输入后把结果留在剪贴板")
-        self.keep_in_clipboard.setChecked(settings.keep_in_clipboard)
-        keep.addWidget(self.keep_in_clipboard)
-        keep.addWidget(
-            label("适合游戏等打不开输入框的场合，之后按 Ctrl+V 粘贴。关闭时恢复原来的剪贴板。", "muted", wrap=True)
-        )
-        form.addRow(field_label("剪贴板"), keep)
-        self.voice_translation = Switch("说完加一句“翻译成英文”，直接输入译文")
-        self.voice_translation.setChecked(settings.voice_translation)
-        form.addRow(field_label("语音翻译"), self.voice_translation)
-        plain = QVBoxLayout()
-        plain.setSpacing(4)
-        self.no_punctuation = Switch("去掉中文标点和语气词")
-        self.no_punctuation.setChecked(settings.no_punctuation)
-        plain.addWidget(self.no_punctuation)
-        plain.addWidget(label("如逗号、句号、问号和“啊、呢、吧”。", "muted", wrap=True))
-        plain.addSpacing(8)
-        self.no_english_punctuation = Switch("去掉英文标点")
-        self.no_english_punctuation.setChecked(settings.no_english_punctuation)
-        plain.addWidget(self.no_english_punctuation)
-        plain.addWidget(
-            label("3.5、10:30 和网址里的点、冒号会保留。", "muted", wrap=True)
-        )
-        form.addRow(field_label("标点"), plain)
-        gpu = QVBoxLayout()
-        gpu.setSpacing(4)
-        self.gpu = Switch("用显卡运行 Qwen3-ASR，识别更快")
-        self.gpu.setChecked(settings.gpu_acceleration)
-        gpu.addWidget(self.gpu)
-        gpu.addWidget(label("支持 NVIDIA、AMD、Intel 显卡；显卡不支持时自动改用 CPU。", "muted", wrap=True))
-        form.addRow(field_label("GPU 加速"), gpu)
         layout.addWidget(recording)
 
-        translating = Section(
-            "划词翻译",
-            "在其他程序里选中文字就能翻译，只有要翻译的文字会发到上面的 API。",
-            Glyph.TRANSLATE,
+        recognition = SettingsGroup("识别")
+        self.gpu = toggle(settings.gpu_acceleration)
+        recognition.row(
+            "GPU 加速", "用显卡运行 Qwen3-ASR，识别更快。支持 NVIDIA、AMD、Intel 显卡，不支持时自动改用 CPU。", self.gpu
         )
-        self.selection_on = Switch("开启划词翻译")
-        self.selection_on.setChecked(settings.selection_translate)
-        translating.body.addWidget(self.selection_on)
+        layout.addWidget(recognition)
+
+        typing = SettingsGroup("输入")
+        typing.row("输入方式", "直接输入单行文字，支持终端，不自动回车")
+        self.keep_in_clipboard = toggle(settings.keep_in_clipboard)
+        typing.row(
+            "输入后把结果留在剪贴板",
+            "适合游戏等打不开输入框的场合，之后按 Ctrl+V 粘贴。关闭时恢复原来的剪贴板。",
+            self.keep_in_clipboard,
+        )
+        layout.addWidget(typing)
+
+        words = SettingsGroup("文字")
+        self.no_punctuation = toggle(settings.no_punctuation)
+        words.row("去掉中文标点和语气词", "如逗号、句号、问号和“啊、呢、吧”", self.no_punctuation)
+        self.no_english_punctuation = toggle(settings.no_english_punctuation)
+        words.row("去掉英文标点", "3.5、10:30 和网址里的点、冒号会保留", self.no_english_punctuation)
+        self.voice_translation = toggle(settings.voice_translation)
+        words.row("语音翻译", "说完加一句“翻译成英文”，直接输入译文", self.voice_translation)
+        layout.addWidget(words)
+        layout.addStretch()
+        self.add_page("dictation", area)
+
+    # ---- 划词翻译 ----
+
+    def build_translate(self):
+        settings = self.settings
+        area, layout = settings_page(
+            "划词翻译", "在其他程序里选中文字就能翻译，只有要翻译的文字会发到文字整理服务。"
+        )
+        switch = SettingsGroup()
+        self.selection_on = toggle(settings.selection_translate)
+        switch.row("开启划词翻译", "", self.selection_on)
+        layout.addWidget(switch)
         self.selection_options = QWidget()
-        form = QFormLayout(self.selection_options)
-        form.setContentsMargins(0, 6, 0, 0)
-        form.setHorizontalSpacing(18)
-        form.setVerticalSpacing(12)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        trigger = QVBoxLayout()
-        trigger.setSpacing(6)
+        options = QVBoxLayout(self.selection_options)
+        options.setContentsMargins(0, 0, 0, 0)
+        options.setSpacing(20)
+
+        trigger = SettingsGroup("触发")
         self.selection_trigger = Segmented(("显示翻译按钮", "选中即翻译", "只用快捷键"))
         self.selection_trigger.set_current(SELECTION_TRIGGERS.index(settings.selection_trigger), animate=False)
         self.selection_trigger.changed.connect(self.update_selection_hint)
-        trigger.addWidget(self.selection_trigger, 0, Qt.AlignmentFlag.AlignLeft)
-        self.selection_hint = label("", "muted", wrap=True)
-        trigger.addWidget(self.selection_hint)
-        form.addRow(field_label("触发方式"), trigger)
-        keys = QVBoxLayout()
-        keys.setSpacing(4)
+        self.selection_hint = trigger.row("触发方式", " ", self.selection_trigger).hint
         self.selection_hotkey = ComboBox()
         for name in SELECTION_CHOICES:
             self.selection_hotkey.addItem(shortcut_label(name), name)
@@ -2049,13 +2315,13 @@ class SettingsDialog(QDialog):
         self.selection_hotkey.setCurrentIndex(max(0, self.selection_hotkey.findData(settings.selection_hotkey)))
         self.selection_hotkey_choice = settings.selection_hotkey
         self.selection_hotkey.activated.connect(self.choose_selection_hotkey)
-        self.selection_hotkey.setMaximumWidth(200)
-        keys.addWidget(self.selection_hotkey)
-        self.selection_key_hint = label(selection_hint(settings.selection_hotkey), "muted", wrap=True)
-        keys.addWidget(self.selection_key_hint)
-        form.addRow(field_label("快捷键"), keys)
-        way = QVBoxLayout()
-        way.setSpacing(4)
+        self.selection_hotkey.setFixedWidth(200)
+        self.selection_key_hint = trigger.row(
+            "快捷键", selection_hint(settings.selection_hotkey), self.selection_hotkey
+        ).hint
+        options.addWidget(trigger)
+
+        languages = SettingsGroup("语言")
         direction = QHBoxLayout()
         direction.setSpacing(8)
         self.selection_native = ComboBox()
@@ -2064,7 +2330,7 @@ class SettingsDialog(QDialog):
             for name in TRANSLATION_LANGUAGES:
                 box.addItem(name, name)
             box.setCurrentIndex(max(0, box.findData(value)))
-            box.setMaximumWidth(130)
+            box.setFixedWidth(130)
         direction.addWidget(self.selection_native)
         self.selection_swap = make_button("", Glyph.SWAP, "heroChip")
         self.selection_swap.setFixedWidth(32)
@@ -2072,113 +2338,265 @@ class SettingsDialog(QDialog):
         self.selection_swap.clicked.connect(self.swap_selection_languages)
         direction.addWidget(self.selection_swap)
         direction.addWidget(self.selection_foreign)
-        direction.addStretch()
-        way.addLayout(direction)
-        self.selection_back = label("", "muted", wrap=True)
-        way.addWidget(self.selection_back)
+        self.selection_back = languages.row("互译语言", " ", direction).hint
         self.selection_native.currentIndexChanged.connect(self.update_selection_hint)
         self.selection_foreign.currentIndexChanged.connect(self.update_selection_hint)
-        form.addRow(field_label("互译语言"), way)
-        style = QVBoxLayout()
-        style.setSpacing(6)
         self.selection_style = Segmented(tuple(name for name, _rule in TRANSLATION_STYLES.values()))
         self.selection_style.set_current(list(TRANSLATION_STYLES).index(settings.selection_style), animate=False)
-        style.addWidget(self.selection_style, 0, Qt.AlignmentFlag.AlignLeft)
-        style.addWidget(label("自然：地道通顺；正式：适合邮件和文档；直译：贴近原文。翻译弹窗里也能换。", "muted", wrap=True))
-        form.addRow(field_label("译文风格"), style)
-        excluded = QVBoxLayout()
-        excluded.setSpacing(4)
+        languages.row(
+            "译文风格", "自然：地道通顺；正式：适合邮件和文档；直译：贴近原文。翻译弹窗里也能换。", self.selection_style
+        )
+        options.addWidget(languages)
+
+        exceptions = SettingsGroup("例外")
         self.selection_excluded = QLineEdit(", ".join(settings.selection_excluded))
-        self.selection_excluded.setPlaceholderText("程序文件名，用逗号分开，如 WeChat.exe")
-        excluded.addWidget(self.selection_excluded)
-        excluded.addWidget(label("这些程序里不弹按钮，也不响应快捷键。密码框和常见的密码管理器从不读取。", "muted", wrap=True))
-        form.addRow(field_label("不翻译的程序"), excluded)
-        translating.body.addWidget(self.selection_options)
+        self.selection_excluded.setPlaceholderText("如 WeChat.exe，用逗号分开")
+        self.selection_excluded.setFixedWidth(260)
+        exceptions.row(
+            "不翻译的程序",
+            "这些程序里不弹按钮，也不响应快捷键。密码框和常见的密码管理器从不读取。",
+            self.selection_excluded,
+        )
+        options.addWidget(exceptions)
+        layout.addWidget(self.selection_options)
         self.selection_on.toggled.connect(self.selection_options.setEnabled)
         self.selection_options.setEnabled(settings.selection_translate)
         self.update_selection_hint()
-        layout.addWidget(translating)
+        layout.addStretch()
+        self.add_page("translate", area)
 
-        privacy = Section("隐私与启动", "录音只在内存中处理，识别后立即释放，不保存录音文件。", Glyph.LOCK)
-        self.history = Switch("保留最近 5 条文字（本机加密，最长 7 天）")
-        self.history.setChecked(settings.save_history)
-        privacy.body.addWidget(self.history)
-        stats_row = QHBoxLayout()
-        self.collect_stats = Switch("记录使用统计（只记字数、次数和 tokens，不记内容）")
-        self.collect_stats.setChecked(settings.collect_stats)
-        stats_row.addWidget(self.collect_stats, 1)
-        self.clear_stats = make_button("清空统计", None, "link", ACCENT)
-        self.clear_stats.clicked.connect(self.confirm_clear_stats)
-        stats_row.addWidget(self.clear_stats)
-        privacy.body.addLayout(stats_row)
-        self.stats_cleared = False
-        self.achievement_popups = Switch("达成成就时弹出小卡片")
-        self.achievement_popups.setChecked(settings.achievement_popups)
-        privacy.body.addWidget(self.achievement_popups)
-        self.startup = Switch("开机自启动，登录 Windows 后在托盘运行")
-        self.startup.setChecked(settings.start_on_login)
-        privacy.body.addWidget(self.startup)
-        self.check_updates = Switch("每天自动检查新版本（只读取版本信息，不发送任何数据）")
-        self.check_updates.setChecked(settings.check_updates)
-        privacy.body.addWidget(self.check_updates)
-        update_row = QHBoxLayout()
-        update_row.setSpacing(12)
-        self.check_update_button = check_button("检查更新", Glyph.REFRESH)
-        self.check_update_button.clicked.connect(self.check_update)
-        update_row.addWidget(self.check_update_button, 0, Qt.AlignmentFlag.AlignTop)
-        self.update_status = CheckStatus()
-        self.update_status.text.setText(f"当前版本 {__version__}")
-        update_row.addWidget(self.update_status, 1)
-        privacy.body.addLayout(update_row)
-        layout.addWidget(privacy)
+    # ---- 词库 ----
 
-        words = Section(
-            "个人词库",
-            "每行一个人名、项目名或英文术语，最多 100 个。整理时用来纠正写法，Qwen3-ASR 识别时也会参考。",
-            Glyph.EDIT,
+    def build_words(self):
+        area, layout = settings_page("词库", "让识别和整理认得你常用的人名、项目名和术语。")
+        personal = SettingsGroup("个人词库")
+        self.glossary = QPlainTextEdit("\n".join(self.settings.glossary))
+        self.glossary.setFixedHeight(170)
+        personal.block(
+            label("每行一个，最多 100 个。整理时用来纠正写法，Qwen3-ASR 识别时也会参考。", "rowHint", wrap=True),
+            self.glossary,
         )
-        self.glossary = QPlainTextEdit("\n".join(settings.glossary))
-        self.glossary.setMinimumHeight(130)
-        self.glossary.setMaximumHeight(180)
-        words.body.addWidget(self.glossary)
-        layout.addWidget(words)
+        layout.addWidget(personal)
 
-        lexicons = Section(
-            "专业词库",
-            "导入输入法等工具的词库，在本机按读音比对，读音相近的词才用于识别和整理。"
-            "两个字的中文词不参与比对，请加到个人词库。",
-            Glyph.IMPORT,
-        )
+        lexicons = SettingsGroup("专业词库")
         # Edited here and saved with the other settings; files of unsaved imports are deleted afterwards.
-        self.lexicons = [dict(item) for item in settings.lexicons]
+        self.lexicons = [dict(item) for item in self.settings.lexicons]
         self.imported_ids: set[str] = set()
         self.lexicon_rows = QVBoxLayout()
         self.lexicon_rows.setSpacing(6)
-        lexicons.body.addLayout(self.lexicon_rows)
+        list_box = QWidget()
+        list_box.setLayout(self.lexicon_rows)
         actions_row = QHBoxLayout()
         actions_row.setSpacing(10)
-        self.import_button = make_button("导入词库…", Glyph.IMPORT, "toolbar")
+        self.import_button = make_button("导入词库…", Glyph.IMPORT, "check", ACCENT)
         self.import_button.clicked.connect(self.import_lexicon)
         actions_row.addWidget(self.import_button, 0, Qt.AlignmentFlag.AlignTop)
-        self.lexicon_status = label("支持 txt、csv、json、搜狗 .scel、Rime .dict.yaml", "muted", wrap=True)
+        self.lexicon_status = label("支持 txt、csv、json、搜狗 .scel、Rime .dict.yaml", "rowHint", wrap=True)
         actions_row.addWidget(self.lexicon_status, 1)
-        lexicons.body.addLayout(actions_row)
+        lexicons.block(
+            label(
+                "导入输入法等工具的词库，在本机按读音比对，读音相近的词才用于识别和整理。"
+                "两个字的中文词不参与比对，请加到个人词库。",
+                "rowHint",
+                wrap=True,
+            ),
+            list_box,
+            actions_row,
+        )
         layout.addWidget(lexicons)
         self.fill_lexicons()
         layout.addStretch()
+        self.add_page("words", area)
 
-        footer, actions = footer_bar()
-        actions.addWidget(glyph_label(Glyph.LOCK, MUTED, 14))
-        actions.addWidget(label("密钥按 API 地址分别保存在 Windows 凭据管理器", "caption"))
-        actions.addStretch()
-        cancel = make_button("取消")
-        cancel.clicked.connect(self.reject)
-        save = make_button("保存设置", Glyph.CHECK, "primary")
-        save.setDefault(True)
-        save.clicked.connect(self.save)
-        actions.addWidget(cancel)
-        actions.addWidget(save)
-        outer.addWidget(footer)
+    # ---- 文字整理服务 ----
+
+    def build_api(self):
+        settings = self.settings
+        area, layout = settings_page("文字整理服务", "录音在本机识别，只有文字会发到这里的 API 整理。")
+        service = SettingsGroup("连接")
+        self.base_url = QLineEdit(settings.api_base_url)
+        self.base_url.setPlaceholderText("例如 https://api.example.com/v1")
+        self.base_url.setToolTip("填写兼容 Chat Completions 的 API 地址，支持 Base URL 或完整请求地址。")
+        self.key = QLineEdit()
+        self.key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.update_key_hint()
+        self.base_url.textChanged.connect(self.api_address_changed)
+        self.model = QLineEdit(settings.model)
+        self.model.setPlaceholderText("填写服务商提供的模型名称")
+        for field in (self.base_url, self.key, self.model):
+            field.setFixedWidth(340)
+        service.row("API 地址", "支持 Base URL 或完整请求地址", self.base_url)
+        service.row("API Key", "", self.key)
+        service.row("模型名称", "", self.model)
+        self.timeout = SpinBox()
+        self.timeout.setRange(1, 120)
+        self.timeout.setSuffix(" 秒")
+        self.timeout.setValue(int(settings.api_timeout))
+        self.timeout.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.timeout.setFixedWidth(120)
+        service.row("请求超时", "", self.timeout)
+        self.test_api = check_button("测试连接", Glyph.CONNECT)
+        self.test_api.clicked.connect(self.check_connection)
+        test = service.row("连接检查", "用一句话试试地址、密钥和模型能不能用", self.test_api)
+        self.api_status = CheckStatus()
+        self.api_status.hide()
+        test.text.addWidget(self.api_status)
+        layout.addWidget(service)
+        note = QHBoxLayout()
+        note.setSpacing(6)
+        note.setContentsMargins(2, 0, 0, 0)
+        note.addWidget(glyph_label(Glyph.LOCK, MUTED, 14))
+        note.addWidget(label("密钥按 API 地址分别保存在 Windows 凭据管理器，不写进设置文件。", "caption"), 1)
+        layout.addLayout(note)
+        layout.addStretch()
+        self.add_page("api", area)
+
+    # ---- 隐私 ----
+
+    def build_privacy(self):
+        area, layout = settings_page("隐私", "录音只在内存中处理，识别后立即释放，不保存录音文件。")
+        data = SettingsGroup()
+        self.history = toggle(self.settings.save_history)
+        data.row("保留最近 5 条文字", "本机加密，最长 7 天", self.history)
+        stats = QHBoxLayout()
+        stats.setSpacing(12)
+        self.clear_stats = make_button("清空统计", None, "link", ACCENT)
+        self.clear_stats.clicked.connect(self.confirm_clear_stats)
+        stats.addWidget(self.clear_stats, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.collect_stats = toggle(self.settings.collect_stats)
+        stats.addWidget(self.collect_stats, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.collect_stats.setAccessibleName("记录使用统计")
+        data.row("记录使用统计", "只记字数、次数和 tokens，不记内容", stats)
+        self.stats_cleared = False
+        layout.addWidget(data)
+        layout.addStretch()
+        self.add_page("privacy", area)
+
+    # ---- 软件更新 ----
+
+    def check_update(self):
+        from .checks import CheckResult
+        from .updates import UpdateError, fetch_release, is_newer
+
+        self.check_update_button.setEnabled(False)
+        self.update_status.show()
+        self.update_status.running("正在检查…")
+
+        def work(_report):
+            try:
+                return fetch_release()
+            except UpdateError as exc:
+                return CheckResult(False, str(exc))
+
+        def finished(result):
+            self.check_update_button.setEnabled(True)
+            if isinstance(result, CheckResult):
+                self.update_status.finish(False, result.message)
+            elif is_newer(result.version):
+                self.update_status.finish(True, f"有新版本 {result.version}")
+                if self.update_state in ("", "offered"):
+                    self.show_release(result)
+                self.release_found.emit(result)
+            else:
+                self.update_status.finish(True, f"已是最新版本（{__version__}）")
+
+        run_task(self, work, finished)
+
+    def show_release(self, release):
+        """A newer release is out: say what it brings and offer to install it."""
+        from .announcement import release_date
+
+        self.release = release
+        self.update_state = "offered"
+        meta = " · ".join(part for part in (release_date(release.date), format_bytes(release.size) if release.size else "") if part)
+        self.news_title.setText(
+            f"有新版本 {html.escape(release.version)}"
+            + (f'<span style="color:#776F63; font-weight:400; font-size:12px">　{meta}</span>' if meta else "")
+        )
+        self.news_text.setText(release.notes)
+        self.news_progress.hide()
+        self.update_now.setText(f"更新到 {release.version}")
+        self.update_now.setEnabled(True)
+        self.update_now.show()
+        self.update_notes_button.show()
+        self.update_news_box.show()
+        self.nav_buttons["general"].set_badge(True)
+
+    def show_download(self, percent: int):
+        if self.release is None:
+            return
+        self.news_title.setText(
+            f"正在下载 {html.escape(self.release.version)}"
+            f'<span style="color:#776F63; font-weight:400; font-size:12px">　{percent}%</span>'
+        )
+        self.update_state = "downloading"
+        self.news_text.setText("可以继续改设置。下载好后，关闭设置就会安装。")
+        self.news_progress.setValue(percent)
+        self.news_progress.show()
+        self.update_now.hide()
+        self.update_notes_button.hide()
+        self.update_news_box.show()
+
+    def show_downloaded(self):
+        if self.release is None:
+            return
+        self.update_state = "ready"
+        self.news_title.setText(f'<span style="color:#3F7A53">✓</span> {html.escape(self.release.version)} 已下载好')
+        self.news_text.setText("关闭设置后自动安装，几秒后好好说会重新打开。")
+        self.news_progress.hide()
+        self.update_now.hide()
+        self.update_notes_button.hide()
+        self.update_news_box.show()
+
+    def show_update_failed(self, message: str):
+        if self.release is None:
+            return
+        self.show_release(self.release)
+        self.news_text.setText(message)
+        self.update_now.setText("重试")
+
+    def request_update(self):
+        self.update_now.setEnabled(False)
+        self.update_requested.emit()
+        self.update_now.setEnabled(True)  # Still shown only when nothing started, as from a build copy.
+
+    def show_release_notes(self):
+        from .announcement import AnnouncementDialog
+        from .updates import changelog_page, installed_here
+
+        release = self.release
+        if release is None:
+            return
+        dialog = AnnouncementDialog(
+            release.version,
+            release.notes,
+            release.highlights,
+            changelog=changelog_page(release.version),
+            date=release.date,
+            size=release.size,
+            installable=installed_here(),
+            parent=self,
+        )
+        dialog.exec()
+        if dialog.choice == "update":
+            self.request_update()
+
+    def reject(self):
+        # Closing installs a downloaded update; unsaved changes would be lost with the restart.
+        if self.update_state == "ready" and self.has_changes():
+            answer = QMessageBox.question(
+                self,
+                "设置还没保存",
+                "关闭设置后会安装更新并重新打开好好说。先保存刚才改的设置吗？",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+            if answer == QMessageBox.StandardButton.Save:
+                self.save()
+                return
+            if answer == QMessageBox.StandardButton.Cancel:
+                return
+        super().reject()
 
     def update_key_hint(self):
         found = bool(read_key(api_base_url=self.base_url.text()))
@@ -2195,33 +2613,6 @@ class SettingsDialog(QDialog):
             self.clear_stats.setText("已清空")
             self.clear_stats.setEnabled(False)
 
-    def check_update(self):
-        from .checks import CheckResult
-        from .updates import UpdateError, fetch_release, is_newer
-
-        self.check_update_button.setEnabled(False)
-        self.update_status.running("正在检查…")
-
-        def work(_report):
-            try:
-                return fetch_release()
-            except UpdateError as exc:
-                return CheckResult(False, str(exc))
-
-        def finished(result):
-            self.check_update_button.setEnabled(True)
-            if isinstance(result, CheckResult):
-                self.update_status.finish(False, result.message)
-            elif is_newer(result.version):
-                self.update_status.finish(
-                    True, f"有新版本 {result.version}：{result.notes}关闭设置后可以查看新内容并更新。"
-                )
-                self.release_found.emit(result)
-            else:
-                self.update_status.finish(True, f"已是最新版本（{__version__}）")
-
-        run_task(self, work, finished)
-
     def check_connection(self):
         from .checks import check_api
 
@@ -2232,6 +2623,7 @@ class SettingsDialog(QDialog):
             key = self.key.text().strip()
         model, timeout = self.model.text(), float(self.timeout.value())
         self.test_api.setEnabled(False)
+        self.api_status.show()
         self.api_status.running("正在连接…")
 
         def finished(result):
@@ -2349,19 +2741,64 @@ class SettingsDialog(QDialog):
         self.fill_lexicons()
         self.lexicon_status.setText(f"已移除“{lexicon['name']}”，保存设置后生效。")
 
-    def save(self):
+    def pending(self) -> Settings:
+        """The settings as the dialog now shows them, before they are checked."""
         words = list(dict.fromkeys(x.strip() for x in self.glossary.toPlainText().splitlines() if x.strip()))
-        if len(words) > 100 or any(len(word) > 80 for word in words):
-            QMessageBox.warning(self, "检查词库", "最多添加 100 个词，每个词不超过 80 字。")
+        excluded = []
+        for name in re.split(r"[,，;；\s]+", self.selection_excluded.text()):
+            name = name.strip().lower()
+            if name:
+                excluded.append(name if name.endswith(".exe") else name + ".exe")
+        return replace(
+            self.settings,
+            model=self.model.text().strip(),
+            api_base_url=self.base_url.text().strip().rstrip("/"),
+            api_timeout=float(self.timeout.value()),
+            microphone=self.mic.currentData(),
+            hotkey=self.hotkey_choice,
+            hold_to_talk=self.hold.current() == 0,
+            save_history=self.history.isChecked(),
+            collect_stats=self.collect_stats.isChecked(),
+            achievement_popups=self.achievement_popups.isChecked(),
+            start_on_login=self.startup.isChecked(),
+            glossary=words,
+            lexicons=[dict(item) for item in self.lexicons],
+            voice_translation=self.voice_translation.isChecked(),
+            no_punctuation=self.no_punctuation.isChecked(),
+            no_english_punctuation=self.no_english_punctuation.isChecked(),
+            keep_in_clipboard=self.keep_in_clipboard.isChecked(),
+            gpu_acceleration=self.gpu.isChecked(),
+            check_updates=self.check_updates.isChecked(),
+            selection_translate=self.selection_on.isChecked(),
+            selection_trigger=SELECTION_TRIGGERS[self.selection_trigger.current()],
+            selection_hotkey=self.selection_hotkey_choice,
+            selection_native=self.selection_native.currentData(),
+            selection_foreign=self.selection_foreign.currentData(),
+            selection_style=list(TRANSLATION_STYLES)[self.selection_style.current()],
+            selection_excluded=list(dict.fromkeys(excluded))[:100],
+        )
+
+    def has_changes(self) -> bool:
+        return bool(self.key.text().strip()) or self.pending() != self.settings
+
+    def warn(self, page: str, title: str, text: str):
+        """A problem with a setting, shown on the page that holds it."""
+        self.show_page(page)
+        QMessageBox.warning(self, title, text)
+
+    def save(self):
+        new = self.pending()
+        if len(new.glossary) > 100 or any(len(word) > 80 for word in new.glossary):
+            self.warn("words", "检查词库", "最多添加 100 个词，每个词不超过 80 字。")
             return
-        if not self.model.text().strip():
-            QMessageBox.warning(self, "检查模型", "请填写 API 服务商提供的模型名称。")
+        if not new.model:
+            self.warn("api", "检查模型", "请填写 API 服务商提供的模型名称。")
             return
-        base_url = self.base_url.text().strip().rstrip("/")
+        base_url = new.api_base_url
         try:
             endpoint = chat_completion_url(base_url)
         except ValueError as exc:
-            QMessageBox.warning(self, "检查 API 地址", str(exc))
+            self.warn("api", "检查 API 地址", str(exc))
             return
         try:
             previous_endpoint = chat_completion_url(self.settings.api_base_url)
@@ -2372,62 +2809,29 @@ class SettingsDialog(QDialog):
             and not self.key.text().strip()
             and not read_key(api_base_url=base_url)
         ):
-            QMessageBox.warning(self, "检查 API Key", "已更换 API 地址，请填写该服务对应的密钥。")
+            self.warn("api", "检查 API Key", "已更换 API 地址，请填写该服务对应的密钥。")
             return
-        selection_hotkey = self.selection_hotkey_choice
-        if self.selection_on.isChecked() and selection_hotkey == self.hotkey_choice:
-            QMessageBox.warning(self, "检查快捷键", "划词翻译的快捷键和录音快捷键相同，请换一个。")
+        if new.selection_translate and new.selection_hotkey == new.hotkey:
+            self.warn("translate", "检查快捷键", "划词翻译的快捷键和录音快捷键相同，请换一个。")
             return
-        native, foreign = self.selection_native.currentData(), self.selection_foreign.currentData()
+        native, foreign = new.selection_native, new.selection_foreign
         if native == foreign:
-            QMessageBox.warning(self, "检查互译语言", "两种语言相同，请换一种。")
+            self.warn("translate", "检查互译语言", "两种语言相同，请换一种。")
             return
-        if self.selection_on.isChecked() and TRANSLATION_SCRIPTS.get(native) == TRANSLATION_SCRIPTS.get(foreign):
-            QMessageBox.warning(
-                self, "检查互译语言",
+        if new.selection_translate and TRANSLATION_SCRIPTS.get(native) == TRANSLATION_SCRIPTS.get(foreign):
+            self.warn(
+                "translate", "检查互译语言",
                 f"{native}和{foreign}写法相同，程序分不出选中的是哪一种，没法自动互译。请把其中一种换成别的语言。",
             )
             return
-        excluded = []
-        for name in re.split(r"[,，;；\s]+", self.selection_excluded.text()):
-            name = name.strip().lower()
-            if name:
-                excluded.append(name if name.endswith(".exe") else name + ".exe")
         try:
             if self.key.text().strip():
                 save_key(self.key.text(), api_base_url=base_url)
-            self.updated = replace(
-                self.settings,
-                model=self.model.text().strip(),
-                api_base_url=base_url,
-                api_timeout=float(self.timeout.value()),
-                microphone=self.mic.currentData(),
-                hotkey=self.hotkey_choice,
-                hold_to_talk=self.hold.current() == 0,
-                save_history=self.history.isChecked(),
-                collect_stats=self.collect_stats.isChecked(),
-                achievement_popups=self.achievement_popups.isChecked(),
-                start_on_login=self.startup.isChecked(),
-                glossary=words,
-                lexicons=[dict(item) for item in self.lexicons],
-                voice_translation=self.voice_translation.isChecked(),
-                no_punctuation=self.no_punctuation.isChecked(),
-                no_english_punctuation=self.no_english_punctuation.isChecked(),
-                keep_in_clipboard=self.keep_in_clipboard.isChecked(),
-                gpu_acceleration=self.gpu.isChecked(),
-                check_updates=self.check_updates.isChecked(),
-                selection_translate=self.selection_on.isChecked(),
-                selection_trigger=SELECTION_TRIGGERS[self.selection_trigger.current()],
-                selection_hotkey=selection_hotkey,
-                selection_native=self.selection_native.currentData(),
-                selection_foreign=self.selection_foreign.currentData(),
-                selection_style=list(TRANSLATION_STYLES)[self.selection_style.current()],
-                selection_excluded=list(dict.fromkeys(excluded))[:100],
-            )
-            self.accept()
         except Exception:
-            QMessageBox.warning(self, "保存失败", "无法保存密钥到 Windows 凭据管理器，请检查系统权限。")
-
+            self.warn("api", "保存失败", "无法保存密钥到 Windows 凭据管理器，请检查系统权限。")
+            return
+        self.updated = new
+        self.accept()
 
 def free_space(path: Path) -> int | None:
     for candidate in (path, *path.parents):

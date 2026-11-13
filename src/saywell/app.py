@@ -203,7 +203,11 @@ class MainWindow(QMainWindow):
         self.release: Release | None = None
         self.updating = False
         self.update_cancel = Event()
+        self.update_percent = 0
+        self.update_downloaded = False
         self.checking_update = False
+        # The settings dialog while it is open, which shows how an update started there is going.
+        self.settings_dialog = None
         self.announced_release = ""
         load_fonts()  # Also when built without main(), as the screenshot scripts do.
         self.setWindowTitle("好好说 Saywell")
@@ -300,7 +304,7 @@ class MainWindow(QMainWindow):
         self.models_button = make_button("语音模型", Glyph.MODEL, "toolbar")
         self.models_button.clicked.connect(self.open_models)
         self.settings_button = make_button("设置", Glyph.SETTINGS, "toolbar")
-        self.settings_button.clicked.connect(self.open_settings)
+        self.settings_button.clicked.connect(lambda: self.open_settings())
         # Shown once a check finds a newer version; short, so the header still fits at the minimum width.
         self.update_button = make_button("", Glyph.DOWNLOAD, "toolbar", ACCENT)
         self.update_button.clicked.connect(lambda: self.release and self.announce(self.release))
@@ -458,7 +462,7 @@ class MainWindow(QMainWindow):
         self.hero_stack.addWidget(self.meeting.hero)
         # 翻译: the guide to selection translation in place of the recording card, and long texts.
         self.translate_page = TranslatePage(self)
-        self.translate_page.guide.open_settings.connect(self.open_settings)
+        self.translate_page.guide.open_settings.connect(lambda: self.open_settings("translate"))
         self.translate_page.guide.turn_on.connect(self.turn_on_selection_translation)
         self.pages.addWidget(self.translate_page)
         self.hero_stack.addWidget(self.translate_page.guide)
@@ -595,7 +599,9 @@ class MainWindow(QMainWindow):
 
         run_task(self, work, done)
 
-    def offer_release(self, release: Release, manual: bool = False):
+    def offer_release(self, release: Release, manual: bool = False, quiet: bool = False):
+        """Show the 更新 button for a newer release and, unless quiet (found in the settings, which
+        offer it themselves), announce it."""
         if not is_newer(release.version):
             if manual and self.native:
                 self.notify("好好说", f"已是最新版本（{__version__}）。")
@@ -605,7 +611,7 @@ class MainWindow(QMainWindow):
             self.update_button.setText("更新")
         self.update_button.setToolTip(f"有新版本 {release.version}：{release.notes}")
         self.update_button.show()
-        if self.updating or not manual and release.version in (self.announced_release, self.settings.skipped_release):
+        if quiet or self.updating or not manual and release.version in (self.announced_release, self.settings.skipped_release):
             return
         self.announced_release = release.version
         self.pending_release = release
@@ -696,9 +702,11 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl(release.page))
             return
         self.updating = True
+        self.update_downloaded = False
         self.update_cancel.clear()
         self.update_button.setEnabled(False)
         self.update_button.setText("更新中…")
+        self.update_progress("0")
         shown = [-1]
 
         def work(report):
@@ -716,16 +724,27 @@ class MainWindow(QMainWindow):
         def done(value):
             if isinstance(value, Path):
                 self.update_button.setText("正在安装…")
+                self.update_downloaded = True
+                if self.settings_dialog is not None:
+                    self.settings_dialog.show_downloaded()
                 self.install_update(value, release.version)
             else:
                 self.update_failed(f"更新没有完成：{value.message}")
 
-        run_task(self, work, done, lambda percent: self.update_button.setText(f"更新中 {percent}%"))
+        run_task(self, work, done, self.update_progress)
+
+    def update_progress(self, percent: str):
+        self.update_percent = int(percent)
+        self.update_button.setText(f"更新中 {percent}%")
+        if self.settings_dialog is not None:
+            self.settings_dialog.show_download(self.update_percent)
 
     def update_failed(self, message: str):
         self.updating = False
         self.update_button.setEnabled(True)
         self.update_button.setText("更新")
+        if self.settings_dialog is not None:
+            self.settings_dialog.show_update_failed(message)
         if not self.quitting:
             self.set_notice(message)
 
@@ -1420,20 +1439,34 @@ class MainWindow(QMainWindow):
                 if button.isVisible():
                     button.flash("已复制")
 
-    def open_settings(self):
+    def open_settings(self, page: str | None = None):
         try:
             current = replace(self.settings, start_on_login=startup_enabled())
         except StartupError as exc:
             self.set_notice(str(exc))
             return
-        dialog = SettingsDialog(current, self)
-        dialog.release_found.connect(lambda release: self.offer_release(release, manual=True))
+        if page is None:
+            # Without a key the settings are most likely opened to give one.
+            page = "general" if read_key(api_base_url=current.api_base_url) else "api"
+        dialog = SettingsDialog(current, self, page)
+        dialog.release_found.connect(lambda release: self.offer_release(release, manual=True, quiet=True))
+        dialog.update_requested.connect(self.start_update)
+        if self.release is not None and is_newer(self.release.version):
+            dialog.show_release(self.release)
+            if self.update_downloaded:
+                dialog.show_downloaded()
+            elif self.updating:
+                dialog.show_download(self.update_percent)
         # Typing a new shortcut, or holding right Ctrl in the dialog, must not start a recording
         # or a translation; configure_hotkeys puts them back.
         self.suspend_hotkey()
         if self.selection is not None:
             self.selection.suspend()
-        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        self.settings_dialog = dialog
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self.settings_dialog = None
         known = {item["id"] for item in current.lexicons} | getattr(dialog, "imported_ids", set())
         try:
             self.apply_settings_dialog(dialog, accepted)
