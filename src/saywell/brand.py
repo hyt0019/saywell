@@ -17,6 +17,10 @@ INDIGO = "#3C488E"  # The one fold that catches the light.
 CORAL = "#F2755F"  # The breast; in the app, what is live.
 IVORY_TOP, IVORY_BOTTOM = "#F8F2E8", "#EFE5D6"  # The tile, a sheet of warm paper.
 RIM = QColor(120, 96, 62, 46)  # The tile's edge, so it holds on a light taskbar.
+# Inside the app's dark theme: a deep ink tile, and the bird in paper with a periwinkle fold.
+NIGHT_TOP, NIGHT_BOTTOM = "#2A2F4C", "#1C2037"
+NIGHT_RIM = QColor(255, 255, 255, 40)
+NIGHT = {INK: "#EDE6D8", INDIGO: "#9DA8EC", CORAL: "#F4826D"}
 
 BIRD_WIDTH, BIRD_HEIGHT = 100.0, 89.2
 
@@ -63,14 +67,17 @@ FOLDS = (
 )
 
 
-def draw_swallow(painter: QPainter, rect: QRectF, color: str | None = None) -> None:
-    """The bird, as large as fits in rect and centred. One colour (a silhouette) when given."""
+def draw_swallow(painter: QPainter, rect: QRectF, color: str | None = None, night: bool = False) -> None:
+    """The bird, as large as fits in rect and centred. One colour (a silhouette) when given; night
+    draws it for the dark tile."""
     scale = min(rect.width() / BIRD_WIDTH, rect.height() / BIRD_HEIGHT)
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.translate(rect.center().x() - BIRD_WIDTH * scale / 2, rect.center().y() - BIRD_HEIGHT * scale / 2)
     painter.scale(scale, scale)
     for _name, path, fill in FOLDS:
+        if night:
+            fill = NIGHT[fill]
         painter.setBrush(QColor(color or fill))
         # A hairline in the same colour closes the seams antialiasing leaves between folds.
         seam = QPen(QColor(color or fill), 0.6)
@@ -99,21 +106,22 @@ def squircle(rect: QRectF, exponent: float = 5.0, steps: int = 96) -> QPainterPa
     return path
 
 
-def draw_tile(painter: QPainter, rect: QRectF, rim: int | None = None) -> None:
+def draw_tile(painter: QPainter, rect: QRectF, rim: int | None = None, night: bool = False) -> None:
     """The ivory tile with a fine edge; light from above. rim sets the edge's alpha; by default
-    small tiles get a firmer one, to stand out on a light taskbar."""
+    small tiles get a firmer one, to stand out on a light taskbar. night draws the ink tile."""
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     shape = squircle(rect)
     paper = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-    paper.setColorAt(0.0, QColor(IVORY_TOP))
-    paper.setColorAt(1.0, QColor(IVORY_BOTTOM))
+    paper.setColorAt(0.0, QColor(NIGHT_TOP if night else IVORY_TOP))
+    paper.setColorAt(1.0, QColor(NIGHT_BOTTOM if night else IVORY_BOTTOM))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(paper)
     painter.drawPath(shape)
     edge = max(1.0, rect.width() / 256)
-    colour = QColor(RIM)
-    colour.setAlpha(rim if rim is not None else 80 if rect.width() <= 48 else RIM.alpha())
+    colour = QColor(NIGHT_RIM if night else RIM)
+    if not night:
+        colour.setAlpha(rim if rim is not None else 80 if rect.width() <= 48 else RIM.alpha())
     painter.setPen(QPen(colour, edge))
     painter.setBrush(Qt.BrushStyle.NoBrush)
     inset = edge / 2
@@ -150,22 +158,25 @@ def draw_icon(painter: QPainter, rect: QRectF) -> None:
     draw_swallow(painter, bird_rect(rect))
 
 
-def icon_image(size: int) -> QImage:
-    """The icon at one size; large ones get the bird's soft shadow on the paper."""
-    image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+def icon_image(size: int, night: bool = False, ratio: float = 1.0) -> QImage:
+    """The icon at one size; large ones get the bird's soft shadow on the paper. night is the
+    version shown inside the app's dark theme; the program's own icon is always the ivory one.
+    ratio draws it that many times finer, for screens with more pixels than points."""
+    image = QImage(round(size * ratio), round(size * ratio), QImage.Format.Format_ARGB32_Premultiplied)
+    image.setDevicePixelRatio(ratio)
     image.fill(Qt.GlobalColor.transparent)
     painter = QPainter(image)
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
     rect = QRectF(0, 0, size, size)
-    draw_tile(painter, rect)
+    draw_tile(painter, rect, night=night)
     bird = bird_rect(rect)
     if size >= 64:
         painter.save()
         painter.setClipPath(squircle(rect.adjusted(1, 1, -1, -1)))
-        painter.setOpacity(0.16)
+        painter.setOpacity(0.4 if night else 0.16)
         painter.drawImage(0, 0, soft_shadow(size, bird, size * 0.035, 24))
         painter.restore()
-    draw_swallow(painter, bird)
+    draw_swallow(painter, bird, night=night)
     painter.end()
     return image
 

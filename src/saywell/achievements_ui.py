@@ -12,11 +12,12 @@ import math
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QImage, QPainter, QPen
+from PySide6.QtGui import QFont, QFontMetrics, QGuiApplication, QImage, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from .achievements import ACHIEVEMENTS, GROUPS, Achievement, Achievements
 from .translation_ui import Floating
+from .theme import tone
 from .ui import ACCENT, ASSETS, CORAL, DISABLED, INK, LINE, MUTED, SERIF, SHEET, Glyph, Tween, label, make_button, spring
 
 BADGES = ASSETS / "achievements"
@@ -38,7 +39,7 @@ def emblem(achievement_id: str, faded: bool = False) -> QImage | None:
             image = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
             painter = QPainter(image)
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-            painter.fillRect(image.rect(), QColor(SILHOUETTE))
+            painter.fillRect(image.rect(), tone(SILHOUETTE))
             painter.end()
             _emblems[key] = image
         else:
@@ -70,24 +71,24 @@ def draw_medallion(painter: QPainter, rect: QRectF, achievement: Achievement, lo
     edge = rect.adjusted(ring / 2, ring / 2, -ring / 2, -ring / 2)
     if reached:
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(SHEET))
+        painter.setBrush(tone(SHEET))
         painter.drawEllipse(rect)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         if look == "new" and sweep < 1:
-            painter.setPen(QPen(QColor(LINE), ring))
+            painter.setPen(QPen(tone(LINE), ring))
             painter.drawEllipse(edge)
-            pen = QPen(QColor(CORAL), ring)
+            pen = QPen(tone(CORAL), ring)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             painter.drawArc(edge, 90 * 16, -round(max(0.0, sweep) * 360 * 16))
         else:
-            painter.setPen(QPen(QColor(CORAL if look == "new" else ACCENT), ring))
+            painter.setPen(QPen(tone(CORAL if look == "new" else ACCENT), ring))
             painter.drawEllipse(edge)
         gap = ring + max(1.5, size * 0.035)
-        painter.setPen(QPen(QColor(LINE), 1))
+        painter.setPen(QPen(tone(LINE), 1))
         painter.drawEllipse(edge.adjusted(gap, gap, -gap, -gap))
     else:
-        pen = QPen(QColor(DISABLED), max(1.1, size * 0.022))
+        pen = QPen(tone(DISABLED), max(1.1, size * 0.022))
         pen.setDashPattern([2.6, 2.2])
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -102,7 +103,7 @@ def draw_medallion(painter: QPainter, rect: QRectF, achievement: Achievement, lo
         font.setPixelSize(max(9, int(size * (0.42 if look == "secret" else 0.36))))
         font.setWeight(QFont.Weight.Bold)
         painter.setFont(font)
-        painter.setPen(QColor(ACCENT if reached else DISABLED))
+        painter.setPen(tone(ACCENT if reached else DISABLED))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "?" if look == "secret" else achievement.name[0])
     painter.restore()
 
@@ -186,11 +187,11 @@ class Shelf(QWidget):
             medal = QRectF(cell.center().x() - self.size / 2, top, self.size, self.size)
             if index == self.hovered and look in ("new", "reached"):
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor(0, 0, 0, 10))
+                painter.setBrush(tone(0, 0, 0, 10))
                 painter.drawEllipse(medal.adjusted(-3, -2, 3, 4))
             draw_medallion(painter, medal, achievement, look)
             painter.setFont(font)
-            painter.setPen(QColor(INK if look in ("new", "reached") else FAINT))
+            painter.setPen(tone(INK if look in ("new", "reached") else FAINT))
             name = "？？？" if look == "secret" else achievement.name
             painter.drawText(QRectF(cell.left(), medal.bottom() + 6, cell.width(), 18),
                              Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, name)
@@ -337,7 +338,7 @@ class Reel(QWidget):
             painter.setOpacity((1 - distance) ** 1.5)  # Fades a little faster than it slides.
             painter.setFont(label_font)
             again = index > 0 and self.lines[index - 1][0] == group  # The rest of a group.
-            painter.setPen(QColor(DISABLED if again else ACCENT))
+            painter.setPen(tone(DISABLED if again else ACCENT))
             painter.drawText(QRectF(0, top + 4, self.LABEL, 22), Qt.AlignmentFlag.AlignVCenter, group)
             for column, achievement in enumerate(items):
                 cell = QRectF(self.LABEL + column * self.cell_width(), top, self.cell_width(), self.ROW)
@@ -345,11 +346,11 @@ class Reel(QWidget):
                 medal = QRectF(cell.center().x() - self.size / 2, cell.top() + 4, self.size, self.size)
                 if self.hovered == (index, column) and look in ("new", "reached"):
                     painter.setPen(Qt.PenStyle.NoPen)
-                    painter.setBrush(QColor(0, 0, 0, 10))
+                    painter.setBrush(tone(0, 0, 0, 10))
                     painter.drawEllipse(medal.adjusted(-3, -2, 3, 4))
                 draw_medallion(painter, medal, achievement, look)
                 painter.setFont(name_font)
-                painter.setPen(QColor(INK if look in ("new", "reached") else FAINT))
+                painter.setPen(tone(INK if look in ("new", "reached") else FAINT))
                 painter.drawText(QRectF(cell.left(), medal.bottom() + 6, cell.width(), 18),
                                  Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
                                  "？？？" if look == "secret" else achievement.name)
@@ -357,12 +358,12 @@ class Reel(QWidget):
         # A hairline at the right with a short thumb on it: where this line is among them.
         track = QRectF(self.width() - 1.5, (self.ROW - 60) / 2, 1.5, 60)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#EEE7DB"))
+        painter.setBrush(tone("#EEE7DB"))
         painter.drawRect(track)
         if len(self.lines) > 1:
             length = max(10.0, track.height() / len(self.lines))
             top = track.top() + (track.height() - length) * position / (len(self.lines) - 1)
-            painter.setBrush(QColor(MUTED if self.armed else DISABLED))
+            painter.setBrush(tone(MUTED if self.armed else DISABLED))
             painter.drawRoundedRect(QRectF(track.left() - 0.5, top, 2.5, length), 1.2, 1.2)
 
     def item_at(self, x: float, y: float) -> tuple[int, int] | None:
@@ -422,12 +423,12 @@ class NextGoal(QWidget):
         middle = self.height() / 2
         if self.achievement is None:
             painter.setFont(small)
-            painter.setPen(QColor(FAINT))
+            painter.setPen(tone(FAINT))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignVCenter, "看得见的成就都达成了，还有几个藏着。")
             return
         draw_medallion(painter, QRectF(0, middle - 13, 26, 26), self.achievement, "locked")
         painter.setFont(small)
-        painter.setPen(QColor(FAINT))
+        painter.setPen(tone(FAINT))
         x = 36.0
         painter.drawText(QRectF(x, 0, 60, self.height()), Qt.AlignmentFlag.AlignVCenter, "下一个")
         x += QFontMetrics(small).horizontalAdvance("下一个") + 8
@@ -435,22 +436,22 @@ class NextGoal(QWidget):
         title.setPixelSize(14)
         title.setWeight(QFont.Weight.Bold)
         painter.setFont(title)
-        painter.setPen(QColor(ACCENT))
+        painter.setPen(tone(ACCENT))
         painter.drawText(QRectF(x, 0, 200, self.height()), Qt.AlignmentFlag.AlignVCenter, self.achievement.name)
         x += QFontMetrics(title).horizontalAdvance(self.achievement.name) + 14
         missing = f"还差 {amount(self.goal - self.value, self.achievement.unit)}"
         room = QFontMetrics(small).horizontalAdvance(missing)
         painter.setFont(small)
-        painter.setPen(QColor(FAINT))
+        painter.setPen(tone(FAINT))
         painter.drawText(QRectF(self.width() - room - 2, 0, room + 2, self.height()),
                          Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, missing)
         track = QRectF(x, middle - 2, max(24.0, self.width() - room - 16 - x), 4)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#EFE9DE"))
+        painter.setBrush(tone("#EFE9DE"))
         painter.drawRoundedRect(track, 2, 2)
         share = max(0.0, min(1.0, self.value / self.goal)) if self.goal else 0.0
         if share > 0:
-            painter.setBrush(QColor(ACCENT))
+            painter.setBrush(tone(ACCENT))
             painter.drawRoundedRect(QRectF(track.left(), track.top(), max(4.0, track.width() * share), 4), 2, 2)
 
     def mouseMoveEvent(self, event):
@@ -699,10 +700,10 @@ class AchievementToast(Floating):
         card.translate((1 - shown) * self.drift, 0)
         for step in range(6):
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(20, 24, 50, 9 - step))
+            painter.setBrush(tone(20, 24, 50, 9 - step))
             painter.drawRoundedRect(card.adjusted(-step, -step + 3, step, step + 3), 14 + step, 14 + step)
-        painter.setBrush(QColor(SHEET))
-        painter.setPen(QPen(QColor(LINE), 1))
+        painter.setBrush(tone(SHEET))
+        painter.setPen(QPen(tone(LINE), 1))
         painter.drawRoundedRect(card, 14, 14)
         medal = 56 * self.pop.value
         center = QPointF(card.left() + 16 + 28, card.center().y())
@@ -712,13 +713,13 @@ class AchievementToast(Floating):
         left = card.left() + 16 + 56 + 14
         top = card.top() + 14
         painter.setFont(caption)
-        painter.setPen(QColor(CORAL))
+        painter.setPen(tone(CORAL))
         painter.drawText(QRectF(left, top, self._text_width(), 16), Qt.AlignmentFlag.AlignVCenter, caption_text)
         painter.setFont(title)
-        painter.setPen(QColor(ACCENT))
+        painter.setPen(tone(ACCENT))
         painter.drawText(QRectF(left, top + 18, self._text_width(), 24), Qt.AlignmentFlag.AlignVCenter, title_text)
         painter.setFont(body)
-        painter.setPen(QColor(MUTED))
+        painter.setPen(tone(MUTED))
         painter.drawText(QRectF(left, top + 46, self._text_width(), card.bottom() - top - 46),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, comment)
 

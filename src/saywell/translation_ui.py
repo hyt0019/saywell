@@ -13,12 +13,15 @@ import time
 from dataclasses import replace
 from datetime import datetime
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
+    QFont,
     QFontMetrics,
+    QFontMetricsF,
     QGuiApplication,
     QPainter,
+    QPen,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -35,13 +38,15 @@ from PySide6.QtWidgets import (
 
 from .brand import bird_rect, draw_swallow, draw_tile, squircle
 from .translation import LANGUAGES, STYLES, Translation, target_language
-from .ui import INK, Glyph, Segmented, Spinner, Tween, app_icon, label, make_button
+from .theme import is_dark, styled, tone
+from .ui import INK, Glyph, LogoLabel, Segmented, Spinner, ThemedLabel, Tween, label, make_button
 
 FAINT = "#958C7F"
 WIDTH = 384  # The panel's width until it is resized by hand.
 MIN_WIDTH, MIN_ROOM = 320, 60
 EDGE = 8  # How close to the panel's right or bottom edge the pointer resizes it.
 ICON_SECONDS = 4.0  # The button goes away unless it is used or hovered.
+ICON_SIZES = {"small": 24, "medium": 30, "large": 38}
 NEAR = 120  # How close (physical pixels) the mouse must be to the selection for it to count.
 STYLE_KEYS = tuple(STYLES)
 
@@ -114,18 +119,26 @@ class SelectionIcon(Floating):
     to translate."""
 
     clicked = Signal()
-    SIZE = 30
     MARGIN = 8  # Room for the shadow.
 
     def __init__(self):
         super().__init__()
-        self.setFixedSize(self.SIZE + 2 * self.MARGIN, self.SIZE + 2 * self.MARGIN)
+        self.size = ICON_SIZES["medium"]
+        self.opacity = 1.0  # Until the mouse comes over it.
+        self.setFixedSize(self.size + 2 * self.MARGIN, self.size + 2 * self.MARGIN)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("翻译选中的文字")
         self.hover = Tween(self, duration=120)
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.vanish)
+
+    def set_look(self, size: str, opacity: int):
+        """Its size ("small", "medium" or "large") and opacity in percent, as the settings say."""
+        self.size = ICON_SIZES.get(size, ICON_SIZES["medium"])
+        self.opacity = max(0.3, min(1.0, opacity / 100))
+        self.setFixedSize(self.size + 2 * self.MARGIN, self.size + 2 * self.MARGIN)
+        self.update()
 
     def show_at(self, point: QPoint):
         """Just below and right of where the mouse let go, inside the screen."""
@@ -157,16 +170,93 @@ class SelectionIcon(Floating):
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        lift = 1.2 * self.hover.value  # Rises a little under the mouse.
-        box = QRectF(self.MARGIN, self.MARGIN - lift, self.SIZE, self.SIZE)
+        paint_selection_button(painter, QRectF(self.MARGIN, self.MARGIN, self.size, self.size),
+                               self.hover.value, self.opacity)
+
+
+def paint_selection_button(painter: QPainter, box: QRectF, hover: float, opacity: float) -> None:
+    """The button beside a selection, in box: the app's tile with a soft shadow, as opaque as
+    asked until the mouse is over it (hover 1), and the dark tile in the dark theme."""
+    night = is_dark()
+    painter.save()
+    painter.setOpacity(opacity + (1 - opacity) * hover)
+    lift = 1.2 * hover  # Rises a little under the mouse.
+    box = box.translated(0, -lift)
+    painter.setPen(Qt.PenStyle.NoPen)
+    # A soft shadow on whatever is below: many faint layers, so it has no edge.
+    shade = (0, 0, 0, 14 + round(4 * hover)) if night else (60, 42, 20, 8 + round(3 * hover))
+    for step in range(7):
+        spread = 0.6 + step * 0.85
+        painter.setBrush(QColor(*shade))
+        painter.drawPath(squircle(box.adjusted(-spread, -spread + 2.2 + lift, spread, spread + 2.2 + lift)))
+    draw_tile(painter, box, rim=36, night=night)  # The shadow already sets it apart.
+    draw_swallow(painter, bird_rect(box), night=night)
+    painter.restore()
+
+
+class SelectionButtonPreview(QWidget):
+    """The settings' preview of the button: a line of selected text with the button after it,
+    at the chosen size and opacity; it turns fully opaque under the mouse, as the real one does."""
+
+    LEAD, CHOSEN, AFTER = "在别的程序里选中", "一段文字", "鼠标移到按钮上时完全不透明"
+
+    def __init__(self):
+        super().__init__()
+        self.size = ICON_SIZES["medium"]
+        self.opacity = 1.0
+        self.hover = Tween(self, duration=120)
+        self.setMouseTracking(True)
+        self.setFixedHeight(64)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_look(self, size: str, opacity: int):
+        self.size = ICON_SIZES.get(size, ICON_SIZES["medium"])
+        self.opacity = max(0.3, min(1.0, opacity / 100))
+        self.update()
+
+    def text_font(self) -> QFont:
+        font = self.font()
+        font.setPixelSize(13)
+        return font
+
+    def button_rect(self) -> QRectF:
+        metrics = QFontMetricsF(self.text_font())
+        x = 18 + metrics.horizontalAdvance(self.LEAD + self.CHOSEN) + 6
+        return QRectF(x, (self.height() - self.size) / 2 + 1, self.size, self.size)
+
+    def mouseMoveEvent(self, event):
+        inside = self.button_rect().adjusted(-4, -4, 4, 4).contains(event.position())
+        self.hover.to(1.0 if inside else 0.0, None if inside else 200)
+
+    def leaveEvent(self, event):
+        self.hover.to(0.0, 200)
+        super().leaveEvent(event)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        area = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.setPen(QPen(tone("#E8E0D3"), 1))
+        painter.setBrush(tone("#F6F1E8"))
+        painter.drawRoundedRect(area, 10, 10)
+        font = self.text_font()
+        painter.setFont(font)
+        metrics = QFontMetricsF(font)
+        baseline = self.height() / 2 + (metrics.ascent() - metrics.descent()) / 2
+        x = 18.0
+        painter.setPen(tone(INK))
+        painter.drawText(QPointF(x, baseline), self.LEAD)
+        x += metrics.horizontalAdvance(self.LEAD)
+        width = metrics.horizontalAdvance(self.CHOSEN)
         painter.setPen(Qt.PenStyle.NoPen)
-        # A soft warm shadow on whatever is below: many faint layers, so it has no edge.
-        for step in range(7):
-            spread = 0.6 + step * 0.85
-            painter.setBrush(QColor(60, 42, 20, 8 + round(3 * self.hover.value)))
-            painter.drawPath(squircle(box.adjusted(-spread, -spread + 2.2 + lift, spread, spread + 2.2 + lift)))
-        draw_tile(painter, box, rim=36)  # The shadow already sets it apart.
-        draw_swallow(painter, bird_rect(box))
+        painter.setBrush(tone("#D8DBEE"))
+        painter.drawRoundedRect(QRectF(x - 1, baseline - metrics.ascent() - 1, width + 2, metrics.height() + 2), 3, 3)
+        painter.setPen(tone(INK))
+        painter.drawText(QPointF(x, baseline), self.CHOSEN)
+        button = self.button_rect()
+        paint_selection_button(painter, button, self.hover.value, self.opacity)
+        painter.setPen(tone(FAINT))
+        painter.drawText(QPointF(button.right() + 12, baseline), self.AFTER)
 
 
 class ResizeGrip(QWidget):
@@ -182,7 +272,7 @@ class ResizeGrip(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#CFC6B8"))
+        painter.setBrush(tone("#CFC6B8"))
         for x, y in ((9, 4), (4, 9), (9, 9)):
             painter.drawEllipse(QRectF(x - 1.2, y - 1.2, 2.4, 2.4))
 
@@ -211,7 +301,7 @@ class TranslationPopup(Floating):
         outer.setContentsMargins(14, 8, 14, 20)
         self.panel = QFrame()
         self.panel.setObjectName("translationPanel")
-        self.panel.setStyleSheet(
+        styled(self.panel, 
             "QFrame#translationPanel { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }"
         )
         shadow = QGraphicsDropShadowEffect(self.panel)
@@ -229,10 +319,7 @@ class TranslationPopup(Floating):
 
         head = QHBoxLayout()
         head.setSpacing(6)
-        mark = QLabel()
-        mark.setPixmap(app_icon().pixmap(36, 36))
-        mark.setScaledContents(True)
-        mark.setFixedSize(18, 18)
+        mark = LogoLabel(18)
         mark.setToolTip("好好说 · 划词翻译")
         head.addWidget(mark)
         head.addSpacing(-2)
@@ -278,7 +365,7 @@ class TranslationPopup(Floating):
 
         layout.addSpacing(6)
         self.original = label("", "translationOriginal", wrap=True)
-        self.original.setStyleSheet(f"color: {FAINT}; font-size: 12px;")
+        styled(self.original, f"color: {FAINT}; font-size: 12px;")
         layout.addWidget(self.original)
         layout.addSpacing(8)
 
@@ -291,14 +378,13 @@ class TranslationPopup(Floating):
         self.result.setWordWrap(True)
         self.result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.result.setCursor(Qt.CursorShape.IBeamCursor)
-        self.result.setStyleSheet(f"color: {INK}; font-size: 15px;")
+        styled(self.result, f"color: {INK}; font-size: 15px;")
         self.result.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.result.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
         body.addWidget(self.result)
-        self.senses = QLabel()
-        self.senses.setTextFormat(Qt.TextFormat.RichText)
+        self.senses = ThemedLabel()
         self.senses.setWordWrap(True)
-        self.senses.setStyleSheet(f"color: {INK}; font-size: 13px;")
+        styled(self.senses, f"color: {INK}; font-size: 13px;")
         self.senses.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
         body.addWidget(self.senses)
         self.scroll = QScrollArea()
@@ -613,6 +699,7 @@ class SelectionTranslate:
         settings = self.settings
         hotkeys = self.window.hotkeys
         self.enabled = settings.selection_translate
+        self.icon.set_look(settings.selection_icon_size, settings.selection_icon_opacity)
         problem = ""
         if hotkeys:
             hotkeys.unregister(self.HOTKEY)

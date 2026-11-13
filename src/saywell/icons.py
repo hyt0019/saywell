@@ -8,6 +8,8 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 
+from .theme import tone
+
 STROKE = 1.9  # In grid units; about 1.3 px at 16 px.
 
 
@@ -346,7 +348,7 @@ def draw_icon(painter: QPainter, name: str, rect: QRectF, color: QColor | str, s
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.translate(rect.center().x() - 12 * scale, rect.center().y() - 12 * scale)
     painter.scale(scale, scale)
-    pen = QPen(QColor(color), stroke)
+    pen = QPen(tone(color), stroke)  # A colour name is written for paper; a QColor is used as it is.
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     painter.setPen(pen)

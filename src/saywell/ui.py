@@ -34,6 +34,7 @@ from PySide6.QtGui import (
     QFont,
     QFontDatabase,
     QFontMetrics,
+    QGuiApplication,
     QIcon,
     QBrush,
     QConicalGradient,
@@ -70,6 +71,8 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .api_config import chat_completion_url
 from .icons import draw_icon, icon_pixmap
+from .theme import APPEARANCES, css, hexed, is_dark, tone
+from .theme import apply as apply_theme
 from .models import (
     ALL_MODELS,
     CATALOG,
@@ -156,17 +159,17 @@ QFrame#card QPlainTextEdit { background: transparent; border: none; padding: 2px
                              font-size: 16px; selection-background-color: #D8DBEE; }
 QFrame#sectionCard { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 16px; }
 QFrame#modelCard { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 16px; }
-QFrame#modelCard[active="true"] { border: 2px solid #192457; }
+QFrame#modelCard[active="true"] { border: 2px solid #192457/*night #7F8BDB*/; }
 QFrame#locationBar { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }
 QFrame#footerBar { background: #FFFCF7; border-top: 1px solid #E8E0D3; }
 QFrame#divider { background: #F1EBE1; max-height: 1px; min-height: 1px; border: none; }
 
 QPlainTextEdit { background: #FFFCF7; border: 1px solid #DCD3C4; border-radius: 12px; padding: 10px;
                  selection-background-color: #D8DBEE; }
-QPlainTextEdit:focus { border-color: #192457; }
+QPlainTextEdit:focus { border-color: #192457/*night #7F8BDB*/; }
 QLineEdit, QComboBox, QSpinBox { background: #FFFCF7; border: 1px solid #DCD3C4; border-radius: 10px;
     padding: 7px 11px; min-height: 22px; selection-background-color: #D8DBEE; }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #192457; }
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #192457/*night #7F8BDB*/; }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover { border-color: #C4BAAA; }
 QComboBox { padding-right: 32px; }
 QComboBox::drop-down { border: none; width: 30px; }
@@ -178,7 +181,7 @@ QPushButton { background: #EEE7DB; border: 1px solid transparent; border-radius:
               color: #1D2240; }
 QPushButton:hover { background: #E7DFD1; }
 QPushButton:pressed { background: #DED5C5; }
-QPushButton:focus { border-color: #192457; }
+QPushButton:focus { border-color: #192457/*night #7F8BDB*/; }
 QPushButton:disabled { color: #B5AC9F; background: #F2ECE2; }
 QLabel#checkText { color: #776F63; font-size: 13px; }
 QLabel#checkText[tone="ok"] { color: #3F7A53; }
@@ -187,7 +190,7 @@ QLabel#plazaIntro { background: #FFFCF7; border: 1px solid #E8E0D3; border-radiu
     color: #47413A; font-size: 13px; }
 
 QProgressBar { background: #E8E0D3; border: none; border-radius: 3px; min-height: 6px; max-height: 6px; }
-QProgressBar::chunk { background: #192457; border-radius: 3px; }
+QProgressBar::chunk { background: #192457/*night #7F8BDB*/; border-radius: 3px; }
 QScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 4px 2px; }
@@ -220,11 +223,12 @@ QLabel#newsText { color: #47413A; font-size: 13px; }
 QFrame#updateNews QProgressBar { background: #D9DCEC; }
 QSlider { min-height: 24px; }
 QSlider::groove:horizontal { height: 4px; background: #E8E0D3; border-radius: 2px; }
-QSlider::sub-page:horizontal { background: #192457; border-radius: 2px; }
+QSlider::sub-page:horizontal { background: #192457/*night #7F8BDB*/; border-radius: 2px; }
 QSlider::handle:horizontal { background: #FFFCF7; border: 1px solid #C4BAAA; width: 16px; height: 16px;
     margin: -7px 0; border-radius: 9px; }
-QSlider::handle:horizontal:hover { border-color: #192457; }
-QToolTip { background: #1D2240; color: #FFFCF7; border: none; padding: 6px 9px; border-radius: 6px; }
+QSlider::handle:horizontal:hover { border-color: #192457/*night #7F8BDB*/; }
+QToolTip { background: #1D2240/*night #2B304B*/; color: #FFFCF7/*night #E9E4D8*/;
+    border: 1px solid #1D2240/*night #3F4566*/; padding: 5px 8px; border-radius: 6px; }
 """
 
 
@@ -520,26 +524,26 @@ class Button(QPushButton):
             painter.translate(-self.width() / 2, -self.height() / 2)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         radius = rect.height() / 2
-        background = mix(QColor(look.background), QColor(look.hover), self.hover.value if enabled else 0)
-        background = mix(background, QColor(look.pressed), press)
-        border = QColor(look.border)
+        background = mix(tone(look.background), tone(look.hover), self.hover.value if enabled else 0)
+        background = mix(background, tone(look.pressed), press)
+        border = tone(look.border)
         if look.hover_border and enabled:
-            border = mix(border, QColor(look.hover_border), self.hover.value)
+            border = mix(border, tone(look.hover_border), self.hover.value)
         if look.checked_background and checked:
-            background = mix(background, QColor(look.checked_background), checked)
-            border = mix(border, QColor(look.checked_background), checked)
+            background = mix(background, tone(look.checked_background), checked)
+            border = mix(border, tone(look.checked_background), checked)
         painter.setPen(QPen(border, 1) if border.alpha() else Qt.PenStyle.NoPen)
         painter.setBrush(background)
         painter.drawRoundedRect(rect, radius, radius)
         if self.hasFocus() and self.keyboard_focus:
-            ring = QColor(ACCENT)
+            ring = tone(ACCENT, dark="#7F8BDB")
             ring.setAlphaF(0.55)
             painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(rect.adjusted(1.5, 1.5, -1.5, -1.5), radius - 1.5, radius - 1.5)
-        color = QColor(look.text)
+        color = tone(look.text)
         if look.checked_text and checked:
-            color = mix(color, QColor(look.checked_text), checked)
+            color = mix(color, tone(look.checked_text), checked)
         text = self.text().strip()
         font = self.label_font()
         width = QFontMetrics(font).horizontalAdvance(text) if text else 0
@@ -551,7 +555,7 @@ class Button(QPushButton):
             painter.drawPixmap(target, self.picture, QRectF(self.picture.rect()))
             x += 16 + 6
         elif self.icon_name:
-            tint = mix(QColor(self.icon_color), color, checked) if self.icon_color else color
+            tint = mix(tone(self.icon_color), color, checked) if self.icon_color else color
             draw_icon(painter, self.icon_name, QRectF(x, (self.height() - 16) / 2, 16, 16), tint)
             x += 16 + 6
         if text:
@@ -560,7 +564,7 @@ class Button(QPushButton):
             painter.drawText(QRectF(x, 0, width + 2, self.height()), Qt.AlignmentFlag.AlignVCenter, text)
         if self.badge:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(self.badge))
+            painter.setBrush(tone(self.badge))
             painter.drawEllipse(QRectF(x + width + 3, self.height() / 2 - 8, 6, 6))
         if self.trailing:
             draw_icon(painter, self.trailing, QRectF(x + width + 5, (self.height() - 12) / 2, 12, 12), MUTED)
@@ -577,6 +581,25 @@ def label(text: str = "", name: str | None = None, wrap: bool = False) -> QLabel
         widget.setObjectName(name)
     widget.setWordWrap(wrap)
     return widget
+
+
+class ThemedLabel(QLabel):
+    """Rich text written with paper colours; shown, and shown again, in the theme's."""
+
+    def __init__(self, text: str = "", name: str | None = None, wrap: bool = False):
+        super().__init__()
+        self.setTextFormat(Qt.TextFormat.RichText)
+        if name:
+            self.setObjectName(name)
+        self.setWordWrap(wrap)
+        self.setText(text)
+
+    def setText(self, text: str):  # noqa: N802 - Qt's name.
+        self.paper = text
+        super().setText(css(text))
+
+    def retheme(self):
+        super().setText(css(self.paper))
 
 
 class ElidedLabel(QLabel):
@@ -612,12 +635,22 @@ class ElidedLabel(QLabel):
         painter.drawText(rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
 
 
+class GlyphLabel(QLabel):
+    """One of the app's line icons in a label, drawn again when the theme changes."""
+
+    def __init__(self, glyph: str, color: str, size: int = 16):
+        super().__init__()
+        self.glyph, self.color, self.size = glyph, color, size
+        self.setFixedSize(size + 4, size + 4)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.retheme()
+
+    def retheme(self):
+        self.setPixmap(glyph_pixmap(self.glyph, self.color, self.size))
+
+
 def glyph_label(glyph: str, color: str, size: int = 16) -> QLabel:
-    widget = QLabel()
-    widget.setPixmap(glyph_pixmap(glyph, color, size))
-    widget.setFixedSize(size + 4, size + 4)
-    widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    return widget
+    return GlyphLabel(glyph, color, size)
 
 
 def repolish(widget: QWidget):
@@ -650,7 +683,7 @@ class Spinner(QWidget):
     def __init__(self, size: int = 16, color: str = ACCENT):
         super().__init__()
         self.setFixedSize(size, size)
-        self.color = QColor(color)
+        self.color = color
         self.angle = 0
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
@@ -671,9 +704,9 @@ class Spinner(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(2, 2, -2, -2)
-        painter.setPen(QPen(QColor("#EEE7DB"), 1.8))
+        painter.setPen(QPen(tone("#EEE7DB"), 1.8))
         painter.drawEllipse(rect)
-        pen = QPen(self.color, 1.8)
+        pen = QPen(tone(self.color), 1.8)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.drawArc(rect, -self.angle * 16, 90 * 16)
@@ -709,7 +742,7 @@ class ResultMark(QWidget):
         size = self.width() * self.scale
         rect = QRectF((self.width() - size) / 2, (self.height() - size) / 2, size, size)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(OK_GREEN if self.ok else FAIL_RED))
+        painter.setBrush(tone(OK_GREEN if self.ok else FAIL_RED))
         painter.drawEllipse(rect)
         draw_icon(painter, "check" if self.ok else "cancel", rect.adjusted(3, 3, -3, -3), "#FFFCF7", 3.2)
 
@@ -800,13 +833,13 @@ class Toast(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(29, 34, 64, 236))
+        painter.setBrush(tone(29, 34, 64, 236))
         painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
         draw_icon(painter, self.icon, QRectF(18, (self.height() - 16) / 2, 16, 16), "#FFFCF7")
         font = QFont(self.font())
         font.setPixelSize(13)
         painter.setFont(font)
-        painter.setPen(QColor("#FFFCF7"))
+        painter.setPen(tone("#FFFCF7"))
         painter.drawText(QRectF(18 + 16 + 8, 0, self.width(), self.height()), Qt.AlignmentFlag.AlignVCenter, self.text)
 
 
@@ -882,14 +915,14 @@ class Segmented(QFrame):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#EEE7DB"))
+        painter.setBrush(tone("#EEE7DB"))
         rect = QRectF(self.rect())
         painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
         if not self.thumb.isNull():
             thumb = QRectF(self.thumb)
-            painter.setBrush(QColor(0, 0, 0, 16))
+            painter.setBrush(tone(0, 0, 0, 16))
             painter.drawRoundedRect(thumb.adjusted(0, 1, 0, 1.5), thumb.height() / 2, thumb.height() / 2)
-            painter.setBrush(QColor("#FFFCF7"))
+            painter.setBrush(tone("#FFFCF7"))
             painter.drawRoundedRect(thumb, thumb.height() / 2, thumb.height() / 2)
 
 
@@ -954,7 +987,7 @@ class TabBar(Segmented):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(CORAL))
+        painter.setBrush(tone(CORAL))
         width = min(22.0, self.thumb.width() - 20)
         line = QRectF(self.thumb.center().x() - width / 2, self.thumb.bottom() + 2, width, 2.5)
         painter.drawRoundedRect(line, 1.25, 1.25)
@@ -1057,6 +1090,34 @@ def app_icon() -> QIcon:
     return _icons["app"]
 
 
+_logos: dict[str, QPixmap] = {}
+
+
+def logo_pixmap(size: int) -> QPixmap:
+    """The swallow on its tile for use inside a window: the ink tile in the dark theme."""
+    screen = QGuiApplication.primaryScreen()
+    ratio = max(2.0, screen.devicePixelRatio() if screen else 1.0)
+    key = f"logo-{size}-{ratio}-{is_dark()}"
+    if key not in _logos:
+        from .brand import icon_image
+
+        _logos[key] = QPixmap.fromImage(icon_image(size, night=is_dark(), ratio=ratio))
+    return _logos[key]
+
+
+class LogoLabel(QLabel):
+    """The app's logo in a window; it follows the theme."""
+
+    def __init__(self, size: int):
+        super().__init__()
+        self.logo_size = size
+        self.setFixedSize(size, size)
+        self.retheme()
+
+    def retheme(self):
+        self.setPixmap(logo_pixmap(self.logo_size))
+
+
 def tray_image_icon(color: str | None) -> QIcon:
     from .brand import tray_image
 
@@ -1098,11 +1159,13 @@ def blend(colors: tuple[str, ...], t: float) -> QColor:
 class LevelBars(QWidget):
     """A scrolling voice-level visualizer with a QProgressBar-like setValue API."""
 
-    def __init__(self, bars: int = 36, colors: tuple[str, ...] = (INDIGO, ACCENT), rest: str = "#DCD3C4", parent=None):
+    def __init__(self, bars: int = 36, colors: tuple[str, ...] = (INDIGO, ACCENT), rest: str = "#DCD3C4", parent=None,
+                 themed: bool = True):
         super().__init__(parent)
         self.levels = deque([0.0] * bars, maxlen=bars)
         self.colors = colors
-        self.rest = QColor(rest)
+        self.rest = rest
+        self.themed = themed
         self.target = 0.0
         self._value = 0
         self.timer = QTimer(self)
@@ -1151,13 +1214,15 @@ class LevelBars(QWidget):
         width = min(width, 5.0)
         x = 0.0
         middle = self.height() / 2
+        colors = tuple(hexed(color) for color in self.colors) if self.themed else self.colors
+        rest = QColor(hexed(self.rest) if self.themed else self.rest)
         for index, level in enumerate(self.levels):
             height = max(width, level * (self.height() - 2))
             if level > 0.01:
-                color = blend(self.colors, index / max(1, count - 1))
+                color = blend(colors, index / max(1, count - 1))
                 color.setAlphaF(0.55 + 0.45 * (index + 1) / count)
             else:
-                color = QColor(self.rest)
+                color = QColor(rest)
             painter.setBrush(color)
             painter.drawRoundedRect(QRectF(x, middle - height / 2, width, height), width / 2, width / 2)
             x += width + gap
@@ -1260,21 +1325,21 @@ class MicButton(QPushButton):
         if recording > 0:
             # One soft ring breathing outward.
             radius = diameter / 2 + 2 + self.phase * 11
-            ring = QColor(RECORD)
+            ring = tone(RECORD)
             ring.setAlphaF(0.28 * (1 - self.phase) * recording * (1 - working))
             painter.setBrush(ring)
             painter.drawEllipse(QRectF(center_x - radius, center_y - radius, radius * 2, radius * 2))
-        idle_fill = mix(QColor(ACCENT), QColor("#26336E"), hover)
-        record_fill = mix(QColor(RECORD), QColor("#EE7A66"), hover)
+        idle_fill = mix(tone(ACCENT), tone("#26336E"), hover)
+        record_fill = mix(tone(RECORD), tone("#EE7A66"), hover)
         # Straight ink → coral goes through mud; a dusty violet and rose keep it clean.
-        path = (idle_fill.name(), "#4B3F7A", "#B45E73", record_fill.name())
-        fill = mix(blend(path, recording), QColor("#F2ECE2"), working)
+        path = (idle_fill.name(), hexed("#4B3F7A"), hexed("#B45E73"), record_fill.name())
+        fill = mix(blend(path, recording), tone("#F2ECE2"), working)
         if not self.busy:
             fill = mix(fill, fill.darker(112), max(0.0, min(1.0, self.press.value)))
         painter.setBrush(fill)
         painter.drawEllipse(circle)
         if self.hasFocus() and self.keyboard_focus:
-            ring = QColor(ACCENT)
+            ring = tone(ACCENT, dark="#7F8BDB")
             ring.setAlphaF(0.5)
             painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1290,11 +1355,11 @@ class MicButton(QPushButton):
             size = 22 * (0.5 + 0.5 * stop)
             painter.setOpacity(base * stop)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#FFFCF7"))
+            painter.setBrush(tone("#FFFCF7"))
             painter.drawRoundedRect(QRectF(center_x - size / 2, center_y - size / 2, size, size), 5, 5)
         if working > 0.01:
             painter.setOpacity(base * working)
-            pen = QPen(QColor(ACCENT), 2.4)
+            pen = QPen(tone(ACCENT), 2.4)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1303,7 +1368,7 @@ class MicButton(QPushButton):
         font = QFont(self.font())
         font.setPixelSize(13)
         painter.setFont(font)
-        painter.setPen(QColor(INK))
+        painter.setPen(tone(INK))
         text_rect = QRectF(0, circle.bottom() + 10, self.width(), 22)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, self.text())
 
@@ -1383,25 +1448,25 @@ class HeroCard(QFrame):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         radius = 20
-        painter.setPen(QPen(QColor(LINE), 1))
-        painter.setBrush(QColor(SHEET))
+        painter.setPen(QPen(tone(LINE), 1))
+        painter.setBrush(tone(SHEET))
         painter.drawRoundedRect(rect, radius, radius)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         listening = self.listening.value
         if listening > 0.001:
             breath = 0.5 + 0.5 * math.sin(self.phase * 2 * math.pi * 2)  # Two slow breaths a loop.
             for inset, width, alpha in ((0.75, 1.5, 0.55 + 0.3 * breath), (3.0, 4.0, 0.06 + 0.06 * breath)):
-                edge = QColor(CORAL)
+                edge = tone(CORAL)
                 edge.setAlphaF(alpha * listening)
                 painter.setPen(QPen(edge, width))
                 painter.drawRoundedRect(rect.adjusted(inset, inset, -inset, -inset), radius - inset, radius - inset)
         working = self.working.value
         if working > 0.001:
             light = QConicalGradient(rect.center(), -self.phase * 360)
-            light.setColorAt(0.0, QColor(25, 36, 87, 200))
-            light.setColorAt(0.25, QColor(25, 36, 87, 0))
-            light.setColorAt(0.75, QColor(25, 36, 87, 0))
-            light.setColorAt(1.0, QColor(25, 36, 87, 200))
+            light.setColorAt(0.0, tone(25, 36, 87, 200, dark="#A6B1F2"))
+            light.setColorAt(0.25, tone(25, 36, 87, 0, dark="#A6B1F2"))
+            light.setColorAt(0.75, tone(25, 36, 87, 0, dark="#A6B1F2"))
+            light.setColorAt(1.0, tone(25, 36, 87, 200, dark="#A6B1F2"))
             for inset, width, alpha in ((0.75, 1.5, 1.0), (3.0, 4.0, 0.12)):
                 painter.setOpacity(alpha * working)
                 painter.setPen(QPen(QBrush(light), width))
@@ -1466,8 +1531,8 @@ class Switch(QCheckBox):
         if not self.isEnabled():
             painter.setOpacity(0.5)
         hover = self.hover.value if self.isEnabled() else 0.0
-        off = mix(QColor(self.TRACK_OFF), QColor(self.TRACK_OFF_HOVER), hover)
-        on = mix(QColor(ACCENT), QColor(self.TRACK_ON_HOVER), hover)
+        off = mix(tone(self.TRACK_OFF), tone(self.TRACK_OFF_HOVER), hover)
+        on = mix(tone(ACCENT, dark="#7F8BDB"), tone(self.TRACK_ON_HOVER, dark="#929DE6"), hover)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(mix(off, on, max(0.0, min(1.0, self.fill.value))))
         painter.drawRoundedRect(track, 12, 12)
@@ -1475,19 +1540,19 @@ class Switch(QCheckBox):
         width = 20 + 5 * self.stretch.value
         left, right = track.left() + 2, track.right() - 2 - width
         knob = QRectF(left + (right - left) * self.position.value, track.top() + 2, width, 20)
-        painter.setBrush(QColor(0, 0, 0, 22))
+        painter.setBrush(tone(0, 0, 0, 22))
         painter.drawRoundedRect(knob.adjusted(-0.5, 0.5, 0.5, 1.5), 10.5, 10.5)
-        painter.setBrush(QColor(0, 0, 0, 12))
+        painter.setBrush(tone(0, 0, 0, 12))
         painter.drawRoundedRect(knob.adjusted(-1, 1.5, 1, 3), 11, 11)
-        painter.setBrush(QColor("#FFFCF7"))
+        painter.setBrush(tone("#FFFCF7", dark="#F1ECE1"))
         painter.drawRoundedRect(knob, 10, 10)
         if self.hasFocus() and self.keyboard_focus:
-            ring = QColor(ACCENT)
+            ring = tone(ACCENT, dark="#7F8BDB")
             ring.setAlphaF(0.55)
             painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(track.adjusted(-3, -3, 3, 3), 15, 15)
-        painter.setPen(QColor(INK))
+        painter.setPen(tone(INK))
         painter.setFont(self.font())
         painter.drawText(
             QRectF(track.right() + 12, 0, self.width() - track.right() - 12, self.height()),
@@ -1551,10 +1616,10 @@ class CheckBox(QCheckBox):
         box = QRectF(1.5, (self.height() - 16) / 2, 16, 16)
         fill = max(0.0, min(1.0, self.fill.value))
         hover = self.hover.value if self.isEnabled() else 0.0
-        edge = mix(QColor(self.BORDER), QColor(self.BORDER_HOVER), hover)
-        accent = mix(QColor(ACCENT), QColor("#26336E"), hover)
+        edge = mix(tone(self.BORDER), tone(self.BORDER_HOVER), hover)
+        accent = mix(tone(ACCENT, dark="#7F8BDB"), tone("#26336E", dark="#929DE6"), hover)
         painter.setPen(QPen(mix(edge, accent, fill), 1))
-        painter.setBrush(mix(QColor("#FFFCF7"), accent, fill))
+        painter.setBrush(mix(tone("#FFFCF7"), accent, fill))
         painter.drawRoundedRect(box, 4.5, 4.5)
         if self.tick.value > 0.01:
             # Drawn stroke by stroke as far as the animation has got.
@@ -1567,19 +1632,19 @@ class CheckBox(QCheckBox):
                 left -= length
                 if left <= 0:
                     break
-            pen = QPen(QColor("#FFFCF7"), 1.8)
+            pen = QPen(tone("#FFFCF7", dark="#13162A"), 1.8)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
         if self.hasFocus() and self.keyboard_focus:
-            ring = QColor(ACCENT)
+            ring = tone(ACCENT, dark="#7F8BDB")
             ring.setAlphaF(0.55)
             painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(box.adjusted(-3, -3, 3, 3), 7, 7)
-        painter.setPen(QColor("#47413A"))
+        painter.setPen(tone("#47413A"))
         painter.setFont(self.label_font())
         painter.drawText(
             QRectF(box.right() + 8, 0, self.width() - box.right() - 8, self.height()),
@@ -1781,16 +1846,16 @@ class NavButton(QAbstractButton):
         chosen = max(0.0, min(1.0, self.chosen.value))
         painter.setPen(Qt.PenStyle.NoPen)
         if self.hover.value > 0 and chosen < 1:
-            painter.setBrush(QColor(25, 36, 87, round(14 * self.hover.value * (1 - chosen))))
+            painter.setBrush(tone(25, 36, 87, round(14 * self.hover.value * (1 - chosen))))
             painter.drawRoundedRect(box, 9, 9)
         if chosen > 0:
-            painter.setBrush(QColor(29, 34, 64, round(14 * chosen)))
+            painter.setBrush(tone(29, 34, 64, round(14 * chosen)))
             painter.drawRoundedRect(box.adjusted(0, 1, 0, 1), 9, 9)
-            sheet = QColor(SHEET)
+            sheet = tone(SHEET)
             sheet.setAlphaF(chosen)
             painter.setBrush(sheet)
             painter.drawRoundedRect(box, 9, 9)
-        color = mix(QColor("#5A5248"), QColor(ACCENT), chosen)
+        color = mix(tone("#5A5248"), tone(ACCENT), chosen)
         draw_icon(painter, self.glyph, QRectF(12, (self.height() - 18) / 2, 18, 18), color)
         font = QFont(self.font())
         font.setPixelSize(14)
@@ -1804,10 +1869,10 @@ class NavButton(QAbstractButton):
         )
         if self.badge:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(RECORD))
+            painter.setBrush(tone(RECORD))
             painter.drawEllipse(QRectF(self.width() - 20, self.height() / 2 - 3.5, 7, 7))
         if self.hasFocus() and self.keyboard_focus:
-            ring = QColor(ACCENT)
+            ring = tone(ACCENT, dark="#7F8BDB")
             ring.setAlphaF(0.55)
             painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1911,6 +1976,8 @@ def settings_page(title: str, hint: str) -> tuple[QScrollArea, QVBoxLayout]:
 
 
 # The settings pages, in sidebar order: (key, name, icon).
+ICON_SIZE_NAMES = ("small", "medium", "large")
+
 SETTINGS_PAGES = (
     ("general", "通用", Glyph.SETTINGS),
     ("dictation", "听写", Glyph.MIC),
@@ -2008,25 +2075,19 @@ class SettingsDialog(QDialog):
     def build_general(self):
         from .updates import changelog_page, shipped_notes
 
-        area, layout = settings_page("通用", "版本、启动和提醒。")
+        area, layout = settings_page("通用", "版本、外观、启动和提醒。")
         updates = SettingsGroup("软件更新")
         version = QWidget()
         line = QHBoxLayout(version)
         line.setContentsMargins(16, 16, 16, 14)
         line.setSpacing(14)
-        mark = QLabel()
-        mark.setPixmap(app_icon().pixmap(QSize(44, 44)))
-        mark.setFixedSize(44, 44)
-        line.addWidget(mark, 0, Qt.AlignmentFlag.AlignTop)
+        line.addWidget(LogoLabel(44), 0, Qt.AlignmentFlag.AlignTop)
         text = QVBoxLayout()
         text.setSpacing(3)
         text.addWidget(label(f"好好说 {__version__}", "versionName"))
         summary = shipped_notes()[0]
         link = f'<a href="{changelog_page(__version__)}" style="color:#3C488E; text-decoration:none">更新日志</a>'
-        about = QLabel(f"{html.escape(summary)}　{link}" if summary else link)
-        about.setObjectName("rowHint")
-        about.setTextFormat(Qt.TextFormat.RichText)
-        about.setWordWrap(True)
+        about = ThemedLabel(f"{html.escape(summary)}　{link}" if summary else link, "rowHint", wrap=True)
         about.setOpenExternalLinks(True)
         text.addWidget(about)
         self.update_status = CheckStatus()
@@ -2048,9 +2109,7 @@ class SettingsDialog(QDialog):
         inner = QVBoxLayout(news)
         inner.setContentsMargins(16, 13, 16, 14)
         inner.setSpacing(7)
-        self.news_title = QLabel()
-        self.news_title.setObjectName("newsTitle")
-        self.news_title.setTextFormat(Qt.TextFormat.RichText)
+        self.news_title = ThemedLabel("", "newsTitle")
         inner.addWidget(self.news_title)
         self.news_text = label("", "newsText", wrap=True)
         inner.addWidget(self.news_text)
@@ -2075,6 +2134,13 @@ class SettingsDialog(QDialog):
         self.check_updates = toggle(self.settings.check_updates)
         updates.row("每天自动检查新版本", "只读取版本信息，不发送任何数据", self.check_updates)
         layout.addWidget(updates)
+
+        looks = SettingsGroup("外观")
+        self.appearance = Segmented(("浅色", "深色", "跟随系统"))
+        self.appearance.set_current(APPEARANCES.index(self.settings.appearance), animate=False)
+        self.appearance.changed.connect(lambda index: apply_theme(APPEARANCES[index]))
+        looks.row("主题", "浅色、深色，或跟着 Windows 的设置走。划词翻译的按钮和面板也一样。", self.appearance)
+        layout.addWidget(looks)
 
         start = SettingsGroup("启动")
         self.startup = toggle(self.settings.start_on_login)
@@ -2173,7 +2239,8 @@ class SettingsDialog(QDialog):
         backdrop.addWidget(label("预览背景", "rowHint"))
         backdrop.addStretch()
         self.preview_backdrop = Segmented(("浅色", "深色"))
-        self.preview_backdrop.set_current(0, animate=False)
+        self.preview_backdrop.set_current(1 if is_dark() else 0, animate=False)
+        self.overlay_preview.set_dark(is_dark())
         self.preview_backdrop.changed.connect(lambda index: self.overlay_preview.set_dark(index == 1))
         backdrop.addWidget(self.preview_backdrop)
         look.block(self.overlay_preview, backdrop)
@@ -2268,6 +2335,8 @@ class SettingsDialog(QDialog):
 
     def done(self, result: int):
         self.stop_placing()
+        if result != QDialog.DialogCode.Accepted and APPEARANCES[self.appearance.current()] != self.settings.appearance:
+            apply_theme(self.settings.appearance)  # A theme tried here and not saved.
         super().done(result)
 
     # ---- 划词翻译 ----
@@ -2305,6 +2374,32 @@ class SettingsDialog(QDialog):
             "快捷键", selection_hint(settings.selection_hotkey), self.selection_hotkey
         ).hint
         options.addWidget(trigger)
+
+        self.icon_group = SettingsGroup("翻译按钮")
+        self.icon_size = Segmented(("小", "中", "大"))
+        self.icon_size.set_current(ICON_SIZE_NAMES.index(settings.selection_icon_size), animate=False)
+        self.icon_size.changed.connect(self.icon_look_changed)
+        self.icon_group.row("大小", "", self.icon_size)
+        opacity = QHBoxLayout()
+        opacity.setSpacing(10)
+        self.icon_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.icon_opacity.setRange(30, 100)
+        self.icon_opacity.setValue(settings.selection_icon_opacity)
+        self.icon_opacity.setFixedWidth(180)
+        self.icon_opacity.setAccessibleName("翻译按钮的不透明度")
+        self.icon_opacity.valueChanged.connect(self.icon_look_changed)
+        opacity.addWidget(self.icon_opacity)
+        self.icon_opacity_value = label("", "rowHint")
+        self.icon_opacity_value.setFixedWidth(36)
+        self.icon_opacity_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        opacity.addWidget(self.icon_opacity_value)
+        self.icon_group.row("不透明度", "淡一些就不那么显眼；鼠标移上去时完全不透明。它 4 秒后自己消失。", opacity)
+        from .translation_ui import SelectionButtonPreview
+
+        self.icon_preview = SelectionButtonPreview()
+        self.icon_group.block(self.icon_preview)
+        options.addWidget(self.icon_group)
+        self.icon_look_changed()
 
         languages = SettingsGroup("语言")
         direction = QHBoxLayout()
@@ -2643,7 +2738,12 @@ class SettingsDialog(QDialog):
         self.selection_hotkey_choice = name
         self.selection_key_hint.setText(selection_hint(name))
 
+    def icon_look_changed(self, *_):
+        self.icon_opacity_value.setText(f"{self.icon_opacity.value()}%")
+        self.icon_preview.set_look(ICON_SIZE_NAMES[self.icon_size.current()], self.icon_opacity.value())
+
     def update_selection_hint(self, *_):
+        self.icon_group.setVisible(self.selection_trigger.current() == 0)  # Only that way shows it.
         hints = (
             "用鼠标选中文字后，旁边出现一个小按钮，点一下才翻译。",
             "用鼠标选中文字后马上翻译。每次选中都会把文字发送到 API。",
@@ -2764,6 +2864,9 @@ class SettingsDialog(QDialog):
             overlay_style=self.overlay_look()[0],
             overlay_opacity=self.overlay_opacity.value(),
             overlay_position=list(self.placing.position if self.placing is not None else self.overlay_position),
+            selection_icon_size=ICON_SIZE_NAMES[self.icon_size.current()],
+            selection_icon_opacity=self.icon_opacity.value(),
+            appearance=APPEARANCES[self.appearance.current()],
         )
 
     def has_changes(self) -> bool:

@@ -20,7 +20,6 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, QFileInfo, QObject, QPoint, QPointF, QRectF, QSize, QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QColor,
     QFont,
     QFontMetrics,
     QGuiApplication,
@@ -90,27 +89,29 @@ from .minutes import (
     todo_text,
 )
 from .models import get_model, models_ready
+from .theme import hexed, retint, styled, tone
 from .ui import (
     ACCENT,
     DISABLED,
     INK,
     MUTED,
-    ComboBox,
-    Glyph,
-    HeroCard,
-    MicButton,
-    ResultMark,
-    Segmented,
-    Spinner,
-    Tween,
     card,
+    ComboBox,
     dialog_header,
     footer_bar,
+    Glyph,
+    HeroCard,
     label,
     make_button,
+    MicButton,
     mix,
     pill_text,
+    ResultMark,
     run_task,
+    Segmented,
+    Spinner,
+    ThemedLabel,
+    Tween,
     vrule,
 )
 
@@ -193,13 +194,13 @@ class PickerRow(QAbstractButton):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
         if self.hover.value > 0.01:
-            painter.setBrush(mix(QColor("#FFFCF7"), QColor("#F1EBE1"), self.hover.value))
+            painter.setBrush(mix(tone("#FFFCF7"), tone("#F1EBE1"), self.hover.value))
             painter.drawRoundedRect(QRectF(self.rect()).adjusted(4, 1, -4, -1), 10, 10)
         icon = QRectF(16, (self.height() - 28) / 2, 28, 28)
         if self.picture:
             painter.drawPixmap(icon, self.picture, QRectF(self.picture.rect()))
         else:
-            painter.setBrush(QColor("#F2ECE2"))
+            painter.setBrush(tone("#F2ECE2"))
             painter.drawRoundedRect(icon, 8, 8)
             if self.glyph:
                 draw_icon(painter, self.glyph, icon.adjusted(6, 6, -6, -6), MUTED)
@@ -208,14 +209,14 @@ class PickerRow(QAbstractButton):
                 initial.setPixelSize(14)
                 initial.setBold(True)
                 painter.setFont(initial)
-                painter.setPen(QColor(MUTED))
+                painter.setPen(tone(MUTED))
                 painter.drawText(icon, Qt.AlignmentFlag.AlignCenter, self.title[:1].upper())
         text_left = icon.right() + 12
         right = self.width() - (40 if self.chosen else 16)
         title = QFont(self.font())
         title.setPixelSize(14)
         painter.setFont(title)
-        painter.setPen(QColor(INK))
+        painter.setPen(tone(INK))
         top = 7 if self.note else 0
         height = 20 if self.note else self.height()
         painter.drawText(QRectF(text_left, top, right - text_left, height or self.height()),
@@ -224,7 +225,7 @@ class PickerRow(QAbstractButton):
             note = QFont(self.font())
             note.setPixelSize(12)
             painter.setFont(note)
-            painter.setPen(QColor(FAINT))
+            painter.setPen(tone(FAINT))
             painter.drawText(QRectF(text_left, 26, right - text_left, 18), Qt.AlignmentFlag.AlignVCenter, self.note)
         if self.chosen:
             draw_icon(painter, Glyph.CHECK, QRectF(self.width() - 34, (self.height() - 16) / 2, 16, 16), ACCENT)
@@ -244,11 +245,11 @@ class AppPicker(QFrame):
         outer.setContentsMargins(14, 10, 14, 18)
         panel = QFrame()
         panel.setObjectName("pickerPanel")
-        panel.setStyleSheet("QFrame#pickerPanel { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }")
+        styled(panel, "QFrame#pickerPanel { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }")
         shadow = QGraphicsDropShadowEffect(panel)
         shadow.setBlurRadius(30)
         shadow.setOffset(0, 8)
-        shadow.setColor(QColor(0, 0, 0, 38))
+        shadow.setColor(tone(0, 0, 0, 38))
         panel.setGraphicsEffect(shadow)
         outer.addWidget(panel)
         layout = QVBoxLayout(panel)
@@ -272,7 +273,7 @@ class AppPicker(QFrame):
             layout.addWidget(row)
         rule = QFrame()
         rule.setFixedHeight(1)
-        rule.setStyleSheet("background: #EEE7DB; margin: 0 16px;")
+        styled(rule, "background: #EEE7DB; margin: 0 16px;")
         layout.addSpacing(5)
         layout.addWidget(rule)
         layout.addSpacing(5)
@@ -310,7 +311,7 @@ class EdgeFade(QWidget):
     def paintEvent(self, _event):
         painter = QPainter(self)
         gradient = QLinearGradient(0, 0, 0, self.height())
-        solid, clear = QColor(255, 252, 247, 255), QColor(255, 252, 247, 0)  # The card's paper.
+        solid, clear = tone(255, 252, 247, 255), tone(255, 252, 247, 0)  # The card's paper.
         gradient.setColorAt(0.0, solid if self.top else clear)
         gradient.setColorAt(1.0, clear if self.top else solid)
         painter.fillRect(self.rect(), gradient)
@@ -332,6 +333,10 @@ class GuardedEdit(QTextEdit):
         self.setTabChangesFocus(True)
         self.document().contentsChange.connect(self._changed)
         self.set_editable(False)
+
+    def retheme(self):
+        with self.quietly():
+            retint(self.document())
 
     @contextmanager
     def quietly(self):
@@ -460,7 +465,7 @@ class TranscriptView(GuardedEdit):
     def __init__(self):
         super().__init__()
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setStyleSheet("QTextEdit { background: transparent; border: none; padding: 0 10px 10px 14px;"
+        styled(self, "QTextEdit { background: transparent; border: none; padding: 0 10px 10px 14px;"
                            " selection-background-color: #D8DBEE; }")
         self.document().setDocumentMargin(4)
         self.lines: list[Line] = []
@@ -585,7 +590,7 @@ class TranscriptView(GuardedEdit):
     def _text_format(paragraph: Paragraph) -> QTextCharFormat:
         text = QTextCharFormat()
         text.setFontPointSize(11.5)
-        text.setForeground(QColor(FAINT if paragraph.who == SKIPPED else INK))
+        text.setForeground(tone(FAINT if paragraph.who == SKIPPED else INK))
         text.setFontItalic(paragraph.who == SKIPPED)
         return text
 
@@ -629,11 +634,11 @@ class TranscriptView(GuardedEdit):
                 who = LABELS.get(paragraph.who, "") if self.labels else ""
                 if who:
                     painter.setFont(name_font)
-                    painter.setPen(QColor(ACCENT if paragraph.who == ME else "#47413A"))
+                    painter.setPen(tone(ACCENT if paragraph.who == ME else "#47413A"))
                     painter.drawText(head, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, who)
                     head.setLeft(head.left() + QFontMetrics(name_font).horizontalAdvance(who) + 8)
                 painter.setFont(time_font)
-                painter.setPen(QColor(FAINT))
+                painter.setPen(tone(FAINT))
                 painter.drawText(head, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, clock(paragraph.start))
             block = block.next()
 
@@ -653,7 +658,7 @@ class TranscriptView(GuardedEdit):
         painter.setPen(Qt.PenStyle.NoPen)
         for index in range(3):
             lift = (math.sin((self.phase - index * 2) * 0.55) + 1) / 2
-            color = QColor(FAINT)
+            color = tone(FAINT)
             color.setAlphaF(0.35 + 0.65 * lift)
             painter.setBrush(color)
             painter.drawEllipse(QPointF(left + 4 + index * 11, top + 6 - 3 * lift), 3.2, 3.2)
@@ -757,7 +762,7 @@ class MinutesView(GuardedEdit):
         super().__init__()
         self.size = size  # Of the text, in pixels; previews are smaller.
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setStyleSheet("QTextEdit { background: transparent; border: none; padding: 0 10px 10px 14px;"
+        styled(self, "QTextEdit { background: transparent; border: none; padding: 0 10px 10px 14px;"
                            f" font-size: {size}px; selection-background-color: #D8DBEE; }}")
         self.document().setIndentWidth(16)
         self.showing = False  # Minutes, not an explanation in their place.
@@ -767,7 +772,7 @@ class MinutesView(GuardedEdit):
         """Grey explanatory text in place of the minutes."""
         with self.quietly():
             self.setHtml("".join(
-                f"<p style='color:{MUTED}; margin:0 0 10px 0; line-height:150%'>{html.escape(text)}</p>"
+                f"<p style='color:{hexed(MUTED)}; margin:0 0 10px 0; line-height:150%'>{html.escape(text)}</p>"
                 for text in paragraphs
             ))
         self.showing = False
@@ -841,7 +846,7 @@ class MinutesView(GuardedEdit):
             "points": (base, "#47413A", QFont.Weight.Normal),
         }.get(kind, (base, INK, QFont.Weight.Normal))
         text.setProperty(QTextFormat.Property.FontPixelSize, size)
-        text.setForeground(QColor(color))
+        text.setForeground(tone(color))
         text.setFontWeight(weight)
         return text
 
@@ -972,7 +977,7 @@ class TemplateRow(PickerRow):
         painter.setPen(Qt.PenStyle.NoPen)
         shade = max(self.hover.value, 1.0 if self.current else 0.0)
         if shade > 0.01:
-            painter.setBrush(mix(QColor("#FFFCF7"), QColor("#F1EBE1"), shade))
+            painter.setBrush(mix(tone("#FFFCF7"), tone("#F1EBE1"), shade))
             painter.drawRoundedRect(QRectF(self.rect()).adjusted(4, 1, -4, -1), 10, 10)
         left, right = 16, self.width() - (40 if self.chosen else 16)
         title = QFont(self.font())
@@ -980,12 +985,12 @@ class TemplateRow(PickerRow):
         if self.chosen:
             title.setWeight(QFont.Weight.DemiBold)
         painter.setFont(title)
-        painter.setPen(QColor(INK))
+        painter.setPen(tone(INK))
         painter.drawText(QRectF(left, 7, right - left, 20), Qt.AlignmentFlag.AlignVCenter, self.title)
         note = QFont(self.font())
         note.setPixelSize(12)
         painter.setFont(note)
-        painter.setPen(QColor(FAINT))
+        painter.setPen(tone(FAINT))
         elided = QFontMetrics(note).elidedText(self.note, Qt.TextElideMode.ElideRight, int(right - left))
         painter.drawText(QRectF(left, 26, right - left, 18), Qt.AlignmentFlag.AlignVCenter, elided)
         if self.chosen:
@@ -1006,11 +1011,11 @@ class TemplatePicker(QFrame):
         outer.setContentsMargins(14, 10, 14, 18)
         panel = QFrame()
         panel.setObjectName("pickerPanel")
-        panel.setStyleSheet("QFrame#pickerPanel { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }")
+        styled(panel, "QFrame#pickerPanel { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }")
         shadow = QGraphicsDropShadowEffect(panel)
         shadow.setBlurRadius(30)
         shadow.setOffset(0, 8)
-        shadow.setColor(QColor(0, 0, 0, 38))
+        shadow.setColor(tone(0, 0, 0, 38))
         panel.setGraphicsEffect(shadow)
         outer.addWidget(panel)
         columns = QHBoxLayout(panel)
@@ -1033,7 +1038,7 @@ class TemplatePicker(QFrame):
         columns.addLayout(listing)
         rule = QFrame()
         rule.setFixedWidth(1)
-        rule.setStyleSheet("background: #EEE7DB;")
+        styled(rule, "background: #EEE7DB;")
         columns.addWidget(rule)
         side = QVBoxLayout()
         side.setContentsMargins(18, 2, 12, 8)
@@ -1047,7 +1052,7 @@ class TemplatePicker(QFrame):
         # The sample on a sheet of its own, so it reads as an example.
         sheet = QFrame()
         sheet.setObjectName("templateSheet")
-        sheet.setStyleSheet("QFrame#templateSheet { background: #F8F4ED; border-radius: 10px; }")
+        styled(sheet, "QFrame#templateSheet { background: #F8F4ED; border-radius: 10px; }")
         inside = QVBoxLayout(sheet)
         inside.setContentsMargins(14, 10, 8, 6)
         inside.setSpacing(0)
@@ -1055,7 +1060,7 @@ class TemplatePicker(QFrame):
         self.sample = MinutesView(size=12)
         self.sample.setFixedSize(332, 252)
         self.sample.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.sample.setStyleSheet(self.sample.styleSheet().replace("padding: 0 10px 10px 14px", "padding: 0"))
+        styled(self.sample, self.sample.property("paperStyle").replace("padding: 0 10px 10px 14px", "padding: 0"))
         inside.addWidget(self.sample)
         side.addWidget(sheet)
         side.addWidget(label("每个模板还都会写会议概要、带时间的章节速览和待确认。", "caption"))
@@ -1145,33 +1150,33 @@ class FormatTile(QAbstractButton):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         box = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         if self.isChecked():
-            painter.setPen(QPen(QColor(ACCENT), 1.5))
-            painter.setBrush(QColor("#F3F3F8"))
+            painter.setPen(QPen(tone(ACCENT, dark="#7F8BDB"), 1.5))
+            painter.setBrush(tone("#F3F3F8"))
         else:
-            painter.setPen(QPen(QColor("#E8E0D3"), 1))
-            painter.setBrush(mix(QColor("#FFFCF7"), QColor("#F8F4ED"), self.hover.value))
+            painter.setPen(QPen(tone("#E8E0D3"), 1))
+            painter.setBrush(mix(tone("#FFFCF7"), tone("#F8F4ED"), self.hover.value))
         painter.drawRoundedRect(box, 11, 11)
         badge = QRectF(12, (self.height() - 36) / 2, 36, 36)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(self.tint))
+        painter.setBrush(tone(self.tint))
         painter.drawRoundedRect(badge, 9, 9)
         small = QFont(self.font())
         small.setPixelSize(10 if len(self.kind) > 3 else 11)
         small.setWeight(QFont.Weight.Bold)
         painter.setFont(small)
-        painter.setPen(QColor(self.ink))
+        painter.setPen(tone(self.ink))
         painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, self.kind.upper())
         left = badge.right() + 12
         title = QFont(self.font())
         title.setPixelSize(14)
         title.setWeight(QFont.Weight.DemiBold)
         painter.setFont(title)
-        painter.setPen(QColor(INK))
+        painter.setPen(tone(INK))
         painter.drawText(QRectF(left, 11, self.width() - left - 10, 20), Qt.AlignmentFlag.AlignVCenter, self.name)
         note = QFont(self.font())
         note.setPixelSize(12)
         painter.setFont(note)
-        painter.setPen(QColor(FAINT))
+        painter.setPen(tone(FAINT))
         elided = QFontMetrics(note).elidedText(self.note, Qt.TextElideMode.ElideRight, int(self.width() - left - 10))
         painter.drawText(QRectF(left, 31, self.width() - left - 10, 18), Qt.AlignmentFlag.AlignVCenter, elided)
 
@@ -1191,11 +1196,11 @@ class ExportPanel(QFrame):
         outer.setContentsMargins(14, 10, 14, 18)
         panel = QFrame()
         panel.setObjectName("pickerPanel")
-        panel.setStyleSheet("QFrame#pickerPanel { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }")
+        styled(panel, "QFrame#pickerPanel { background: #FFFCF7; border: 1px solid #E8E0D3; border-radius: 14px; }")
         shadow = QGraphicsDropShadowEffect(panel)
         shadow.setBlurRadius(30)
         shadow.setOffset(0, 8)
-        shadow.setColor(QColor(0, 0, 0, 38))
+        shadow.setColor(tone(0, 0, 0, 38))
         panel.setGraphicsEffect(shadow)
         outer.addWidget(panel)
         layout = QVBoxLayout(panel)
@@ -1284,7 +1289,7 @@ class MeetingRow(QWidget):
         column = QVBoxLayout()
         column.setSpacing(3)
         title = label(info.get("title") or "会议")
-        title.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {INK};")
+        styled(title, f"font-size: 14px; font-weight: 600; color: {INK};")
         column.addWidget(title)
         column.addWidget(label(meeting_meta(info), "caption"))
         layout.addLayout(column, 1)
@@ -1306,7 +1311,7 @@ class Waveform(QWidget):
     second while recording."""
 
     STEP = 6  # A bar and the gap after it, in pixels.
-    COLORS = {ME: QColor("#3C488E"), OTHERS: QColor("#F2755F")}
+    COLORS = {ME: "#3C488E", OTHERS: "#F2755F"}
 
     def __init__(self):
         super().__init__()
@@ -1338,10 +1343,10 @@ class Waveform(QWidget):
             x = self.width() - (count - index) * self.STEP + 1.5
             alpha = min(1.0, (index + 1) / fade)
             if level > 0.03:
-                color = QColor(self.COLORS[who])
+                color = tone(self.COLORS[who])
                 height = max(4.0, level * room)
             else:
-                color = QColor(DISABLED)
+                color = tone(DISABLED)
                 height = 3.0
             color.setAlphaF(alpha * (0.95 if level > 0.03 else 0.7))
             painter.setBrush(color)
@@ -1378,11 +1383,11 @@ class ChipMeter(QWidget):
     and grey while it is quiet. Takes levels like a QProgressBar (0 to 100)."""
 
     WEIGHTS = (0.62, 1.0, 0.8)
-    REST = QColor("#CFC6B8")
+    REST = "#CFC6B8"
 
     def __init__(self, color: str):
         super().__init__()
-        self.color = QColor(color)
+        self.color = color
         self.setFixedSize(15, 14)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._value = 0
@@ -1421,7 +1426,7 @@ class ChipMeter(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(mix(self.REST, self.color, min(1.0, self.level * 3)))
+        painter.setBrush(mix(tone(self.REST), tone(self.color), min(1.0, self.level * 3)))
         full, rest = float(self.height()), 5.0
         for index, weight in enumerate(self.WEIGHTS):
             wobble = 0.78 + 0.22 * math.sin(self.phase * (1 + 0.37 * index) + index * 1.9)
@@ -1514,7 +1519,7 @@ class SourceChip(QAbstractButton):
         color = self.tint if on else (MUTED if enabled else DISABLED)
         self.icon.show_picture(self.picture if enabled else None, self.glyph if on else self.off_glyph, color)
         text = INK if on else (MUTED if enabled else DISABLED)
-        self.title.setStyleSheet(f"color: {text}; font-size: 13px; background: transparent;")
+        styled(self.title, f"color: {text}; font-size: 13px; background: transparent;")
         self.update()
 
     def enterEvent(self, event):
@@ -1544,16 +1549,16 @@ class SourceChip(QAbstractButton):
         hover = self.hover.value if live else 0.0
         press = max(0.0, min(1.0, self.press.value)) if live else 0.0
         fill = max(0.0, min(1.0, self.fill.value))
-        idle = mix(QColor("#FFFCF7"), QColor(self.OUTLINE_HOVER), hover)
-        busy = mix(QColor(self.FILL), QColor(self.FILL_HOVER), hover)
-        background = mix(mix(idle, busy, fill), QColor(self.PRESSED), press)
-        border = QColor(self.OUTLINE)
+        idle = mix(tone("#FFFCF7"), tone(self.OUTLINE_HOVER), hover)
+        busy = mix(tone(self.FILL), tone(self.FILL_HOVER), hover)
+        background = mix(mix(idle, busy, fill), tone(self.PRESSED), press)
+        border = tone(self.OUTLINE)
         border.setAlphaF(1.0 - fill)
         painter.setPen(QPen(border, 1) if border.alpha() else Qt.PenStyle.NoPen)
         painter.setBrush(background)
         painter.drawRoundedRect(rect, radius, radius)
         if self.hasFocus() and self.keyboard_focus:
-            ring = QColor(ACCENT)
+            ring = tone(ACCENT, dark="#7F8BDB")
             ring.setAlphaF(0.55)
             painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1568,9 +1573,7 @@ class MeetingHero(HeroCard):
         layout.setSpacing(20)
         column = QVBoxLayout()
         column.setSpacing(6)
-        self.pill = QLabel()
-        self.pill.setObjectName("pill")
-        self.pill.setTextFormat(Qt.TextFormat.RichText)
+        self.pill = ThemedLabel("", "pill")
         column.addWidget(self.pill)
         self.status = label("记录一场会议", "status")
         column.addWidget(self.status)
@@ -1583,10 +1586,10 @@ class MeetingHero(HeroCard):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
         # The two sources, alike: the meeting app's sound and the user's microphone.
-        self.app_chip = SourceChip("选择会议软件", Glyph.SPEAKER, Waveform.COLORS[OTHERS].name(), menu=True)
+        self.app_chip = SourceChip("选择会议软件", Glyph.SPEAKER, Waveform.COLORS[OTHERS], menu=True)
         self.app_chip.setToolTip("选择要记录哪个应用的声音")
         row.addWidget(self.app_chip)
-        self.mic_chip = SourceChip("我的麦克风", Glyph.MIC, Waveform.COLORS[ME].name(), Glyph.MIC_OFF, checkable=True)
+        self.mic_chip = SourceChip("我的麦克风", Glyph.MIC, Waveform.COLORS[ME], Glyph.MIC_OFF, checkable=True)
         row.addWidget(self.mic_chip)
         self.app_meter, self.app_mark = self.app_chip.meter, self.app_chip.mark
         self.mic_meter, self.mic_mark = self.mic_chip.meter, self.mic_chip.mark
@@ -1611,8 +1614,7 @@ class MeetingHero(HeroCard):
         keys.setSpacing(14)
         keys.addStretch()
         for who, color in Waveform.COLORS.items():
-            key = label(f"<span style='color:{color.name()}'>●</span>&nbsp;{LABELS[who]}", "caption")
-            key.setTextFormat(Qt.TextFormat.RichText)
+            key = ThemedLabel(f"<span style='color:{color}'>●</span>&nbsp;{LABELS[who]}", "caption")
             keys.addWidget(key)
         keys.addStretch()
         waves.addWidget(self.legend)
@@ -2413,7 +2415,7 @@ class MeetingPage(QWidget):
         body.setContentsMargins(30, 6, 30, 22)
         listing = QListWidget()
         listing.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
-        listing.setStyleSheet("QListWidget::item { padding: 0; }")  # MeetingRow has its own.
+        styled(listing, "QListWidget::item { padding: 0; }")  # MeetingRow has its own.
         for store in stores:
             row = MeetingRow(store.info(), (store.folder / "minutes.dat").is_file())
             item = QListWidgetItem()

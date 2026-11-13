@@ -139,6 +139,12 @@ class Settings:
     # before it scrolls. 0 means the built-in size.
     selection_popup_width: int = 0
     selection_popup_height: int = 0
+    # The button shown beside a selection: "small", "medium" or "large", and how opaque it is
+    # until the mouse comes over it, in percent.
+    selection_icon_size: str = "medium"
+    selection_icon_opacity: int = 100
+    # The look of every window: "light", "dark", or "system" to follow Windows.
+    appearance: str = "light"
     # The overlay shown while dictating: "standard", the dark card with words, or "minimal", a
     # small pill with the voice level only; how opaque its background is, in percent; and where it
     # was dragged to, as the middle of its bottom edge on the desktop ([] for the bottom middle).
@@ -269,6 +275,12 @@ class Settings:
                 values.pop("overlay_style")
             if not 0 <= values.get("overlay_opacity", 100) <= 100:
                 values.pop("overlay_opacity")
+            if values.get("selection_icon_size", "medium") not in ("small", "medium", "large"):
+                values.pop("selection_icon_size")
+            if not 30 <= values.get("selection_icon_opacity", 100) <= 100:
+                values.pop("selection_icon_opacity")
+            if values.get("appearance", "light") not in ("light", "dark", "system"):
+                values.pop("appearance")
             if not 1 <= values.get("api_timeout", 25) <= 120:
                 values.pop("api_timeout", None)
             return cls(**values), "asr_model" in values

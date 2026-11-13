@@ -18,6 +18,7 @@ from PySide6.QtCore import QObject, QPoint, QPointF, QRect, QRectF, QSizeF, Qt, 
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+from .theme import is_dark, tone
 from .ui import VOICE, LevelBars, Tween, fade_in, mix, spring
 
 STYLES = ("standard", "minimal")
@@ -25,9 +26,22 @@ BOTTOM = 14  # Room for the shadow below the box. The middle of the box's bottom
 SIZES = {"standard": (380, 104), "minimal": (440, 84)}
 LIFT = 28  # Default gap between the bottom of the screen's work area and the window.
 TONES = {"rec": "#EC7360", "busy": "#E0A040", "done": "#66AE7C", "warn": "#E0A040"}
-INK = QColor("#1D2240")
-MUTED = QColor("#776F63")
-SHEET = (255, 252, 247)
+# The minimal look follows the theme: ink on paper, or paper on the night's ink. The standard
+# card is dark in both.
+
+
+def ink() -> QColor:
+    return QColor("#E9E4D8" if is_dark() else "#1D2240")
+
+
+def muted() -> QColor:
+    return QColor("#A39D92" if is_dark() else "#776F63")
+
+
+def sheet(alpha: int = 255) -> QColor:
+    return QColor(27, 31, 53, alpha) if is_dark() else QColor(255, 252, 247, alpha)
+
+
 PILL = QSizeF(112, 36)  # Listening.
 ROUND = QSizeF(36, 36)  # Working, or typed.
 BARS = 13
@@ -157,7 +171,7 @@ class RecordingOverlay(QWidget):
         text.addWidget(self.label)
         text.addWidget(self.hint)
         layout.addLayout(text, 1)
-        self.level = LevelBars(14, VOICE, "#534C43")
+        self.level = LevelBars(14, VOICE, "#534C43", themed=False)  # On the dark card in both themes.
         self.level.setFixedWidth(104)
         layout.addWidget(self.level)
         self.setFixedSize(*SIZES["standard"])
@@ -450,9 +464,9 @@ class RecordingOverlay(QWidget):
         for step in range(6):
             painter.setBrush(QColor(20, 24, 50, round((8 - step) * background)))
             painter.drawRoundedRect(body.adjusted(-step, -step + 2, step, step + 2), radius + step, radius + step)
-        painter.setBrush(QColor(*SHEET, round(255 * background)))
-        edge = QColor(INK)
-        edge.setAlphaF(0.13 * background)
+        painter.setBrush(sheet(round(255 * background)))
+        edge = QColor(255, 255, 255) if is_dark() else ink()
+        edge.setAlphaF((0.1 if is_dark() else 0.13) * background)
         painter.setPen(QPen(edge, 1))
         painter.drawRoundedRect(body.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
         # A light edge around the ink, strongest where the background has gone.
@@ -471,11 +485,11 @@ class RecordingOverlay(QWidget):
             painter.setClipRect(body)
             self.paint_dot(painter, QPointF(body.left() + 18, body.top() + 18))
             title, hint = self.message
-            painter.setPen(INK)
+            painter.setPen(ink())
             painter.setFont(self.title_font())
             painter.drawText(QRectF(body.left() + 32, body.top() + 8, body.width() - 44, 20),
                              Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, title)
-            painter.setPen(MUTED)
+            painter.setPen(muted())
             painter.setFont(self.hint_font())
             painter.drawText(QRectF(body.left() + 32, body.top() + 27, body.width() - 44, 18),
                              Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, hint)
@@ -501,12 +515,12 @@ class RecordingOverlay(QWidget):
             (left + 1 + index * (2 + gap), 1.5 + level * 12.5, 0.5 + 0.5 * (index + 1) / count)
             for index, level in enumerate(self.trail.levels)
         ]
-        for wide, ink in ((4.5, False), (2.0, True)):
-            if not ink and halo < 0.02:
+        for wide, strong in ((4.5, False), (2.0, True)):
+            if not strong and halo < 0.02:
                 continue
             for x, length, strength in lines:
-                color = QColor(INK) if ink else QColor(*SHEET)
-                color.setAlphaF(strength if ink else halo)
+                color = ink() if strong else sheet()
+                color.setAlphaF(strength if strong else halo)
                 pen = QPen(color, wide)
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 painter.setPen(pen)
@@ -516,12 +530,12 @@ class RecordingOverlay(QWidget):
         box = QRectF(center.x() - 7.5, center.y() - 7.5, 15, 15)
         start = -((time.monotonic() % 0.9) / 0.9) * 360
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        track = QColor(INK)
+        track = ink()
         track.setAlphaF(0.14)
         pen = QPen(track, 2)
         painter.setPen(pen)
         painter.drawEllipse(box)
-        for wide, color in ((4.5, QColor(*SHEET, round(255 * halo))), (2.0, QColor(INK))):
+        for wide, color in ((4.5, sheet(round(255 * halo))), (2.0, ink())):
             if wide > 2 and halo < 0.02:
                 continue
             pen = QPen(color, wide)
@@ -542,7 +556,7 @@ class RecordingOverlay(QWidget):
             if left <= 0:
                 break
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        for wide, color in ((4.6, QColor(*SHEET, round(255 * halo))), (2.2, QColor("#5A9E6F"))):
+        for wide, color in ((4.6, sheet(round(255 * halo))), (2.2, tone("#5A9E6F"))):
             if wide > 3 and halo < 0.02:
                 continue
             pen = QPen(color, wide)

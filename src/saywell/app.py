@@ -56,6 +56,8 @@ from .startup import (
     startup_enabled,
 )
 from .stats import StatsStore
+from .theme import apply as apply_theme
+from .theme import install as install_style
 from .translate_page import TranslatePage
 from .ui import (
     ACCENT,
@@ -66,10 +68,12 @@ from .ui import (
     HeroCard,
     KeyHint,
     LevelBars,
+    LogoLabel,
     MicButton,
     ModelDialog,
     SettingsDialog,
     TabBar,
+    ThemedLabel,
     Toast,
     app_icon,
     dialog_header,
@@ -156,6 +160,7 @@ class MainWindow(QMainWindow):
     def __init__(self, settings: Settings | None = None, native: bool = True):
         super().__init__()
         self.settings = settings or Settings.load()
+        apply_theme(self.settings.appearance)  # Before anything is built, so it is built in it.
         # Announcements wait until the window is in front and idle: what is new in this version,
         # once after an update, then a newer release found by a check.
         self.pending_whats_new = False
@@ -279,9 +284,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(16)
         header = QHBoxLayout()
         header.setSpacing(10)
-        logo = QLabel()
-        logo.setPixmap(self.windowIcon().pixmap(46, 46))
-        header.addWidget(logo)
+        header.addWidget(LogoLabel(46))
         header.addSpacing(4)
         brand = QVBoxLayout()
         brand.setSpacing(0)
@@ -324,9 +327,7 @@ class MainWindow(QMainWindow):
         recording.setSpacing(20)
         status_layout = QVBoxLayout()
         status_layout.setSpacing(6)
-        self.pill = QLabel()
-        self.pill.setObjectName("pill")
-        self.pill.setTextFormat(Qt.TextFormat.RichText)
+        self.pill = ThemedLabel("", "pill")
         status_layout.addWidget(self.pill)
         self.status = label("准备好，慢慢说", "status")
         self.hint = label(
@@ -1499,6 +1500,7 @@ class MainWindow(QMainWindow):
                     self.pipeline.release_recognizer()  # Free the card or the CPU copy; reloaded on next use.
                     self.device = ""
                 self.settings = new
+                apply_theme(new.appearance)
                 self.overlay.apply(new)
                 if self.native:
                     self.schedule_update_checks()
@@ -1692,7 +1694,7 @@ def main() -> int:
     if not load_translations() and args.smoke:
         raise RuntimeError("Qt's Chinese translations are missing from this build.")
     load_fonts()
-    app.setStyleSheet(STYLE)
+    install_style(STYLE)  # Written for paper; the dark theme turns its colours.
     app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(False)
     lock = QLockFile(str(data_dir() / "application.lock"))

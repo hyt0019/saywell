@@ -25,21 +25,23 @@ from .brand import bird_rect, draw_swallow, draw_tile
 from .shortcuts import SOLO_KEYS, shortcut_label
 from .stats import count_chars
 from .translation import LANGUAGES, SCRIPTS, STYLES, Translation, script_of, target_language
+from .theme import is_dark, styled, tone
 from .ui import (
     ACCENT,
     LINE,
     MUTED,
     SHEET,
+    card,
     ComboBox,
     Glyph,
-    HeroCard,
-    Segmented,
-    card,
     glyph_label,
+    HeroCard,
     label,
     make_button,
     pill_text,
     run_task,
+    Segmented,
+    ThemedLabel,
 )
 
 CHUNK = 1500  # Characters asked for at a time: long enough to keep the sense, short enough to come back soon.
@@ -124,9 +126,9 @@ class TextSketch(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
         for x, width, color in ((10, 26, SKETCH), (40, 64, "#C3C8E4"), (108, 32, SKETCH)):
-            painter.setBrush(QColor(color))
+            painter.setBrush(tone(color))
             painter.drawRoundedRect(QRectF(x, 10, width, 8), 4, 4)
-        painter.setBrush(QColor(SKETCH))
+        painter.setBrush(tone(SKETCH))
         painter.drawRoundedRect(QRectF(10, 26, 112, 8), 4, 4)
 
 
@@ -142,10 +144,10 @@ class SwallowMark(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         box = QRectF(3, 2, 38, 38)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(120, 96, 62, 22))
+        painter.setBrush(QColor(0, 0, 0, 60) if is_dark() else QColor(120, 96, 62, 22))
         painter.drawRoundedRect(box.translated(0, 1.5), 11, 11)
-        draw_tile(painter, box, rim=36)
-        draw_swallow(painter, bird_rect(box))
+        draw_tile(painter, box, rim=36, night=is_dark())
+        draw_swallow(painter, bird_rect(box), night=is_dark())
 
 
 class PopupSketch(QWidget):
@@ -159,18 +161,18 @@ class PopupSketch(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         box = QRectF(6.5, 2.5, 137, 44)
-        painter.setPen(QPen(QColor("#DCD3C4"), 1))
-        painter.setBrush(QColor(SHEET))
+        painter.setPen(QPen(tone("#DCD3C4"), 1))
+        painter.setBrush(tone(SHEET))
         painter.drawRoundedRect(box, 8, 8)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#C3C8E4"))
+        painter.setBrush(tone("#C3C8E4"))
         painter.drawRoundedRect(QRectF(16, 11, 96, 6), 3, 3)
-        painter.setBrush(QColor(SKETCH))
+        painter.setBrush(tone(SKETCH))
         painter.drawRoundedRect(QRectF(16, 22, 62, 6), 3, 3)
         font = QFont(self.font())
         font.setPixelSize(10)
         painter.setFont(font)
-        painter.setPen(QColor(MUTED))
+        painter.setPen(tone(MUTED))
         painter.drawText(QRectF(0, 30, box.right() - 8, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                          "复制   替换")
 
@@ -192,15 +194,14 @@ class TranslateGuide(HeroCard):
 
     def __init__(self):
         super().__init__()
-        self.setStyleSheet(PAGE_STYLE)
+        styled(self, PAGE_STYLE)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 18, 22, 18)
         layout.setSpacing(10)
         head = QHBoxLayout()
         head.setSpacing(14)
         head.addWidget(label("划词翻译", "guideTitle"))
-        self.state = label("", "pill")
-        self.state.setTextFormat(Qt.TextFormat.RichText)
+        self.state = ThemedLabel("", "pill")
         head.addWidget(self.state, 0, Qt.AlignmentFlag.AlignVCenter)
         head.addStretch()
         self.on_button = make_button("开启划词翻译", None, "primary")
@@ -274,10 +275,10 @@ class ProgressLine(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(LINE))
+        painter.setBrush(tone(LINE))
         painter.drawRoundedRect(QRectF(self.rect()), 1.5, 1.5)
         if self.fraction > 0:
-            painter.setBrush(QColor(ACCENT))
+            painter.setBrush(tone(ACCENT))
             painter.drawRoundedRect(QRectF(0, 0, self.width() * self.fraction, self.height()), 1.5, 1.5)
 
 
@@ -307,7 +308,7 @@ class TranslatePage(QWidget):
     def __init__(self, main):
         super().__init__()
         self.main = main
-        self.setStyleSheet(PAGE_STYLE)
+        styled(self, PAGE_STYLE)
         self.guide = TranslateGuide()
         self.job: Job | None = None
         self.running = False

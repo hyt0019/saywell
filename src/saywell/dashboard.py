@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLay
 
 from .achievements_ui import AchievementsPanel
 from .stats import TYPING_CHARS_PER_MINUTE, Day, StatsStore
+from .theme import hexed, is_dark, styled, tone
 from .ui import ACCENT, INK, MUTED, Glyph, Tween, label, make_button
 
 WEEKDAYS = "一二三四五六日"
@@ -20,6 +21,12 @@ SUBTLE = "#958C7F"
 HAIRLINE = "#EEE7DB"
 # Empty, then four steps of indigo.
 HEAT = ("#EFE9DE", "#D3D7EB", "#9AA2D0", "#4A57A0", "#3C488E")
+# At night more is lighter: from the card's own colour up to the periwinkle of links.
+HEAT_NIGHT = ("#22263F", "#2C3466", "#3F4C99", "#6673C9", "#A6B1F2")
+
+
+def heat(level: int) -> QColor:
+    return QColor((HEAT_NIGHT if is_dark() else HEAT)[level])
 HEAT_STEPS = (1, 300, 1000, 3000)
 # Large numbers in the headings' serif; the rest falls back to the system faces.
 NUMBER_FAMILIES = ["Saywell Serif", "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI"]
@@ -113,20 +120,20 @@ class HoverCard(QWidget):
         body = QRectF(self.rect()).adjusted(6, 4, -6, -8)
         for step in range(5):
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(0, 0, 0, 7 - step))
+            painter.setBrush(tone(0, 0, 0, 7 - step))
             painter.drawRoundedRect(body.adjusted(-step, -step + 2, step, step + 2), 12 + step, 12 + step)
-        painter.setBrush(QColor("#FFFCF7"))
-        painter.setPen(QPen(QColor("#E8E0D3"), 1))
+        painter.setBrush(tone("#FFFCF7"))
+        painter.setPen(QPen(tone("#E8E0D3"), 1))
         painter.drawRoundedRect(body, 12, 12)
         title_font, body_font = self.fonts()
         painter.setFont(title_font)
-        painter.setPen(QColor(INK))
+        painter.setPen(tone(INK))
         painter.drawText(QRectF(body.left() + 14, body.top() + 10, body.width(), 18), Qt.AlignmentFlag.AlignVCenter, self.title)
         painter.setFont(body_font)
-        painter.setPen(QColor(MUTED))
+        painter.setPen(tone(MUTED))
         painter.drawText(QRectF(body.left() + 14, body.top() + 29, body.width(), 18), Qt.AlignmentFlag.AlignVCenter, self.body)
         if self.note:
-            painter.setPen(QColor(INK))
+            painter.setPen(tone(INK))
             painter.drawText(QRectF(body.left() + 14, body.top() + 47, body.width(), 18),
                              Qt.AlignmentFlag.AlignVCenter, self.note)
 
@@ -160,10 +167,13 @@ class CountLabel(QLabel):
     def _render(self, value):
         families = ", ".join(f"'{family}'" for family in NUMBER_FAMILIES)
         self.setText(
-            f"<span style=\"font-family:{families}; font-size:{self.size}px; font-weight:700; color:{ACCENT}\">"
+            f"<span style=\"font-family:{families}; font-size:{self.size}px; font-weight:700; color:{hexed(ACCENT)}\">"
             f"{self.formatter(float(value))}</span>"
-            f"<span style='font-size:13px; color:{MUTED}'>&nbsp;{self.unit}</span>"
+            f"<span style='font-size:13px; color:{hexed(MUTED)}'>&nbsp;{self.unit}</span>"
         )
+
+    def retheme(self):
+        self._render(self.value)
 
 
 class Stat(QWidget):
@@ -251,7 +261,7 @@ class Heatmap(QWidget):
         font = QFont(self.font())
         font.setPixelSize(11)
         painter.setFont(font)
-        painter.setPen(QColor(SUBTLE))
+        painter.setPen(tone(SUBTLE))
         for row in (0, 2, 4):
             painter.drawText(QRectF(0, self.TOP + row * step, self.LEFT - 7, step - self.GAP),
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, WEEKDAYS[row])
@@ -261,7 +271,7 @@ class Heatmap(QWidget):
             first = start + timedelta(weeks=week)
             if first.month != last_month and week < self.WEEKS - 1:
                 if last_month is not None or first.day <= 7:
-                    painter.setPen(QColor(SUBTLE))
+                    painter.setPen(tone(SUBTLE))
                     painter.drawText(QRectF(offset + week * step, 0, 40, self.TOP - 5),
                                      Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"{first.month}月")
                 last_month = first.month
@@ -271,12 +281,12 @@ class Heatmap(QWidget):
                     continue
                 stats = self.days.get(day.isoformat())
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor(HEAT[self.level(stats.chars if stats else 0)]))
+                painter.setBrush(heat(self.level(stats.chars if stats else 0)))
                 painter.drawRoundedRect(self.cell_rect(day), 2.5, 2.5)
         for day, color in ((self.today, INK), (self.hovered, ACCENT)):
             if day is not None:
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.setPen(QPen(QColor(color), 1.5))
+                painter.setPen(QPen(tone(color), 1.5))
                 painter.drawRoundedRect(self.cell_rect(day).adjusted(-1.5, -1.5, 1.5, 1.5), 3.5, 3.5)
 
     def day_at(self, x: float, y: float) -> date | None:
@@ -314,12 +324,18 @@ class Legend(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         layout.addWidget(label("少", "statSub"))
-        for color in HEAT:
+        self.swatches = []
+        for _level in HEAT:
             swatch = QLabel()
             swatch.setFixedSize(10, 10)
-            swatch.setStyleSheet(f"background: {color}; border-radius: 2px;")
             layout.addWidget(swatch)
+            self.swatches.append(swatch)
+        self.retheme()
         layout.addWidget(label("多", "statSub"))
+
+    def retheme(self):
+        for level, swatch in enumerate(self.swatches):
+            swatch.setStyleSheet(f"background: {heat(level).name()}; border-radius: 2px;")
 
 
 class MiniBars(QWidget):
@@ -350,11 +366,11 @@ class MiniBars(QWidget):
             height = max(3.0, (self.height() - 4) * value / peak) if value else 3.0
             rect = QRectF(index * width + width * 0.2, self.height() - height, width * 0.6, height)
             if not value:
-                color = QColor("#EFE9DE")
+                color = tone("#EFE9DE")
             elif index == self.hovered or (self.hovered < 0 and index == len(self.values) - 1):
-                color = QColor(ACCENT)
+                color = tone(ACCENT)
             else:
-                color = QColor("#C3C8E4")
+                color = tone("#C3C8E4")
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
             painter.drawRoundedRect(rect, 2.5, 2.5)
@@ -397,7 +413,7 @@ class Overview(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setStyleSheet(DASHBOARD_STYLE)
+        styled(self, DASHBOARD_STYLE)
         self.hovercard = HoverCard()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -470,7 +486,7 @@ class Overview(QWidget):
         usage_head.addWidget(self.provider)
         self.balance = QLabel()
         families = ", ".join(f"'{family}'" for family in NUMBER_FAMILIES)
-        self.balance.setStyleSheet(f"color: {ACCENT}; font-family: {families}; font-size: 32px; font-weight: 700;")
+        styled(self.balance, f"color: {ACCENT}; font-family: {families}; font-size: 32px; font-weight: 700;")
         balance_row = QHBoxLayout()
         figures = QVBoxLayout()
         figures.setSpacing(2)

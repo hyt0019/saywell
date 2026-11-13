@@ -10,7 +10,8 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from .ui import CheckBox, app_icon, footer_bar, label, make_button, scroll_body
+from .theme import styled
+from .ui import CheckBox, LogoLabel, ThemedLabel, footer_bar, label, make_button, scroll_body
 from .updates import HIGHLIGHT_SECTIONS, Highlight, split_highlight
 
 WIDTH = 580
@@ -48,10 +49,7 @@ def release_date(value: str) -> str:
 
 
 def wrapped(text: str, name: str) -> QLabel:
-    widget = QLabel(text)
-    widget.setObjectName(name)
-    widget.setTextFormat(Qt.TextFormat.RichText)
-    widget.setWordWrap(True)
+    widget = ThemedLabel(text, name, wrap=True)
     widget.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     return widget
 
@@ -110,7 +108,7 @@ class AnnouncementDialog(QDialog):
         super().__init__(parent)
         self.choice = "later"
         self.setWindowTitle("新内容 · 好好说" if after_update else "更新公告 · 好好说")
-        self.setStyleSheet(STYLE)
+        styled(self, STYLE)
         self.setMinimumWidth(WIDTH - 60)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -120,10 +118,7 @@ class AnnouncementDialog(QDialog):
         head = QHBoxLayout(header)
         head.setContentsMargins(30, 28, 30, 14)
         head.setSpacing(16)
-        logo = QLabel()
-        logo.setPixmap(app_icon().pixmap(52, 52))
-        logo.setFixedSize(52, 52)
-        head.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
+        head.addWidget(LogoLabel(52), 0, Qt.AlignmentFlag.AlignVCenter)
         titles = QVBoxLayout()
         titles.setSpacing(2)
         titles.addStretch()
@@ -151,9 +146,10 @@ class AnnouncementDialog(QDialog):
                 body.addWidget(group(items))
                 body.addSpacing(18)
         # A plain text link, so it lines up with the section names above it.
-        more = QLabel(f'<a href="{html.escape(changelog)}" style="color:#3C488E; text-decoration:none">查看完整更新日志 ›</a>')
-        more.setObjectName("announceLink")
-        more.setTextFormat(Qt.TextFormat.RichText)
+        more = ThemedLabel(
+            f'<a href="{html.escape(changelog)}" style="color:#3C488E; text-decoration:none">查看完整更新日志 ›</a>',
+            "announceLink",
+        )
         more.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
         more.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
         more.setCursor(Qt.CursorShape.PointingHandCursor)
